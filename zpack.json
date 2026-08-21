@@ -39,6 +39,10 @@
           {
             "program": "wsl.exe",
             "argsRegex": "^-d <wsl-distribution> --user <wsl-user> -- $HOME/bin/claude-usage-json --cached-only$"
+          },
+          {
+            "program": "wsl.exe",
+            "argsRegex": "^-d <wsl-distribution> --user <wsl-user> -- $HOME/bin/codex-usage-json --cached-only$"
           }
         ]
       },
