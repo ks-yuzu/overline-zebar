@@ -35,6 +35,10 @@
           {
             "program": "shutdown",
             "argsRegex": ".*"
+          },
+          {
+            "program": "wsl.exe",
+            "argsRegex": "^-d <wsl-distribution> --user <wsl-user> -- $HOME/bin/claude-usage-json --cached-only$"
           }
         ]
       },

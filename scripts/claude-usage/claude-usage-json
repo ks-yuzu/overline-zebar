@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+timeout_seconds="${CLAUDE_USAGE_TIMEOUT:-45}"
+if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CLAUDE_USAGE_TIMEOUT must be a positive integer\n' >&2
+	exit 64
+fi
+
+cache_ttl_seconds="${CLAUDE_USAGE_CACHE_TTL:-300}"
+if [[ ! "$cache_ttl_seconds" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CLAUDE_USAGE_CACHE_TTL must be a positive integer\n' >&2
+	exit 64
+fi
+
+session_id="${CLAUDE_USAGE_SESSION_ID:-ca1de000-0000-4000-8000-000000000001}"
+if [[ ! "$session_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+	printf 'CLAUDE_USAGE_SESSION_ID must be a valid UUID\n' >&2
+	exit 64
+fi
+
+force_refresh=false
+cached_only=false
+case "${1:-}" in
+	'') ;;
+	--force) force_refresh=true ;;
+	--cached-only) cached_only=true ;;
+	*)
+		printf 'usage: %s [--force|--cached-only]\n' "$0" >&2
+		exit 64
+		;;
+esac
+
+cache_dir="${CLAUDE_USAGE_CACHE_DIR:-$HOME/.cache/claude-usage-json}"
+cache_file="$cache_dir/usage.json"
+lock_file="$cache_dir/update.lock"
+mkdir -p -- "$cache_dir"
+chmod 700 -- "$cache_dir"
+
+export CLAUDE_CODE_SKIP_PROMPT_HISTORY=1
+
+if [[ "$cached_only" == true ]]; then
+	if [[ ! -s "$cache_file" ]]; then
+		printf 'Claude usage cache is not available yet\n' >&2
+		exit 66
+	fi
+	cat -- "$cache_file"
+	exit 0
+fi
+
+cache_is_fresh() {
+	[[ -s "$cache_file" ]] || return 1
+	local modified_at now
+	modified_at="$(stat -c %Y -- "$cache_file")" || return 1
+	now="$(date +%s)"
+	((now - modified_at < cache_ttl_seconds))
+}
+
+if [[ "$force_refresh" == false ]] && cache_is_fresh; then
+	cat -- "$cache_file"
+	exit 0
+fi
+
+# The main Zebar widget runs once per monitor. Serialize cache refreshes so only
+# one of those processes opens Claude's interactive /usage screen.
+exec 9>"$lock_file"
+flock 9
+
+if [[ "$force_refresh" == false ]] && cache_is_fresh; then
+	cat -- "$cache_file"
+	exit 0
+fi
+
+for command_name in expect perl flock; do
+	if ! command -v "$command_name" >/dev/null 2>&1; then
+		printf 'required command not found: %s\n' "$command_name" >&2
+		if [[ -s "$cache_file" ]]; then
+			cat -- "$cache_file"
+			exit 0
+		fi
+		exit 69
+	fi
+done
+
+default_claude_bin="$HOME/bin/claude"
+if [[ ! -x "$default_claude_bin" ]]; then
+	default_claude_bin="$(command -v claude || true)"
+fi
+claude_bin="${CLAUDE_USAGE_CLAUDE_BIN:-$default_claude_bin}"
+if [[ -z "$claude_bin" || ! -x "$claude_bin" ]]; then
+	printf 'Claude executable not found; set CLAUDE_USAGE_CLAUDE_BIN\n' >&2
+	if [[ -s "$cache_file" ]]; then
+		cat -- "$cache_file"
+		exit 0
+	fi
+	exit 69
+fi
+
+capture_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage.XXXXXX")"
+result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
+trap 'rm -f -- "$capture_file" "$result_file"' EXIT
+
+claude_work_dir="${CLAUDE_USAGE_WORK_DIR:-/tmp}"
+if ! cd -- "$claude_work_dir"; then
+	printf 'cannot enter Claude usage working directory: %s\n' "$claude_work_dir" >&2
+	exit 73
+fi
+
+if ! expect -f - "$capture_file" "$timeout_seconds" "$claude_bin" "$session_id" <<'EXPECT'
+set capture_file [lindex $argv 0]
+set timeout [lindex $argv 1]
+set claude_bin [lindex $argv 2]
+set session_id [lindex $argv 3]
+
+log_user 0
+log_file -noappend -a $capture_file
+spawn -noecho $claude_bin --session-id $session_id --name zebar-usage-monitor
+
+expect {
+	"Welcome" {}
+	timeout {
+		puts stderr "timed out waiting for Claude Code to start"
+		exit 2
+	}
+	eof {
+		puts stderr "Claude Code exited before displaying its prompt"
+		exit 2
+	}
+}
+
+after 500
+send -- "/usage\r"
+expect {
+	"Show plan usage" {
+		after 200
+		send -- "\r"
+	}
+	-re {Current.{0,24}session} {
+		# Some Claude Code versions execute /usage immediately instead of
+		# stopping on the slash-command suggestion.
+	}
+	timeout {
+		puts stderr "timed out opening /usage"
+		exit 2
+	}
+	eof {
+		puts stderr "Claude Code exited while opening /usage"
+		exit 2
+	}
+}
+
+expect {
+	-re {Current.{0,24}week} {}
+	timeout {
+		puts stderr "timed out waiting for /usage data"
+		exit 2
+	}
+	eof {
+		puts stderr "Claude Code exited before /usage data was displayed"
+		exit 2
+	}
+}
+
+# Give the usage request a moment to refresh. If it cannot refresh, Claude Code
+# leaves the last-known values on screen; the parser reports that state in JSON.
+after 5000
+send -- "\033"
+after 100
+send -- "\003"
+after 100
+catch {close}
+catch {wait}
+log_file
+EXPECT
+
+then
+	printf 'failed to refresh Claude usage; using cached data when available\n' >&2
+	if [[ -s "$cache_file" ]]; then
+		cat -- "$cache_file"
+		exit 0
+	fi
+	exit 70
+fi
+
+if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
+	install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH"
+fi
+
+if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MTime::Local=timelocal - "$capture_file" >"$result_file" <<'PERL'
+use strict;
+use warnings;
+
+my $capture_file = shift @ARGV;
+open my $capture, '<:raw', $capture_file
+	or die "cannot read capture file: $!\n";
+local $/;
+my $text = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
+close $capture;
+
+# Remove OSC, CSI, and remaining short escape sequences emitted by the TUI.
+$text =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
+$text =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
+$text =~ s/\e.//gs;
+$text =~ tr/\x{00a0}/ /;
+$text =~ s/\r/\n/g;
+$text =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
+$text =~ s/[ \t]+/ /g;
+$text =~ s/\n+/\n/g;
+
+sub extract_usage {
+	my ($heading) = @_;
+	my @matches;
+	while (
+		$text =~ /$heading\b.*?(\d+(?:\.\d+)?)%\s*used.*?Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/gsi
+	) {
+		push @matches, [$1, $2, $3];
+	}
+	return $matches[-1];
+}
+
+my $session = extract_usage(qr/Current\s*session/i);
+my $week = extract_usage(qr/Current\s*week(?:\s*\(all\s*models\))?/i);
+
+if (!$session || !$week) {
+	die "could not parse Current session and Current week from Claude /usage\n";
+}
+
+sub hour_24 {
+	my ($hour, $ampm) = @_;
+	$hour %= 12;
+	$hour += 12 if lc($ampm) eq 'pm';
+	return $hour;
+}
+
+sub iso_local {
+	my ($epoch) = @_;
+	my $value = strftime('%Y-%m-%dT%H:%M:%S%z', localtime($epoch));
+	$value =~ s/([+-]\d{2})(\d{2})$/$1:$2/;
+	return $value;
+}
+
+sub normalize_reset {
+	my ($display, $timezone, $kind) = @_;
+	local $ENV{TZ} = $timezone;
+	tzset();
+	my $now = time;
+	my @now = localtime($now);
+	my $epoch;
+
+	if ($kind eq 'session' && $display =~ /^(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
+		my $minute = defined $2 ? $2 : 0;
+		$epoch = timelocal(0, $minute, hour_24($1, $3), $now[3], $now[4], $now[5]);
+		$epoch += 86_400 if $epoch < $now - 120;
+	}
+	elsif ($display =~ /^([A-Z][a-z]{2})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)$/) {
+		my %month;
+		@month{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)} = 0 .. 11;
+		my $year = $now[5];
+		my $minute = defined $4 ? $4 : 0;
+		$epoch = timelocal(0, $minute, hour_24($3, $5), $2, $month{$1}, $year);
+		if ($epoch < $now - 120) {
+			$epoch = timelocal(0, $minute, hour_24($3, $5), $2, $month{$1}, $year + 1);
+		}
+	}
+
+	return defined $epoch ? iso_local($epoch) : undef;
+}
+
+sub usage_object {
+	my ($match, $kind) = @_;
+	my ($percent, $reset_display, $timezone) = @$match;
+	$reset_display =~ s/^\s+|\s+$//g;
+	$timezone =~ s/^\s+|\s+$//g;
+	$reset_display =~ s/^([A-Z][a-z]{2})(\d{1,2}),/$1 $2, /;
+	my $normalized = normalize_reset($reset_display, $timezone, $kind);
+	my %result = (
+		used_percent => 0 + $percent,
+		resets_at_display => $reset_display,
+		timezone => $timezone,
+	);
+	$result{resets_at} = $normalized if defined $normalized;
+	return \%result;
+}
+
+my $compact_text = $text;
+$compact_text =~ s/\s+//g;
+my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
+my $refresh_status = defined $age ? 'last_known' : 'not_reported';
+my $generated_at = iso_local(time);
+
+my %output = (
+	source => 'claude /usage',
+	generated_at => $generated_at,
+	refresh_status => $refresh_status,
+	current_session => usage_object($session, 'session'),
+	current_week => usage_object($week, 'week'),
+);
+$output{last_known_age} = $age if defined $age;
+
+print JSON::PP->new->canonical->pretty->encode(\%output);
+PERL
+
+then
+	printf 'failed to parse Claude usage; using cached data when available\n' >&2
+	if [[ -s "$cache_file" ]]; then
+		cat -- "$cache_file"
+		exit 0
+	fi
+	exit 65
+fi
+
+chmod 600 -- "$result_file"
+mv -f -- "$result_file" "$cache_file"
+cat -- "$cache_file"

@@ -2,6 +2,7 @@ import { useWidgetSetting } from '@overline-zebar/config';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
 import { Center } from './components/Center';
+import ClaudeUsage from './components/claudeUsage';
 import { LeftButtons } from './components/leftButtons';
 import Media from './components/media';
 import RightButtons from './components/rightButtons/RightButtons';
@@ -74,6 +75,7 @@ function App() {
       {/* Right */}
       <div className="flex gap-2 items-center h-full z-10">
         <div className="flex items-center h-full">
+          <ClaudeUsage />
           <StatProviders
             weather={output.weather}
             battery={output.battery}
