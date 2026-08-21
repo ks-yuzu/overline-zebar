@@ -4,6 +4,9 @@ This optional integration displays the current Claude session and weekly usage
 in the main Zebar widget. An authenticated Claude Code process refreshes a JSON
 cache in WSL, while Zebar only reads the cached value.
 
+See [`docs/ai-usage-integration.md`](../../docs/ai-usage-integration.md) for the
+shared architecture, UI behavior, stale detection, and operations runbook.
+
 ## WSL setup
 
 Install `expect`, Perl, and `flock`, then install the helper:
