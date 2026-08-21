@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+timeout_seconds="${CODEX_USAGE_TIMEOUT:-15}"
+if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CODEX_USAGE_TIMEOUT must be a positive integer\n' >&2
+	exit 64
+fi
+
+cache_ttl_seconds="${CODEX_USAGE_CACHE_TTL:-300}"
+if [[ ! "$cache_ttl_seconds" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CODEX_USAGE_CACHE_TTL must be a positive integer\n' >&2
+	exit 64
+fi
+
+force_refresh=false
+cached_only=false
+case "${1:-}" in
+	'') ;;
+	--force) force_refresh=true ;;
+	--cached-only) cached_only=true ;;
+	*)
+		printf 'usage: %s [--force|--cached-only]\n' "$0" >&2
+		exit 64
+		;;
+esac
+
+cache_dir="${CODEX_USAGE_CACHE_DIR:-$HOME/.cache/codex-usage-json}"
+cache_file="$cache_dir/usage.json"
+lock_file="$cache_dir/update.lock"
+mkdir -p -- "$cache_dir"
+chmod 700 -- "$cache_dir"
+
+if [[ "$cached_only" == true ]]; then
+	if [[ ! -s "$cache_file" ]]; then
+		printf 'Codex usage cache is not available yet\n' >&2
+		exit 66
+	fi
+	cat -- "$cache_file"
+	exit 0
+fi
+
+cache_is_fresh() {
+	[[ -s "$cache_file" ]] || return 1
+	local modified_at now
+	modified_at="$(stat -c %Y -- "$cache_file")" || return 1
+	now="$(date +%s)"
+	((now - modified_at < cache_ttl_seconds))
+}
+
+if [[ "$force_refresh" == false ]] && cache_is_fresh; then
+	cat -- "$cache_file"
+	exit 0
+fi
+
+exec 9>"$lock_file"
+flock 9
+
+if [[ "$force_refresh" == false ]] && cache_is_fresh; then
+	cat -- "$cache_file"
+	exit 0
+fi
+
+for command_name in jq flock; do
+	if ! command -v "$command_name" >/dev/null 2>&1; then
+		printf 'required command not found: %s\n' "$command_name" >&2
+		if [[ -s "$cache_file" ]]; then
+			cat -- "$cache_file"
+			exit 0
+		fi
+		exit 69
+	fi
+done
+
+find_codex_bin() {
+	local candidate discovered=''
+
+	if [[ -x "$HOME/bin/codex" ]]; then
+		printf '%s' "$HOME/bin/codex"
+		return
+	fi
+
+	discovered="$(command -v codex || true)"
+	if [[ -n "$discovered" ]]; then
+		printf '%s' "$discovered"
+		return
+	fi
+
+	# cron does not load NVM's shell initialization. Discover the newest
+	# installed NVM Codex launcher and add its sibling node binary to PATH.
+	for candidate in "$HOME"/.nvm/versions/node/*/bin/codex; do
+		[[ -x "$candidate" ]] || continue
+		discovered="$candidate"
+	done
+	printf '%s' "$discovered"
+}
+
+codex_bin="${CODEX_USAGE_CODEX_BIN:-$(find_codex_bin)}"
+if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
+	printf 'Codex executable not found; set CODEX_USAGE_CODEX_BIN\n' >&2
+	if [[ -s "$cache_file" ]]; then
+		cat -- "$cache_file"
+		exit 0
+	fi
+	exit 69
+fi
+
+codex_bin_dir="${codex_bin%/*}"
+export PATH="$codex_bin_dir:$PATH"
+
+result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
+error_file="$(mktemp "${TMPDIR:-/tmp}/codex-usage.XXXXXX")"
+server_pid=''
+
+cleanup() {
+	if [[ -n "$server_pid" ]]; then
+		kill "$server_pid" 2>/dev/null || true
+		wait "$server_pid" 2>/dev/null || true
+	fi
+	rm -f -- "$result_file" "$error_file"
+}
+trap cleanup EXIT
+
+response_line=''
+server_out_fd=''
+server_in_fd=''
+
+read_response() {
+	local expected_id="$1"
+	local line remaining
+	local deadline=$((SECONDS + timeout_seconds))
+
+	while ((SECONDS < deadline)); do
+		remaining=$((deadline - SECONDS))
+		if ! IFS= read -r -t "$remaining" -u "$server_out_fd" line; then
+			return 1
+		fi
+		if jq -e --argjson expected "$expected_id" '.id == $expected' \
+			>/dev/null 2>&1 <<<"$line"; then
+			response_line="$line"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+stop_server() {
+	if [[ -n "$server_pid" ]]; then
+		kill "$server_pid" 2>/dev/null || true
+		wait "$server_pid" 2>/dev/null || true
+		server_pid=''
+	fi
+}
+
+refresh_usage() {
+	coproc CODEX_USAGE_SERVER {
+		"$codex_bin" app-server --stdio 2>"$error_file"
+	}
+	server_pid="$CODEX_USAGE_SERVER_PID"
+	server_out_fd="${CODEX_USAGE_SERVER[0]}"
+	server_in_fd="${CODEX_USAGE_SERVER[1]}"
+
+	if ! printf '%s\n' \
+		'{"method":"initialize","id":1,"params":{"clientInfo":{"name":"zebar-usage-monitor","title":"Zebar usage monitor","version":"1"}}}' \
+		>&"$server_in_fd"; then
+		return 1
+	fi
+
+	if ! read_response 1 || ! jq -e '.error == null' >/dev/null <<<"$response_line"; then
+		return 1
+	fi
+
+	if ! printf '%s\n' '{"method":"initialized"}' >&"$server_in_fd"; then
+		return 1
+	fi
+	# This account-level read does not call thread/start or turn/start, so the
+	# monitor neither creates conversation history nor invokes a model.
+	if ! printf '%s\n' \
+		'{"method":"account/rateLimits/read","id":2}' \
+		>&"$server_in_fd"; then
+		return 1
+	fi
+
+	if ! read_response 2; then
+		return 1
+	fi
+
+	if ! jq -e --arg generated_at "$(date --iso-8601=seconds)" '
+		def valid_window:
+			type == "object" and
+			(.usedPercent | type == "number") and
+			(.windowDurationMins | type == "number") and
+			(.resetsAt | type == "number");
+		.result.rateLimits as $limits |
+		select(
+			($limits | type == "object") and
+			($limits.primary == null or ($limits.primary | valid_window)) and
+			($limits.secondary == null or ($limits.secondary | valid_window))
+		) |
+		{
+			source: "codex app-server account/rateLimits/read",
+			generated_at: $generated_at,
+			rate_limits: $limits
+		}
+	' >"$result_file" <<<"$response_line"; then
+		return 1
+	fi
+
+	stop_server
+	return 0
+}
+
+if ! refresh_usage; then
+	stop_server
+	printf 'failed to refresh Codex usage; using cached data when available\n' >&2
+	if [[ -s "$error_file" ]]; then
+		sed -n '1,5p' "$error_file" >&2
+	fi
+	if [[ -s "$cache_file" ]]; then
+		cat -- "$cache_file"
+		exit 0
+	fi
+	exit 70
+fi
+
+chmod 600 -- "$result_file"
+mv -f -- "$result_file" "$cache_file"
+cat -- "$cache_file"
