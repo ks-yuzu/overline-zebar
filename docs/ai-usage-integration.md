@@ -345,7 +345,7 @@ fork固有実装は可能な限り新規directoryへ分離している。upstrea
 ```sh
 git fetch upstream
 git rebase upstream/main
-git push --force-with-lease origin feat/claude-usage
+git push --force-with-lease origin feat/ai-usage
 ```
 
 rebase後は、`App.tsx`内の表示順が
