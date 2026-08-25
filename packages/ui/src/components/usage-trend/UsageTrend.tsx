@@ -61,7 +61,7 @@ export default function UsageTrend({ endAt, label, points, startAt }: Props) {
     <div>
       <div className="relative">
         <svg
-          aria-label={`${label} usage history`}
+          aria-label={`${label} usage history with linear pace guide`}
           className="h-[82px] w-full"
           role="img"
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -91,6 +91,17 @@ export default function UsageTrend({ endAt, label, points, startAt }: Props) {
               />
             );
           })}
+          <line
+            aria-hidden="true"
+            opacity="0.5"
+            stroke="var(--border)"
+            strokeDasharray="4 3"
+            strokeWidth="0.75"
+            x1={PADDING_X}
+            x2={WIDTH - PADDING_X}
+            y1={HEIGHT - PADDING_Y}
+            y2={PADDING_Y}
+          />
           {coordinates.length >= 2 && (
             <>
               <path d={areaPath} fill={`url(#${gradientId})`} />

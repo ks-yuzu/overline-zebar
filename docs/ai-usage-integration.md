@@ -79,6 +79,8 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - graphの横軸は履歴量にかかわらず、reset時刻を終端として各window時間幅に固定する。
   Claudeは5時間・7日間、Codexは`windowDurationMins`の時間幅を使う。
   履歴が0件でも時間軸を表示し、1件ならその時刻の点だけを表示する。
+- window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した
+  場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
 
 リセット表示:
 
