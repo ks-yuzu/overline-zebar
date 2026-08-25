@@ -41,9 +41,15 @@ live取得とwidget表示を分離する理由は次のとおりです。
 - `widgets/main/src/components/aiUsage/`
   - Claude/Codexの配置、時刻更新、stale判定・表示を共有する。
 - `widgets/main/src/components/claudeUsage/`
-  - Claude JSONの検証、取得、表示を担当する。
+  - Claude JSONの検証、取得、main bar表示、詳細widgetの起動を担当する。
 - `widgets/main/src/components/codexUsage/`
   - Codex JSONの検証、取得、表示を担当する。
+- `widgets/ai-usage-details/`
+  - クリックで開くClaude詳細、5H/7Dの現在値と履歴グラフを表示する。
+  - CPU/RAM詳細と同様、main bar直下へ配置し、focusを失うと閉じる。
+- `widgets/codex-usage-details/`
+  - クリックで開くCodex詳細、rate-limit windowの現在値と履歴グラフを表示する。
+  - window名と時間幅は`windowDurationMins`から動的に決める。
 
 ### WSL helpers
 
@@ -68,7 +74,11 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
 - リセット表示に`↻`記号は付けない。
-- tooltipにはリセット、最終更新、stale理由などの詳細を表示する。
+- Claude/Codex chipはクリックで各専用詳細widgetを開く。native tooltipは使用しない。
+- 詳細widgetは各windowの使用率、リセット、履歴、最終更新、freshness状態を表示する。
+- graphの横軸は履歴量にかかわらず、reset時刻を終端として各window時間幅に固定する。
+  Claudeは5時間・7日間、Codexは`windowDurationMins`の時間幅を使う。
+  履歴が0件でも時間軸を表示し、1件ならその時刻の点だけを表示する。
 
 リセット表示:
 
@@ -150,6 +160,9 @@ Claude UIが必要とする主なfield:
 - `last_known_age`（任意）
 - `current_session.used_percent`、`resets_at`
 - `current_week.used_percent`、`resets_at`
+- `history`
+  - 5分ごとの5H・7D使用率と各reset日時を14日分保持する。
+  - Claude側がlast-known値を返した場合は新しい履歴点として追加しない。
 
 Codex UIが必要とする主なfield:
 
@@ -157,6 +170,9 @@ Codex UIが必要とする主なfield:
 - `rate_limits.primary`
 - `rate_limits.secondary`
 - 各windowの`usedPercent`、`windowDurationMins`、`resetsAt`
+- `history`
+  - 5分ごとに、その時点で報告された全windowの使用率、時間幅、reset時刻を保持する。
+  - 14日分を保持し、現在windowと時間幅・reset時刻が一致するsampleだけを描画する。
 
 ## Machine-specific設定
 
@@ -171,6 +187,89 @@ Codex UIが必要とする主なfield:
 
 Widgetのcommandは各`config.ts`、許可する完全一致commandは`zpack.json`にある。
 環境を変える場合は両方を同時に変更する。
+
+## 配置・更新手順
+
+この構成では、WSL上のソースリポジトリと、Windows側でZebarが実際に読む
+インストール済みpackは別directoryである。ソースをbuildしただけでは実行中の
+widgetは更新されないため、生成物と`zpack.json`をpack側へ同期してZebarを
+再起動する。
+
+現在の配置は次のとおり。
+
+| 用途               | 配置先                                                                |
+| ------------------ | --------------------------------------------------------------------- |
+| ソースリポジトリ   | `<repo-checkout>`                   |
+| Claude helper      | `$HOME/bin/claude-usage-json`                               |
+| Codex helper       | `$HOME/bin/codex-usage-json`                                |
+| Claude cache・履歴 | `$HOME/.cache/claude-usage-json/usage.json`                           |
+| Codex cache        | `$HOME/.cache/codex-usage-json/usage.json`                            |
+| Zebar実行pack      | `/mnt/c/Users/<windows-user>/.glzr/zebar/mushfikurr.overline-zebar@1.0.5` |
+
+packのversionがMarketplace更新などで変わった場合は、以下の
+`ZEBAR_PACK_DIR`をZebarが選択している実際のdirectoryへ読み替える。
+`%APPDATA%/zebar/downloads`はdownload元であり、通常のcustom pack配置先である
+`%USERPROFILE%/.glzr/zebar`とは異なる点に注意する。
+
+### 1. WSL helperを配置する
+
+helperを変更した場合、リポジトリ内のscriptを`$HOME/bin`へ再配置する。
+
+```sh
+install -Dm755 scripts/claude-usage/claude-usage-json \
+  "$HOME/bin/claude-usage-json"
+install -Dm755 scripts/codex-usage/codex-usage-json \
+  "$HOME/bin/codex-usage-json"
+```
+
+初回だけ各READMEに従って依存package、認証、cronも設定する。
+
+- [Claude helper setup](../scripts/claude-usage/README.md)
+- [Codex helper setup](../scripts/codex-usage/README.md)
+
+### 2. Widgetをbuildする
+
+main barとクリック時の各詳細viewは別widgetなので、3つともbuildする。
+
+```sh
+corepack pnpm --filter @overline-zebar/main build
+corepack pnpm --filter @overline-zebar/ai-usage-details build
+corepack pnpm --filter @overline-zebar/codex-usage-details build
+```
+
+### 3. Zebarの実行packへ同期する
+
+次のコマンドは現在のmachine向け。`dist`だけでなく、新しいwidget定義と
+shell command権限を含む`zpack.json`も必ず同期する。
+
+```sh
+ZEBAR_PACK_DIR=/mnt/c/Users/<windows-user>/.glzr/zebar/mushfikurr.overline-zebar@1.0.5
+
+install -d "$ZEBAR_PACK_DIR/widgets/main/dist"
+install -d "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist"
+install -d "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist"
+cp -a widgets/main/dist/. "$ZEBAR_PACK_DIR/widgets/main/dist/"
+cp -a widgets/ai-usage-details/dist/. \
+  "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist/"
+cp -a widgets/codex-usage-details/dist/. \
+  "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist/"
+install -m644 zpack.json "$ZEBAR_PACK_DIR/zpack.json"
+```
+
+### 4. Zebarを再起動して確認する
+
+Zebarのtray menuから終了して再起動する。main barのClaude/Codex chipをクリックし、
+次を確認する。
+
+- `ai-usage-details`と`codex-usage-details`がmain bar直下に開く。
+- 5H・7Dの現在値とreset時刻が表示される。
+- 取得済みの履歴がある場合、推移graphが表示される。
+- 詳細viewの外をクリックすると閉じる。
+
+開かない場合は、まずZebarが参照しているpackの`zpack.json`に
+対象の詳細widget定義があることと、同じpack内に対応する`dist/index.html`が
+あることを確認する。ソース側だけを更新しても、インストール済みpackには
+自動反映されない。
 
 ## Cron環境
 
@@ -224,7 +323,9 @@ journalctl -t codex-usage.cron --since today
 Widgetをbuild:
 
 ```sh
-pnpm --filter @overline-zebar/main build
+corepack pnpm --filter @overline-zebar/main build
+corepack pnpm --filter @overline-zebar/ai-usage-details build
+corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```
 
 ## Upstream追従
@@ -255,11 +356,14 @@ rebase後は、`App.tsx`内の表示順が
 
 ```sh
 corepack pnpm exec eslint \
+  packages/ui/src/components/usage-trend \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage
 corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
+CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 ```

@@ -4,6 +4,14 @@ This optional integration displays the current Claude session and weekly usage
 in the main Zebar widget. An authenticated Claude Code process refreshes a JSON
 cache in WSL, while Zebar only reads the cached value.
 
+The helper starts Claude Code in screen-reader mode and waits for its input
+prompt before opening `/usage`. This avoids depending on optional welcome text
+that can change between Claude Code UI versions.
+
+Each successful live refresh also stores a usage sample in the cache. Samples
+are retained for 14 days; source-reported last-known values are not added as new
+history points.
+
 See [`docs/ai-usage-integration.md`](../../docs/ai-usage-integration.md) for the
 shared architecture, UI behavior, stale detection, and operations runbook.
 

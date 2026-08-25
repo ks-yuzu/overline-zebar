@@ -1,6 +1,9 @@
 import { useWidgetSetting } from '@overline-zebar/config';
 import { Chip } from '@overline-zebar/ui';
 import { Code2 } from 'lucide-react';
+import { useRef } from 'react';
+import * as zebar from 'zebar';
+import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
 import { getUsageFreshness } from '../aiUsage/freshness';
 import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
@@ -36,6 +39,7 @@ function formatReset(window: CodexUsageWindow, now: number) {
 
 export default function CodexUsage() {
   const { data, error, isPending } = useCodexUsage();
+  const chipRef = useRef<HTMLElement | null>(null);
   const now = useMinuteNow();
   const [systemStatThresholds] = useWidgetSetting(
     'main',
@@ -50,30 +54,32 @@ export default function CodexUsage() {
   if (!data || windows.length === 0) {
     return (
       <Chip
+        aria-label={
+          error instanceof Error ? error.message : 'Loading Codex usage'
+        }
         className="flex items-center h-full px-3 text-text-muted"
-        title={error instanceof Error ? error.message : 'Loading Codex usage'}
       >
         Codex {isPending ? '…' : '--'}
       </Chip>
     );
   }
 
-  const limits = data.rate_limits;
   const freshness = getUsageFreshness(data.generated_at, now);
-  const title = [
-    'Codex usage',
-    ...windows.map(
-      (window) =>
-        `${formatWindowDuration(window.windowDurationMins)} resets: ${formatReset(window, now)}`
-    ),
-    `Plan: ${limits.planType ?? 'unknown'}`,
-    `Spend control reached: ${limits.spendControlReached ? 'yes' : 'no'}`,
-    `Updated: ${data.generated_at}`,
-    freshness.description,
-  ].join('\n');
 
   return (
-    <Chip className="flex items-center gap-2.5 h-full px-3" title={title}>
+    <Chip
+      ref={chipRef}
+      aria-label="Open Codex usage details"
+      as="button"
+      className="flex items-center gap-2.5 h-full px-3"
+      onClick={async () => {
+        const placement = await calculateWidgetPlacementFromRight(chipRef, {
+          width: 460,
+          height: 380,
+        });
+        await zebar.startWidget('codex-usage-details', placement, {});
+      }}
+    >
       <Code2 aria-label="Codex usage" className="h-3.5 w-3.5 text-icon" />
       {windows.map((window) => (
         <div

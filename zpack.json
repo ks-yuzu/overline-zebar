@@ -107,6 +107,96 @@
       ]
     },
     {
+      "name": "ai-usage-details",
+      "htmlPath": "./widgets/ai-usage-details/dist/index.html",
+      "zOrder": "normal",
+      "shownInTaskbar": false,
+      "focused": true,
+      "resizable": false,
+      "transparent": true,
+      "includeFiles": [
+        "widgets/ai-usage-details/dist/index.html",
+        "widgets/ai-usage-details/dist/assets/**",
+        "widgets/ai-usage-details/dist/geistMono/**",
+        "widgets/ai-usage-details/README.md"
+      ],
+      "caching": {
+        "defaultDuration": 604800,
+        "rules": []
+      },
+      "privileges": {
+        "shellCommands": [
+          {
+            "program": "wsl.exe",
+            "argsRegex": "^-d <wsl-distribution> --user <wsl-user> -- $HOME/bin/claude-usage-json --cached-only$"
+          }
+        ]
+      },
+      "presets": [
+        {
+          "name": "default",
+          "anchor": "top_right",
+          "offsetX": "0px",
+          "offsetY": "40px",
+          "width": "460px",
+          "height": "380px",
+          "monitorSelection": {
+            "type": "all"
+          },
+          "dockToEdge": {
+            "enabled": false,
+            "edge": null,
+            "windowMargin": "0px"
+          }
+        }
+      ]
+    },
+    {
+      "name": "codex-usage-details",
+      "htmlPath": "./widgets/codex-usage-details/dist/index.html",
+      "zOrder": "normal",
+      "shownInTaskbar": false,
+      "focused": true,
+      "resizable": false,
+      "transparent": true,
+      "includeFiles": [
+        "widgets/codex-usage-details/dist/index.html",
+        "widgets/codex-usage-details/dist/assets/**",
+        "widgets/codex-usage-details/dist/geistMono/**",
+        "widgets/codex-usage-details/README.md"
+      ],
+      "caching": {
+        "defaultDuration": 604800,
+        "rules": []
+      },
+      "privileges": {
+        "shellCommands": [
+          {
+            "program": "wsl.exe",
+            "argsRegex": "^-d <wsl-distribution> --user <wsl-user> -- $HOME/bin/codex-usage-json --cached-only$"
+          }
+        ]
+      },
+      "presets": [
+        {
+          "name": "default",
+          "anchor": "top_right",
+          "offsetX": "0px",
+          "offsetY": "40px",
+          "width": "460px",
+          "height": "380px",
+          "monitorSelection": {
+            "type": "all"
+          },
+          "dockToEdge": {
+            "enabled": false,
+            "edge": null,
+            "windowMargin": "0px"
+          }
+        }
+      ]
+    },
+    {
       "name": "script-launcher",
       "htmlPath": "./widgets/script-launcher/dist/index.html",
       "zOrder": "normal",

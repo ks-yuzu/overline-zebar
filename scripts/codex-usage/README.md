@@ -12,6 +12,9 @@ account-level `account/rateLimits/read` request. It never calls `thread/start`
 or `turn/start`, so refreshes do not create conversation history or invoke a
 model.
 
+Each successful live refresh also stores a usage sample for every reported
+rate-limit window. Samples are retained for 14 days in the existing cache.
+
 ## WSL setup
 
 Install `jq` and `flock`, then install the helper:

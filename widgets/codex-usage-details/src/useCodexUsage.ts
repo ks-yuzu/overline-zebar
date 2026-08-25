@@ -8,7 +8,12 @@ export type CodexUsageWindow = {
   resetsAt: number;
 };
 
-export type CodexRateLimits = {
+export type CodexUsageHistorySample = {
+  recorded_at: number;
+  windows: CodexUsageWindow[];
+};
+
+type CodexRateLimits = {
   limitId: string;
   limitName: string | null;
   primary: CodexUsageWindow | null;
@@ -33,6 +38,7 @@ export type CodexUsageData = {
   source: string;
   generated_at: string;
   rate_limits: CodexRateLimits;
+  history: CodexUsageHistorySample[];
 };
 
 function isUsageWindow(value: unknown): value is CodexUsageWindow {
@@ -45,6 +51,17 @@ function isUsageWindow(value: unknown): value is CodexUsageWindow {
     Number.isFinite(window.windowDurationMins) &&
     typeof window.resetsAt === 'number' &&
     Number.isFinite(window.resetsAt)
+  );
+}
+
+function isHistorySample(value: unknown): value is CodexUsageHistorySample {
+  if (!value || typeof value !== 'object') return false;
+  const sample = value as Partial<CodexUsageHistorySample>;
+  return (
+    typeof sample.recorded_at === 'number' &&
+    Number.isFinite(sample.recorded_at) &&
+    Array.isArray(sample.windows) &&
+    sample.windows.every(isUsageWindow)
   );
 }
 
@@ -62,7 +79,17 @@ function parseCodexUsage(value: string): CodexUsageData {
     throw new Error('Codex usage command returned an unexpected JSON shape.');
   }
 
-  return parsed as CodexUsageData;
+  return {
+    source:
+      typeof parsed.source === 'string'
+        ? parsed.source
+        : 'codex app-server account/rateLimits/read',
+    generated_at: parsed.generated_at,
+    rate_limits: limits,
+    history: Array.isArray(parsed.history)
+      ? parsed.history.filter(isHistorySample)
+      : [],
+  };
 }
 
 async function fetchCodexUsage(): Promise<CodexUsageData> {
@@ -82,7 +109,7 @@ async function fetchCodexUsage(): Promise<CodexUsageData> {
 
 export function useCodexUsage() {
   return useQuery({
-    queryKey: ['codex-usage'],
+    queryKey: ['codex-usage-details'],
     queryFn: fetchCodexUsage,
     refetchInterval: 60_000,
     staleTime: 55_000,

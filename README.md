@@ -166,6 +166,10 @@ Here's a breakdown of the available options:
 
 ## Development
 
+This fork includes optional Claude Code and Codex usage indicators. Their WSL
+helpers, cache layout, build/deployment procedure, and troubleshooting notes are
+documented in [AI usage integration](docs/ai-usage-integration.md).
+
 To see live changes during development, follow the steps to build from source:
 
 ```sh

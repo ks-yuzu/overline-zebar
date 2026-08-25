@@ -115,12 +115,12 @@ set session_id [lindex $argv 3]
 
 log_user 0
 log_file -noappend -a $capture_file
-spawn -noecho $claude_bin --session-id $session_id --name zebar-usage-monitor
+spawn -noecho $claude_bin --ax-screen-reader --session-id $session_id --name zebar-usage-monitor
 
 expect {
-	"Welcome" {}
+	-re {(^|\r?\n)\$} {}
 	timeout {
-		puts stderr "timed out waiting for Claude Code to start"
+		puts stderr "timed out waiting for Claude Code input prompt"
 		exit 2
 	}
 	eof {
@@ -187,11 +187,11 @@ if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
 	install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH"
 fi
 
-if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MTime::Local=timelocal - "$capture_file" >"$result_file" <<'PERL'
+if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal - "$capture_file" "$cache_file" >"$result_file" <<'PERL'
 use strict;
 use warnings;
 
-my $capture_file = shift @ARGV;
+my ($capture_file, $cache_file) = @ARGV;
 open my $capture, '<:raw', $capture_file
 	or die "cannot read capture file: $!\n";
 local $/;
@@ -287,14 +287,60 @@ my $compact_text = $text;
 $compact_text =~ s/\s+//g;
 my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
 my $refresh_status = defined $age ? 'last_known' : 'not_reported';
-my $generated_at = iso_local(time);
+my $generated_epoch = time;
+my $generated_at = iso_local($generated_epoch);
+my $session_usage = usage_object($session, 'session');
+my $week_usage = usage_object($week, 'week');
+
+my @history;
+if (-s $cache_file) {
+	my $previous = eval {
+		open my $cache, '<:raw', $cache_file
+			or die "cannot read previous cache: $!\n";
+		local $/;
+		my $decoded = JSON::PP->new->decode(<$cache> // '{}');
+		close $cache;
+		$decoded;
+	};
+
+	if (ref($previous) eq 'HASH' && ref($previous->{history}) eq 'ARRAY') {
+		my $cutoff = $generated_epoch - 14 * 24 * 60 * 60;
+		@history = grep {
+			ref($_) eq 'HASH'
+				&& looks_like_number($_->{recorded_at})
+				&& $_->{recorded_at} >= $cutoff
+				&& looks_like_number($_->{session_used_percent})
+				&& looks_like_number($_->{week_used_percent})
+		} @{$previous->{history}};
+	}
+}
+
+if ($refresh_status ne 'last_known') {
+	my %sample = (
+		recorded_at => 0 + $generated_epoch,
+		session_used_percent => 0 + $session_usage->{used_percent},
+		week_used_percent => 0 + $week_usage->{used_percent},
+	);
+	$sample{session_resets_at} = $session_usage->{resets_at}
+		if defined $session_usage->{resets_at};
+	$sample{week_resets_at} = $week_usage->{resets_at}
+		if defined $week_usage->{resets_at};
+
+	if (@history && $generated_epoch - $history[-1]->{recorded_at} < 60) {
+		$history[-1] = \%sample;
+	}
+	else {
+		push @history, \%sample;
+	}
+}
 
 my %output = (
 	source => 'claude /usage',
 	generated_at => $generated_at,
 	refresh_status => $refresh_status,
-	current_session => usage_object($session, 'session'),
-	current_week => usage_object($week, 'week'),
+	current_session => $session_usage,
+	current_week => $week_usage,
+	history => \@history,
 );
 $output{last_known_age} = $age if defined $age;
 
