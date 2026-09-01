@@ -82,18 +82,30 @@ function parseClaudeUsage(value: string): ClaudeUsageData {
 }
 
 async function fetchClaudeUsage(): Promise<ClaudeUsageData> {
-  const result = await zebar.shellExec(
-    CLAUDE_USAGE_COMMAND.program,
-    CLAUDE_USAGE_COMMAND.args
-  );
-
-  if (result.code !== 0) {
-    throw new Error(
-      result.stderr.trim() || `Claude usage command exited with ${result.code}.`
+  try {
+    const result = await zebar.shellExec(
+      CLAUDE_USAGE_COMMAND.program,
+      CLAUDE_USAGE_COMMAND.args
     );
-  }
 
-  return parseClaudeUsage(result.stdout);
+    if (result.code !== 0) {
+      throw new Error(
+        result.stderr.trim() ||
+          `Claude usage command exited with ${result.code}.`
+      );
+    }
+
+    return parseClaudeUsage(result.stdout);
+  } catch (error) {
+    // A failure renders as a bare `--`, so log the command and the cause where
+    // the widget devtools (Ctrl+Shift+I) can show them.
+    console.error(
+      'Claude usage fetch failed:',
+      [CLAUDE_USAGE_COMMAND.program, ...CLAUDE_USAGE_COMMAND.args].join(' '),
+      error
+    );
+    throw error;
+  }
 }
 
 export function useClaudeUsage() {

@@ -66,18 +66,30 @@ function parseCodexUsage(value: string): CodexUsageData {
 }
 
 async function fetchCodexUsage(): Promise<CodexUsageData> {
-  const result = await zebar.shellExec(
-    CODEX_USAGE_COMMAND.program,
-    CODEX_USAGE_COMMAND.args
-  );
-
-  if (result.code !== 0) {
-    throw new Error(
-      result.stderr.trim() || `Codex usage command exited with ${result.code}.`
+  try {
+    const result = await zebar.shellExec(
+      CODEX_USAGE_COMMAND.program,
+      CODEX_USAGE_COMMAND.args
     );
-  }
 
-  return parseCodexUsage(result.stdout);
+    if (result.code !== 0) {
+      throw new Error(
+        result.stderr.trim() ||
+          `Codex usage command exited with ${result.code}.`
+      );
+    }
+
+    return parseCodexUsage(result.stdout);
+  } catch (error) {
+    // A failure renders as a bare `--`, so log the command and the cause where
+    // the widget devtools (Ctrl+Shift+I) can show them.
+    console.error(
+      'Codex usage fetch failed:',
+      [CODEX_USAGE_COMMAND.program, ...CODEX_USAGE_COMMAND.args].join(' '),
+      error
+    );
+    throw error;
+  }
 }
 
 export function useCodexUsage() {

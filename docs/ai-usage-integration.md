@@ -378,9 +378,16 @@ corepack pnpm --filter @overline-zebar/codex-usage-details build
 
 ## Troubleshooting
 
-widgetは失敗しても`--`を出すだけで、error内容はchipの`aria-label`にしか
-現れない。切り分けはWindows側からZebarと同じcommandを直接実行し、
-続けてcronのjournalを見る。
+widgetは失敗しても`--`を出すだけである。取得に失敗したとき、helperは実行した
+commandと原因を`console.error`へ出す。widgetにfocusを当てて**Ctrl+Shift+I**を
+押すとdevtoolsが開き、Consoleでそれを読める（Zebarに組み込まれたTauriの
+devtools hotkey）。main barでfocusが取れない場合は、chipをクリックして開いた
+詳細widgetで同じ操作を行う。詳細widgetも同じcommandを実行するため、原因は
+同じものが出る。
+
+Zebar自身はwidget実行時のerrorをlogに残さない。`~/.glzr/zebar/errors.log`にも
+記録されないため、devtoolsを使わない場合はWindows側からZebarと同じcommandを
+直接実行し、続けてcronのjournalを見る。
 
 ```powershell
 wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
