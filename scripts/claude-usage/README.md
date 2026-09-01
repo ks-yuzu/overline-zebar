@@ -25,7 +25,20 @@ install -Dm755 scripts/claude-usage/claude-usage-json \
 ```
 
 Claude Code must already be authenticated for the WSL user that runs the
-helper. Confirm the live refresh and JSON output with:
+helper.
+
+The helper starts Claude Code in `$HOME/.cache/claude-usage-json/workdir`, an
+empty directory it owns. Claude Code asks once whether that workspace is
+trusted and waits for an answer before showing its prompt, which a cron run
+cannot provide, so answer it once by hand:
+
+```sh
+mkdir -p "$HOME/.cache/claude-usage-json/workdir"
+cd "$HOME/.cache/claude-usage-json/workdir" && claude
+# answer `y` at the trust prompt, then exit with /exit
+```
+
+Confirm the live refresh and JSON output with:
 
 ```sh
 claude-usage-json --force

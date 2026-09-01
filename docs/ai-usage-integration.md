@@ -129,6 +129,9 @@ Claudeの`refresh_status: "last_known"`は、cacheが新しくてもsource側の
 ### Claude
 
 - cronを実行するWSL userでClaude Codeへ認証しておく。
+- Claude Codeは起動directoryのtrustを一度確認し、応答するまでpromptを出さない。
+  helperは`$HOME/.cache/claude-usage-json/workdir`で起動するため、この
+  directoryだけ事前に手動でtrustしておく。cronからは応答できない。
 - 固定の専用session UUIDを使い、毎回別のsessionを作らない。
 - `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1`でprompt履歴を保存しない。
 - `/usage`だけを開き、model promptを送らない。

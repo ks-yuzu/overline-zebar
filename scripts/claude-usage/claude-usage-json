@@ -101,7 +101,16 @@ capture_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage.XXXXXX")"
 result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
 trap 'rm -f -- "$capture_file" "$result_file"' EXIT
 
-claude_work_dir="${CLAUDE_USAGE_WORK_DIR:-/tmp}"
+# Claude Code asks whether the directory it starts in is trusted, and waits for
+# an answer before showing its prompt. Use a dedicated empty directory owned by
+# the helper rather than a shared one such as /tmp, so that answering the dialog
+# once covers nothing but this directory.
+claude_work_dir="${CLAUDE_USAGE_WORK_DIR:-$cache_dir/workdir}"
+if ! mkdir -p -- "$claude_work_dir"; then
+	printf 'cannot create Claude usage working directory: %s\n' "$claude_work_dir" >&2
+	exit 73
+fi
+chmod 700 -- "$claude_work_dir"
 if ! cd -- "$claude_work_dir"; then
 	printf 'cannot enter Claude usage working directory: %s\n' "$claude_work_dir" >&2
 	exit 73
