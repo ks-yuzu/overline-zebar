@@ -5,8 +5,10 @@ import { cn } from '../../utils/cn';
 
 const Progress = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<typeof BaseProgress.Root>
->(({ className, children, ...props }, ref) => (
+  React.ComponentProps<typeof BaseProgress.Root> & {
+    indicatorColor?: string;
+  }
+>(({ className, children, indicatorColor, ...props }, ref) => (
   <BaseProgress.Root ref={ref} className="relative" {...props}>
     <BaseProgress.Track
       className={cn(
@@ -14,7 +16,10 @@ const Progress = React.forwardRef<
         className
       )}
     >
-      <BaseProgress.Indicator className="block bg-primary transition-all duration-300" />
+      <BaseProgress.Indicator
+        className="block bg-primary transition-all duration-300"
+        style={indicatorColor ? { backgroundColor: indicatorColor } : undefined}
+      />
     </BaseProgress.Track>
     {children}
   </BaseProgress.Root>

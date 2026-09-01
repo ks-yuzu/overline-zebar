@@ -1,4 +1,5 @@
 import { cn } from '../../../utils/cn';
+import { clampPercentage } from '../../../utils/clampPercentage';
 
 const Ring = ({
   percentage,
@@ -16,8 +17,8 @@ const Ring = ({
   const size = 100;
   const radius = size / 2 - strokeWidth;
   const circumference = 2 * Math.PI * radius;
-
-  const offset = circumference - (percentage / 100) * circumference;
+  const normalizedPercentage = clampPercentage(percentage);
+  const offset = circumference - (normalizedPercentage / 100) * circumference;
 
   return (
     <div className="relative flex items-center justify-center rounded-full overflow-hidden">

@@ -1,4 +1,12 @@
-import { Card, Progress, UsageTrend } from '@overline-zebar/ui';
+import { useWidgetSetting } from '@overline-zebar/config';
+import type { Threshold } from '@overline-zebar/config';
+import {
+  Card,
+  Progress,
+  UsageTrend,
+  clampPercentage,
+  getThresholdColor,
+} from '@overline-zebar/ui';
 import type { TrendPoint } from '@overline-zebar/ui';
 import { Clock3, Code2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -92,21 +100,42 @@ function selectHistory(
     .sort((a, b) => a.recordedAt - b.recordedAt);
 }
 
-function UsageCard({ now, window }: { now: number; window: CodexUsageWindow }) {
+function UsageCard({
+  now,
+  thresholds,
+  window,
+}: {
+  now: number;
+  thresholds: Threshold[];
+  window: CodexUsageWindow;
+}) {
   const label = formatWindowDuration(window.windowDurationMins);
-  const usage = Math.round(window.usedPercent);
+  const usage = Math.round(clampPercentage(window.usedPercent));
+  const thresholdColor = getThresholdColor(usage, thresholds);
+  const textColor = `var(${thresholdColor})`;
+  const indicatorColor =
+    thresholdColor === '--text' ? 'var(--success)' : textColor;
   return (
     <Card className="gap-2 bg-background-deeper/60 p-3">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs font-medium text-text-muted">{label} window</p>
-          <p className="text-2xl font-semibold tabular-nums">{usage}%</p>
+          <p
+            className="text-2xl font-semibold tabular-nums"
+            style={{ color: textColor }}
+          >
+            {usage}%
+          </p>
         </div>
         <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
           used
         </span>
       </div>
-      <Progress aria-label={`${label} usage`} value={usage} />
+      <Progress
+        aria-label={`${label} usage`}
+        indicatorColor={indicatorColor}
+        value={usage}
+      />
       <div className="flex items-center gap-1.5 text-xs text-text-muted">
         <Clock3 className="h-3 w-3" />
         <span>{formatReset(window, now)}</span>
@@ -118,6 +147,10 @@ function UsageCard({ now, window }: { now: number; window: CodexUsageWindow }) {
 export default function App() {
   const { data, error, isPending } = useCodexUsage();
   const [now, setNow] = useState(() => Date.now());
+  const [systemStatThresholds] = useWidgetSetting(
+    'main',
+    'systemStatThresholds'
+  );
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -208,6 +241,7 @@ export default function App() {
           <UsageCard
             key={`${window.windowDurationMins}-${window.resetsAt}`}
             now={now}
+            thresholds={systemStatThresholds}
             window={window}
           />
         ))}

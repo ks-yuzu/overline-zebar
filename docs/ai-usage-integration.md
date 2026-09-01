@@ -197,6 +197,15 @@ Widgetのcommandは各`config.ts`、許可する完全一致commandは`zpack.jso
 widgetは更新されないため、生成物と`zpack.json`をpack側へ同期してZebarを
 再起動する。
 
+> [!IMPORTANT]
+> UI変更は「build → 実行packへの同期 → Zebarのreloadまたは再起動」までを
+> 一続きの反映作業として扱う。buildだけ成功しても実行packは更新されず、
+> その状態でreloadしても古いwidgetが再読込されるだけである。
+>
+> 実機への反映を含む作業では、表示確認を依頼したり作業完了を報告したりする前に、
+> 必ず手順3の同期と同期結果の確認まで行う。CIやソース変更だけが目的で実行packへ
+> 同期しない場合は、「未配置・未反映」であることを明記する。
+
 現在の配置は次のとおり。
 
 | 用途               | 配置先                                                                |
@@ -257,6 +266,21 @@ cp -a widgets/codex-usage-details/dist/. \
   "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist/"
 install -m644 zpack.json "$ZEBAR_PACK_DIR/zpack.json"
 ```
+
+同期後は、少なくとも各entry pointがbuild元と一致することを確認する。
+次の`cmp`がすべて終了code 0なら、Zebarが次回読む`index.html`は最新である。
+
+```sh
+cmp widgets/main/dist/index.html \
+  "$ZEBAR_PACK_DIR/widgets/main/dist/index.html"
+cmp widgets/ai-usage-details/dist/index.html \
+  "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist/index.html"
+cmp widgets/codex-usage-details/dist/index.html \
+  "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist/index.html"
+```
+
+`index.html`内のasset名はcontent hashを含むため、同期前後でasset名が更新されて
+いることも反映確認の目安になる。
 
 ### 4. Zebarを再起動して確認する
 
@@ -369,6 +393,13 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 ```
+
+実機反映を伴うUI変更の完了条件は次のとおり。
+
+- 対象widgetのlint・型check・buildが成功している。
+- buildした全widgetの`dist`を、Zebarが実際に参照するpackへ同期している。
+- ソース側とpack側の各`dist/index.html`が`cmp`で一致している。
+- 同期後にZebarをreloadまたは再起動し、対象表示を確認している。
 
 加えて、Windowsから実際のZebar commandと同じ`wsl.exe ... --cached-only`を実行し、
 JSONが返ることを確認する。

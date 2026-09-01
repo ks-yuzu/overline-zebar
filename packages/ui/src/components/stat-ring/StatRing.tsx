@@ -1,4 +1,6 @@
 import { cn } from '../../utils/cn';
+import { clampPercentage } from '../../utils/clampPercentage';
+import { getThresholdColor } from '../../utils/thresholds';
 import Ring from './components/Ring';
 import { systemStatThresholds } from './defaults/systemStatThresholds';
 import { Threshold } from '@overline-zebar/config';
@@ -23,25 +25,14 @@ export function StatRing({
     return 0;
   }
 
-  function getThresholdColor(value: number) {
-    const range = threshold.find((r) => value >= r.min && value <= r.max);
-    return range ? range.labelColor : '--text';
-  }
-
-  const statAsInt = getNumbersFromString(stat);
-  const thresholdColor = getThresholdColor(statAsInt);
-
-  const colorClassMap: Record<string, { text: string; stroke: string }> = {
+  const statAsInt = clampPercentage(getNumbersFromString(stat));
+  const thresholdColor = getThresholdColor(statAsInt, threshold);
+  const colorClassMap = {
     '--text': { text: 'text-text', stroke: 'stroke-success' },
     '--warning': { text: 'text-warning', stroke: 'stroke-warning' },
     '--danger': { text: 'text-danger', stroke: 'stroke-danger' },
   };
-
-  const colors = colorClassMap[thresholdColor] || colorClassMap['--text'];
-
-  if (!colors) {
-    return null;
-  }
+  const colors = colorClassMap[thresholdColor];
 
   return (
     <div

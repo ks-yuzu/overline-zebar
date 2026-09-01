@@ -1,5 +1,5 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip } from '@overline-zebar/ui';
+import { Chip, clampPercentage } from '@overline-zebar/ui';
 import { Bot } from 'lucide-react';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
@@ -64,8 +64,10 @@ export default function ClaudeUsage() {
     isLastKnown,
     data.last_known_age
   );
-  const sessionUsage = Math.round(data.current_session.used_percent);
-  const weekUsage = Math.round(data.current_week.used_percent);
+  const sessionUsage = Math.round(
+    clampPercentage(data.current_session.used_percent)
+  );
+  const weekUsage = Math.round(clampPercentage(data.current_week.used_percent));
 
   return (
     <Chip

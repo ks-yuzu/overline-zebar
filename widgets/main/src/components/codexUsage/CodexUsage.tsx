@@ -1,5 +1,5 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip } from '@overline-zebar/ui';
+import { Chip, clampPercentage } from '@overline-zebar/ui';
 import { Code2 } from 'lucide-react';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
@@ -92,7 +92,7 @@ export default function CodexUsage() {
                 {formatWindowDuration(window.windowDurationMins)}
               </p>
             }
-            stat={`${Math.round(window.usedPercent)}%`}
+            stat={`${Math.round(clampPercentage(window.usedPercent))}%`}
             type={useInlineStats ? 'inline' : 'ring'}
             threshold={systemStatThresholds}
           />
