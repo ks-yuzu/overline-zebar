@@ -41,10 +41,21 @@ minute without starting a new Codex app-server.
 
 ## Zebar setup
 
-The machine-specific WSL command is isolated in
-`widgets/main/src/components/codexUsage/config.ts`. When using another WSL
-distribution, user, or helper path, change that new file and the matching
-`wsl.exe` permission in `zpack.json` together.
+The WSL command is isolated in
+`widgets/main/src/components/codexUsage/config.ts`:
+
+```text
+wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
+```
+
+It carries no distribution name, user name, or absolute home path, so it runs
+in the default WSL distribution as its default user. That distribution must be
+the one whose cron refreshes the cache; check it with `wsl -l -v` and switch it
+with `wsl --set-default <name>`, or pin `-d <name>` in the config file.
+
+When changing the command, change the matching `wsl.exe` permission in
+`zpack.json` at the same time; Zebar rejects a `shellExec` call that no
+`argsRegex` matches.
 
 After changing the settings, rebuild the main widget:
 

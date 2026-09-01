@@ -37,16 +37,21 @@ minute without starting a new Claude process.
 
 ## Zebar setup
 
-The machine-specific WSL command is isolated in
-`widgets/main/src/components/claudeUsage/config.ts`. When using another WSL
-distribution, user, or helper path, change that new file and the matching
-`wsl.exe` permission in `zpack.json` together.
+The WSL command is isolated in
+`widgets/main/src/components/claudeUsage/config.ts`:
 
-The default values in this branch are:
+```text
+wsl.exe -- sh -c '$HOME/bin/claude-usage-json --cached-only'
+```
 
-- Distribution: `<wsl-distribution>`
-- WSL user: `<wsl-user>`
-- Helper: `$HOME/bin/claude-usage-json`
+It carries no distribution name, user name, or absolute home path, so it runs
+in the default WSL distribution as its default user. That distribution must be
+the one whose cron refreshes the cache; check it with `wsl -l -v` and switch it
+with `wsl --set-default <name>`, or pin `-d <name>` in the config file.
+
+When changing the command, change the matching `wsl.exe` permission in
+`zpack.json` at the same time; Zebar rejects a `shellExec` call that no
+`argsRegex` matches.
 
 After changing the settings, rebuild the main widget:
 

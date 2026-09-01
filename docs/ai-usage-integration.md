@@ -176,19 +176,31 @@ Codex UIが必要とする主なfield:
   - 5分ごとに、その時点で報告された全windowの使用率、時間幅、reset時刻を保持する。
   - 14日分を保持し、現在windowと時間幅・reset時刻が一致するsampleだけを描画する。
 
-## Machine-specific設定
+## Widgetが実行するcommand
 
-現在のforkは次の環境を明示的に対象としている。
+widgetはdistribution名・user名・home directoryを埋め込まず、既定のWSL
+distributionを既定のuserで起動する。
 
-| 項目             | 値                                      |
-| ---------------- | --------------------------------------- |
-| WSL distribution | `<wsl-distribution>`                          |
-| WSL user         | `<wsl-user>`                                  |
-| Claude helper    | `$HOME/bin/claude-usage-json` |
-| Codex helper     | `$HOME/bin/codex-usage-json`  |
+```text
+wsl.exe -- sh -c '$HOME/bin/<helper> --cached-only'
+```
 
-Widgetのcommandは各`config.ts`、許可する完全一致commandは`zpack.json`にある。
-環境を変える場合は両方を同時に変更する。
+`$HOME`はWSL側の`sh`が展開する。`--cached-only`はcacheを読むだけで、
+`jq`・`flock`・各CLIも`PATH`も必要としないため、cron以外の最小環境で動く。
+
+前提は次の2つだけである。
+
+| 前提                     | 内容                                                      |
+| ------------------------ | --------------------------------------------------------- |
+| 既定のWSL distribution   | helperのcacheを更新するcronが動いているdistributionであること |
+| helperの配置             | 既定userの`$HOME/bin/`にあること                            |
+
+既定のdistributionは`wsl -l -v`の`*`で確認する。異なる場合は
+`wsl --set-default <name>`で切り替えるか、各`config.ts`へ`-d <name>`を戻す。
+
+widgetのcommandは各`config.ts`、許可する完全一致commandは`zpack.json`の
+`argsRegex`にある。片方だけを変更すると`shellExec`が拒否されるため、
+必ず同時に変更する。
 
 ## 配置・更新手順
 
@@ -206,21 +218,21 @@ widgetは更新されないため、生成物と`zpack.json`をpack側へ同期�
 > 必ず手順3の同期と同期結果の確認まで行う。CIやソース変更だけが目的で実行packへ
 > 同期しない場合は、「未配置・未反映」であることを明記する。
 
-現在の配置は次のとおり。
+配置先は次のとおり。
 
-| 用途               | 配置先                                                                |
-| ------------------ | --------------------------------------------------------------------- |
-| ソースリポジトリ   | `<repo-checkout>`                   |
-| Claude helper      | `$HOME/bin/claude-usage-json`                               |
-| Codex helper       | `$HOME/bin/codex-usage-json`                                |
-| Claude cache・履歴 | `$HOME/.cache/claude-usage-json/usage.json`                           |
-| Codex cache        | `$HOME/.cache/codex-usage-json/usage.json`                            |
-| Zebar実行pack      | `/mnt/c/Users/<windows-user>/.glzr/zebar/mushfikurr.overline-zebar@1.0.5` |
+| 用途               | 配置先                                             |
+| ------------------ | -------------------------------------------------- |
+| ソースリポジトリ   | このリポジトリのcheckout                           |
+| Claude helper      | `$HOME/bin/claude-usage-json`                      |
+| Codex helper       | `$HOME/bin/codex-usage-json`                       |
+| Claude cache・履歴 | `$HOME/.cache/claude-usage-json/usage.json`        |
+| Codex cache        | `$HOME/.cache/codex-usage-json/usage.json`         |
+| Zebar実行pack      | `%USERPROFILE%/.glzr/zebar/<pack>@<version>`       |
 
-packのversionがMarketplace更新などで変わった場合は、以下の
-`ZEBAR_PACK_DIR`をZebarが選択している実際のdirectoryへ読み替える。
-`%APPDATA%/zebar/downloads`はdownload元であり、通常のcustom pack配置先である
-`%USERPROFILE%/.glzr/zebar`とは異なる点に注意する。
+実行packは`%USERPROFILE%/.glzr/zebar`配下にある。`%APPDATA%/zebar/downloads`は
+download元であり、custom packの配置先とは異なる点に注意する。packのversionは
+Marketplace更新で変わるため、以下の`ZEBAR_PACK_DIR`はZebarが選択している実際の
+directoryへ読み替える。
 
 ### 1. WSL helperを配置する
 
@@ -250,11 +262,11 @@ corepack pnpm --filter @overline-zebar/codex-usage-details build
 
 ### 3. Zebarの実行packへ同期する
 
-次のコマンドは現在のmachine向け。`dist`だけでなく、新しいwidget定義と
-shell command権限を含む`zpack.json`も必ず同期する。
+`dist`だけでなく、新しいwidget定義とshell command権限を含む`zpack.json`も
+必ず同期する。`ZEBAR_PACK_DIR`は自分の環境の実行packへ読み替える。
 
 ```sh
-ZEBAR_PACK_DIR=/mnt/c/Users/<windows-user>/.glzr/zebar/mushfikurr.overline-zebar@1.0.5
+ZEBAR_PACK_DIR="/mnt/c/Users/<windows-user>/.glzr/zebar/<pack>@<version>"
 
 install -d "$ZEBAR_PACK_DIR/widgets/main/dist"
 install -d "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist"
@@ -401,5 +413,10 @@ bash -n scripts/codex-usage/codex-usage-json
 - ソース側とpack側の各`dist/index.html`が`cmp`で一致している。
 - 同期後にZebarをreloadまたは再起動し、対象表示を確認している。
 
-加えて、Windowsから実際のZebar commandと同じ`wsl.exe ... --cached-only`を実行し、
-JSONが返ることを確認する。
+加えて、Windows側（PowerShellなど）からZebarと同じcommandを実行し、既定の
+distributionでJSONが返ることを確認する。
+
+```powershell
+wsl.exe -- sh -c '$HOME/bin/claude-usage-json --cached-only'
+wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
+```
