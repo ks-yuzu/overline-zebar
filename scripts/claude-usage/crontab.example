@@ -1,3 +1,7 @@
 # Refresh the cache when the WSL distribution starts and every five minutes.
-@reboot /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
-*/5 * * * * /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
+#
+# cron does not load an interactive shell, so `claude` is usually not on PATH.
+# Point CLAUDE_USAGE_CLAUDE_BIN at the CLI (adjust the path for your install),
+# or add its directory to the crontab PATH instead.
+@reboot     CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
+*/5 * * * * CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron

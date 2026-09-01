@@ -316,6 +316,12 @@ Zebarのtray menuから終了して再起動する。main barのClaude/Codex chi
 ## Cron環境
 
 cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常読み込まれない。
+
+Claude helperは`$HOME/bin/claude`、次にcronから見える`PATH`を探索する。CLIを
+`$HOME/.local/bin`などPATH外へ入れている場合はどちらでも見つからないため、
+cron entryで`CLAUDE_USAGE_CLAUDE_BIN`を指定する。`expect`もcronから見える位置に
+必要である。例は`scripts/claude-usage/crontab.example`にある。
+
 Codex helperは次の順で実行ファイルを探索する。
 
 1. `$HOME/bin/codex`
