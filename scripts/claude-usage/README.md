@@ -84,5 +84,5 @@ Environment variables provide optional overrides:
 - `CLAUDE_USAGE_CACHE_DIR`
 - `CLAUDE_USAGE_CLAUDE_BIN`
 - `CLAUDE_USAGE_SESSION_ID`
-- `CLAUDE_USAGE_WORK_DIR` (default: `/tmp`)
+- `CLAUDE_USAGE_WORK_DIR` (default: `$HOME/.cache/claude-usage-json/workdir`)
 - `CLAUDE_USAGE_CAPTURE_PATH` (debug capture; may contain terminal output)

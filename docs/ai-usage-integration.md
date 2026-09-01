@@ -229,6 +229,7 @@ widgetは更新されないため、生成物と`zpack.json`をpack側へ同期�
 | Claude helper      | `$HOME/bin/claude-usage-json`                      |
 | Codex helper       | `$HOME/bin/codex-usage-json`                       |
 | Claude cache・履歴 | `$HOME/.cache/claude-usage-json/usage.json`        |
+| Claude作業directory | `$HOME/.cache/claude-usage-json/workdir`          |
 | Codex cache        | `$HOME/.cache/codex-usage-json/usage.json`         |
 | Zebar実行pack      | `%USERPROFILE%/.glzr/zebar/<pack>@<version>`       |
 
@@ -368,6 +369,35 @@ corepack pnpm --filter @overline-zebar/main build
 corepack pnpm --filter @overline-zebar/ai-usage-details build
 corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```
+
+## Troubleshooting
+
+widgetは失敗しても`--`を出すだけで、error内容はchipの`aria-label`にしか
+現れない。切り分けはWindows側からZebarと同じcommandを直接実行し、
+続けてcronのjournalを見る。
+
+```powershell
+wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
+wsl.exe -- sh -c '$HOME/bin/claude-usage-json --cached-only'
+```
+
+```sh
+journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
+```
+
+| 症状・出力                                          | 原因と対処                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------- |
+| distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
+| `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
+| `required command not found: expect`（exit 69）     | Claude helperの依存不足。`expect`を導入する                                |
+| `Claude executable not found`（exit 69）            | cronのPATHに`claude`が無い。`CLAUDE_USAGE_CLAUDE_BIN`で明示する            |
+| `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
+| `Codex executable not found`（exit 69）             | cronのPATHに`codex`が無い。`CODEX_USAGE_CODEX_BIN`で明示する               |
+| 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
+
+`shellExec`はwidgetの`config.ts`と`zpack.json`の`argsRegex`が完全一致した
+ときだけ実行される。commandを変えて片方だけ更新すると、helperが正常でも
+widgetは`--`のままになる。
 
 ## Upstream追従
 
