@@ -387,11 +387,14 @@ devtools hotkey）。main barでfocusが取れない場合は、chipをクリッ
 
 Zebar自身はwidget実行時のerrorをlogに残さない。`~/.glzr/zebar/errors.log`にも
 記録されないため、devtoolsを使わない場合はWindows側からZebarと同じcommandを
-直接実行し、続けてcronのjournalを見る。
+直接実行し、続けてcronのjournalを見る。`WSL_UTF8`を付けないと、`wsl.exe`自身の
+errorはUTF-16LEで出るため文字化けする。
 
 ```powershell
+$env:WSL_UTF8=1
 wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
 wsl.exe -- sh -c '$HOME/bin/claude-usage-json --cached-only'
+$LASTEXITCODE
 ```
 
 ```sh
@@ -400,6 +403,8 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 
 | 症状・出力                                          | 原因と対処                                                                 |
 | --------------------------------------------------- | -------------------------------------------------------------------------- |
+| `exited with -1`（`0xFFFFFFFF`）                    | helperではなく`wsl.exe`自身の起動失敗。errorはstdoutへ出るのでdevtoolsの続きの文言を読む。`wsl -l -v`で既定distributionを確認し、正しければ`wsl --shutdown`後に`wsl --update` |
+| `exited with 127`                                   | 既定distributionにhelperが無い。`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
 | `required command not found: expect`（exit 69）     | Claude helperの依存不足。`expect`を導入する                                |
@@ -410,7 +415,12 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 
 `shellExec`はwidgetの`config.ts`と`zpack.json`の`argsRegex`が完全一致した
 ときだけ実行される。commandを変えて片方だけ更新すると、helperが正常でも
-widgetは`--`のままになる。
+widgetは`--`のままになる。`env`は`argsRegex`の対象外なので、`WSL_UTF8`を
+足しても`zpack.json`の変更は要らない。
+
+exit codeの読み分けは次のとおり。`0`・`64`・`66`・`69`はhelperが返したもので、
+それ以外は`wsl.exe`が返したものである。widgetはhelperのstderrと`wsl.exe`の
+stdoutの両方をerror messageへ載せる。
 
 ## Upstream追従
 

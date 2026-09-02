@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import * as zebar from 'zebar';
 import { CLAUDE_USAGE_COMMAND } from './config';
+import { fetchUsageJson } from '../aiUsage/usageCommand';
 
 export type ClaudeUsagePeriod = {
   used_percent: number;
@@ -44,30 +44,7 @@ function parseClaudeUsage(value: string): ClaudeUsageData {
 }
 
 async function fetchClaudeUsage(): Promise<ClaudeUsageData> {
-  try {
-    const result = await zebar.shellExec(
-      CLAUDE_USAGE_COMMAND.program,
-      CLAUDE_USAGE_COMMAND.args
-    );
-
-    if (result.code !== 0) {
-      throw new Error(
-        result.stderr.trim() ||
-          `Claude usage command exited with ${result.code}.`
-      );
-    }
-
-    return parseClaudeUsage(result.stdout);
-  } catch (error) {
-    // A failure renders as a bare `--`, so log the command and the cause where
-    // the widget devtools (Ctrl+Shift+I) can show them.
-    console.error(
-      'Claude usage fetch failed:',
-      [CLAUDE_USAGE_COMMAND.program, ...CLAUDE_USAGE_COMMAND.args].join(' '),
-      error
-    );
-    throw error;
-  }
+  return fetchUsageJson('Claude usage', CLAUDE_USAGE_COMMAND, parseClaudeUsage);
 }
 
 export function useClaudeUsage() {
