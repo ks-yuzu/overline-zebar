@@ -341,7 +341,15 @@ if (-s $cache_file) {
 	}
 }
 
-if ($refresh_status ne 'last_known') {
+# A read that produced a percentage but no reset time caught the screen
+# half-drawn, and its percentage is not to be trusted: the one observed
+# reported 0% for a week that was at 8% either side of it. The current values
+# are still published - they self-correct on the next run - but a sample like
+# that must not enter the history the graphs are derived from.
+my $reset_times_parsed = defined $session_usage->{resets_at}
+	&& defined $week_usage->{resets_at};
+
+if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 	my %sample = (
 		recorded_at => 0 + $generated_epoch,
 		session_used_percent => 0 + $session_usage->{used_percent},
