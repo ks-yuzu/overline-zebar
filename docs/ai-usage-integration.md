@@ -79,6 +79,9 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   Claude・Codexで扱いは同じである。
   - **1日未満のwindow**はwindowごとの到達点。1日に何度もresetするため、
     日へ畳むと複数のwindowが混ざる。
+  - 集計単位を示すラベル (`Per window` / `Per day`、凡例) は両providerで同じ語に
+    する。providerごとの呼び分け (Claudeは5Hを"session"と呼ぶ) を持ち込むと、
+    同じ集計を別物として読ませてしまう。呼び名は上段のcardに残る。
   - **1日以上のwindow**は日次の消費量と累積。windowごとにすると14日で
     数本しか出ない。分母はその列のwindow自身のquotaで、横断的な基準は要らない。
 - **windowのrangeは利用開始時点で確定する。** 使っていない間、報告される

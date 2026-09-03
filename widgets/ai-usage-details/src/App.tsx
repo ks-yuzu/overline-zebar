@@ -352,10 +352,10 @@ export default function App() {
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">14D 5H peaks</p>
-            <p className="text-[10px] text-text-muted">Per session window</p>
+            <p className="text-[10px] text-text-muted">Per window</p>
           </div>
           <UsageHistory
-            barLabel="session peak"
+            barLabel="window peak"
             bars={sessionPeaks}
             endAt={historyRange.endAt}
             label="14D 5H"
