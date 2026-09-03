@@ -134,15 +134,22 @@ export default function UsageHistory({
         ))}
 
         {bars.map((bar) => {
-          const x = toX(bar.startAt);
-          const span = toX(bar.endAt) - x;
+          // A bar may reach past either end of the axis - a window that began
+          // before it, or a day that runs on past it - so it is clipped here
+          // rather than in the data, where two clipped bars would collide.
+          const left = Math.max(PADDING_X, toX(bar.startAt));
+          const right = Math.min(WIDTH - PADDING_X, toX(bar.endAt));
+          if (right <= left) return null;
+
+          const x = left;
+          const span = right - left;
           const width = Math.max(1, span - Math.min(BAR_GAP, span * 0.25));
           if (!bar.hasSamples) {
             return (
               <rect
                 fill="var(--border)"
                 height={chartHeight}
-                key={bar.startAt}
+                key={`${bar.startAt}-${bar.endAt}`}
                 opacity="0.1"
                 width={width}
                 x={x}
@@ -155,7 +162,7 @@ export default function UsageHistory({
             <rect
               fill={bar.partial ? 'none' : barColor}
               height={Math.max(0, baselineY - y)}
-              key={bar.startAt}
+              key={`${bar.startAt}-${bar.endAt}`}
               opacity={bar.partial ? 0.9 : 0.55}
               rx="1"
               stroke={bar.partial ? barColor : 'none'}
@@ -190,7 +197,11 @@ export default function UsageHistory({
             stroke="var(--background)"
             strokeWidth="2.5"
             textAnchor="middle"
-            x={(toX(peakBar.startAt) + toX(peakBar.endAt)) / 2}
+            x={
+              (Math.max(PADDING_X, toX(peakBar.startAt)) +
+                Math.min(WIDTH - PADDING_X, toX(peakBar.endAt))) /
+              2
+            }
             y={Math.max(PADDING_TOP + 7, toY(peakBar.value) - 3)}
           >
             {Math.round(peakBar.value)}%

@@ -24,7 +24,12 @@ export type UsageBar = {
 
 export type DailyUsage = {
   bars: UsageBar[];
-  /** Cumulative series, split at every reset so the drop is not drawn. */
+  /**
+   * The usage series, split where a reset is identified so the drop is not
+   * drawn as a line. An off-schedule reset keeps the same reset time and so
+   * cannot be identified: it stays within a segment and draws as a cliff,
+   * which reads as the reset it was.
+   */
   segments: { recordedAt: number; value: number }[][];
 };
 
@@ -172,7 +177,7 @@ export function buildWindowPeaks(
     const endAt = last.windowEndsAt ?? last.recordedAt;
     return [
       {
-        startAt: Math.max(range.startAt, endAt - range.windowSeconds),
+        startAt: endAt - range.windowSeconds,
         endAt: Math.min(range.endAt, endAt),
         value: Math.max(...usageWindow.samples.map((sample) => sample.value)),
         hasSamples: true,
@@ -181,12 +186,22 @@ export function buildWindowPeaks(
     ];
   });
 
-  // Without this a window the cron missed looks exactly like a window that
-  // went unused, which is the one distinction this panel has to keep.
+  // A stretch with no bar is either a window the cron missed or one that went
+  // unused, and this panel has to keep those apart. Only the absence of
+  // samples means missing - an unused window reports 0% and never falls, so it
+  // opens no boundary and leaves a gap of its own.
+  const covered = (from: number, to: number) =>
+    withinRange.some(
+      (sample) => sample.recordedAt >= from && sample.recordedAt < to
+    );
+
   const withGaps: UsageBar[] = [];
   let cursor = range.startAt;
   for (const peak of peaks) {
-    if (peak.startAt - cursor > MISSING_WINDOW_SECONDS) {
+    if (
+      peak.startAt - cursor > MISSING_WINDOW_SECONDS &&
+      !covered(cursor, peak.startAt)
+    ) {
       withGaps.push({
         startAt: cursor,
         endAt: peak.startAt,
@@ -197,7 +212,10 @@ export function buildWindowPeaks(
     withGaps.push(peak);
     cursor = Math.max(cursor, peak.endAt);
   }
-  if (range.endAt - cursor > MISSING_WINDOW_SECONDS) {
+  if (
+    range.endAt - cursor > MISSING_WINDOW_SECONDS &&
+    !covered(cursor, range.endAt)
+  ) {
     withGaps.push({
       startAt: cursor,
       endAt: range.endAt,
