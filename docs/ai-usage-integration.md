@@ -85,9 +85,12 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - **Codexのwindowはresetせずrollする。** `resetsAt`は最も古い使用分が期限切れに
   なる時刻であり、境界ではない。sampleごとにずれる (5H windowは2571 sampleで
   1712通り)。
-  - trendの横軸はresetsAtではなく**現在時刻を終端**とし、直前のwindow長を取る。
-  - sampleの絞り込みにresetsAtを使わない。使うと最新の1件しか一致しない。
-  - pace guideは出さない。空から始まってresetまでに埋まるwindowを前提とするため。
+- trendの横軸は、開始済みのwindowでは`resets_at`を終端とするそのwindowのrange、
+  未開始なら直近のwindow長とする。使っていない間、報告されるreset時刻は先送り
+  され続けるため、それを終端にすると軸のほとんどが未来になる。
+  - **sampleの絞り込みにreset時刻を使わない。** rangeが既にwindowを区切っており、
+    使うと未開始時に最新の1件しか一致しない。
+  - pace guideは未開始のwindowでは出さない。
 - 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
   - 下降は使い切ったのではなく返却されたもの (reset、またはrolling windowから
     古い使用分が抜けたもの) なので数えない。

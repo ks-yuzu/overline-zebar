@@ -78,12 +78,15 @@ function formatUpdatedAt(generatedAt: string) {
 }
 
 /**
- * The window rolls, so it ends now rather than at `resetsAt` - that is only
- * when the oldest usage currently held will age out.
+ * A window's range is pinned when usage starts, and until then the reported
+ * reset keeps sliding ahead. Plotting against that sliding value puts almost
+ * the whole axis in the future, so an unstarted window falls back to the hours
+ * just gone - which is all there is to show.
  */
 function getTrendRange(window: CodexUsageWindow, now: number) {
-  const endAt = now / 1000;
-  return { startAt: endAt - window.windowDurationMins * 60, endAt };
+  const started = window.usedPercent > 0;
+  const endAt = started ? window.resetsAt : now / 1000;
+  return { startAt: endAt - window.windowDurationMins * 60, endAt, started };
 }
 
 function selectHistory(
@@ -362,12 +365,12 @@ export default function App() {
                 <p className="text-xs font-medium text-text-muted">
                   {label} trend
                 </p>
-                <p className="text-[10px] text-text-muted">Rolling window</p>
+                <p className="text-[10px] text-text-muted">Current window</p>
               </div>
               <UsageTrend
                 endAt={range.endAt}
                 label={label}
-                paceGuide={false}
+                paceGuide={range.started}
                 points={history}
                 startAt={range.startAt}
                 viewWidth={420}

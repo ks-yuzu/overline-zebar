@@ -67,18 +67,13 @@ function formatUpdatedAt(generatedAt: string) {
 
 function selectHistory(
   history: ClaudeUsageHistorySample[],
-  resetAt: string | undefined,
-  resetKey: 'session_resets_at' | 'week_resets_at',
   valueKey: 'session_used_percent' | 'week_used_percent',
   startAt: number,
   endAt: number
 ): TrendPoint[] {
   return history
     .filter(
-      (sample) =>
-        sample.recorded_at >= startAt &&
-        sample.recorded_at <= endAt &&
-        (!resetAt || sample[resetKey] === resetAt)
+      (sample) => sample.recorded_at >= startAt && sample.recorded_at <= endAt
     )
     .sort((a, b) => a.recorded_at - b.recorded_at)
     .map((sample) => ({
@@ -87,14 +82,23 @@ function selectHistory(
     }));
 }
 
+/**
+ * A window's range is pinned when usage starts, and until then the reported
+ * reset keeps sliding ahead. Plotting against that sliding value puts almost
+ * the whole axis in the future, so an unstarted window falls back to the hours
+ * just gone - which is all there is to show.
+ */
 function getTrendRange(
-  resetAt: string | undefined,
+  period: ClaudeUsagePeriod,
   windowSeconds: number,
   now: number
 ) {
-  const parsedResetAt = resetAt ? Date.parse(resetAt) / 1000 : Number.NaN;
-  const endAt = Number.isFinite(parsedResetAt) ? parsedResetAt : now / 1000;
-  return { startAt: endAt - windowSeconds, endAt };
+  const parsedResetAt = period.resets_at
+    ? Date.parse(period.resets_at) / 1000
+    : Number.NaN;
+  const started = period.used_percent > 0 && Number.isFinite(parsedResetAt);
+  const endAt = started ? parsedResetAt : now / 1000;
+  return { startAt: endAt - windowSeconds, endAt, started };
 }
 
 /**
@@ -231,27 +235,19 @@ export default function App() {
           ? `${ageMinutes}m old`
           : 'Fresh';
   const sessionRange = getTrendRange(
-    data.current_session.resets_at,
+    data.current_session,
     SESSION_WINDOW_SECONDS,
     now
   );
-  const weekRange = getTrendRange(
-    data.current_week.resets_at,
-    WEEK_WINDOW_SECONDS,
-    now
-  );
+  const weekRange = getTrendRange(data.current_week, WEEK_WINDOW_SECONDS, now);
   const sessionHistory = selectHistory(
     data.history,
-    data.current_session.resets_at,
-    'session_resets_at',
     'session_used_percent',
     sessionRange.startAt,
     sessionRange.endAt
   );
   const weekHistory = selectHistory(
     data.history,
-    data.current_week.resets_at,
-    'week_resets_at',
     'week_used_percent',
     weekRange.startAt,
     weekRange.endAt
@@ -322,6 +318,7 @@ export default function App() {
           <UsageTrend
             endAt={sessionRange.endAt}
             label="5H"
+            paceGuide={sessionRange.started}
             points={sessionHistory}
             startAt={sessionRange.startAt}
             viewWidth={420}
@@ -335,6 +332,7 @@ export default function App() {
           <UsageTrend
             endAt={weekRange.endAt}
             label="7D"
+            paceGuide={weekRange.started}
             points={weekHistory}
             startAt={weekRange.startAt}
             viewWidth={420}
