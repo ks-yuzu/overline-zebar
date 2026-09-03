@@ -65,11 +65,13 @@ function formatUpdatedAt(generatedAt: string) {
   }).format(date);
 }
 
-function getTrendRange(window: CodexUsageWindow) {
-  return {
-    startAt: window.resetsAt - window.windowDurationMins * 60,
-    endAt: window.resetsAt,
-  };
+/**
+ * The window rolls, so it ends now rather than at `resetsAt` - that is only
+ * when the oldest usage currently held will age out.
+ */
+function getTrendRange(window: CodexUsageWindow, now: number) {
+  const endAt = now / 1000;
+  return { startAt: endAt - window.windowDurationMins * 60, endAt };
 }
 
 function selectHistory(
@@ -83,10 +85,11 @@ function selectHistory(
       (sample) => sample.recorded_at >= startAt && sample.recorded_at <= endAt
     )
     .flatMap((sample) => {
+      // Matching the reset time too would keep only the newest sample: a
+      // rolling window reports a different `resetsAt` almost every time.
       const matchingWindow = sample.windows.find(
         (candidate) =>
-          candidate.windowDurationMins === window.windowDurationMins &&
-          candidate.resetsAt === window.resetsAt
+          candidate.windowDurationMins === window.windowDurationMins
       );
       return matchingWindow
         ? [
@@ -252,7 +255,7 @@ export default function App() {
       >
         {windows.map((window) => {
           const label = formatWindowDuration(window.windowDurationMins);
-          const range = getTrendRange(window);
+          const range = getTrendRange(window, now);
           const history = selectHistory(
             data.history,
             window,
@@ -268,11 +271,12 @@ export default function App() {
                 <p className="text-xs font-medium text-text-muted">
                   {label} trend
                 </p>
-                <p className="text-[10px] text-text-muted">Current window</p>
+                <p className="text-[10px] text-text-muted">Rolling window</p>
               </div>
               <UsageTrend
                 endAt={range.endAt}
                 label={label}
+                paceGuide={false}
                 points={history}
                 startAt={range.startAt}
               />

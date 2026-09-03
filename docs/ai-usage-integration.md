@@ -74,6 +74,12 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
+- **Codexのwindowはresetせずrollする。** `resetsAt`は最も古い使用分が期限切れに
+  なる時刻であり、境界ではない。sampleごとにずれる (5H windowは2571 sampleで
+  1712通り)。
+  - trendの横軸はresetsAtではなく**現在時刻を終端**とし、直前のwindow長を取る。
+  - sampleの絞り込みにresetsAtを使わない。使うと最新の1件しか一致しない。
+  - pace guideは出さない。空から始まってresetまでに埋まるwindowを前提とするため。
 - 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
   - 下降は使い切ったのではなく返却されたもの (reset、またはrolling windowから
     古い使用分が抜けたもの) なので数えない。
