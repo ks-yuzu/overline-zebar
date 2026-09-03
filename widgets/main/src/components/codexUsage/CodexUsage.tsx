@@ -88,8 +88,10 @@ export default function CodexUsage() {
       className="relative isolate flex items-center gap-2.5 h-full overflow-hidden px-3"
       onClick={async () => {
         const placement = await calculateWidgetPlacementFromRight(chipRef, {
-          width: 460,
-          height: 380,
+          width: 920,
+          // Keep in sync with the codex-usage-details preset in zpack.json:
+          // the size passed here overrides it.
+          height: 580,
         });
         await zebar.startWidget('codex-usage-details', placement, {});
       }}

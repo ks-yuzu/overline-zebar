@@ -74,6 +74,14 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
+- Codex詳細もClaudeと同じ3段構成とし、列をwindowに対応させる (短い順)。
+  幅920px、高さ580px。3段目は14日を横軸とし、windowの長さで見方を変える。
+  - **1日未満のwindow**はその日に到達した最大値。rolling windowには畳むべき
+    windowの区切りがないため、日が単位になる。
+  - **1日以上のwindow**は日次の消費量と、その時点の在庫 (`in window`)。
+    分母はその列のwindow自身のquotaで、横断的な基準は要らない。
+  - 1日未満のwindowで日次消費を出さないのは、rolling windowが1日に何度も
+    使い切られ、0-100%の軸に載らないため。
 - **Codexのwindowはresetせずrollする。** `resetsAt`は最も古い使用分が期限切れに
   なる時刻であり、境界ではない。sampleごとにずれる (5H windowは2571 sampleで
   1712通り)。

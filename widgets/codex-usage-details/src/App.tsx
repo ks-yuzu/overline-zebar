@@ -3,11 +3,14 @@ import type { Threshold } from '@overline-zebar/config';
 import {
   Card,
   Progress,
+  UsageHistory,
   UsageTrend,
+  buildDailyPeaks,
+  buildDailyUsage,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
-import type { TrendPoint } from '@overline-zebar/ui';
+import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
 import { Clock3, Code2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
@@ -16,6 +19,15 @@ import type {
   CodexUsageHistorySample,
   CodexUsageWindow,
 } from './useCodexUsage';
+
+const HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60;
+/**
+ * A window shorter than a day is asked "how close to the cap did today get";
+ * a longer one is asked "how much of it did today consume". Below a day a
+ * rolling window is routinely consumed more than once over, which a 0-100%
+ * quota axis cannot show.
+ */
+const DAILY_VIEW_MIN_MINUTES = 24 * 60;
 
 function formatWindowDuration(minutes: number) {
   if (minutes % (7 * 24 * 60) === 0) {
@@ -101,6 +113,81 @@ function selectHistory(
         : [];
     })
     .sort((a, b) => a.recordedAt - b.recordedAt);
+}
+
+/**
+ * Codex windows roll rather than reset: `resetsAt` is when the oldest usage
+ * ages out, so it slides with almost every sample and marks no boundary. The
+ * series is left unsegmented for that reason, and matched on the window's
+ * length rather than its reset time.
+ */
+function selectWindowSamples(
+  history: CodexUsageHistorySample[],
+  windowDurationMins: number
+): UsageHistorySample[] {
+  return history
+    .slice()
+    .sort((a, b) => a.recorded_at - b.recorded_at)
+    .flatMap((sample) => {
+      const match = sample.windows.find(
+        (candidate) => candidate.windowDurationMins === windowDurationMins
+      );
+      return match
+        ? [{ recordedAt: sample.recorded_at, value: match.usedPercent }]
+        : [];
+    });
+}
+
+function HistoryCard({
+  historyRange,
+  samples,
+  window,
+}: {
+  historyRange: { startAt: number; endAt: number };
+  samples: UsageHistorySample[];
+  window: CodexUsageWindow;
+}) {
+  const label = formatWindowDuration(window.windowDurationMins);
+  const perDay = window.windowDurationMins >= DAILY_VIEW_MIN_MINUTES;
+
+  if (perDay) {
+    const daily = buildDailyUsage(samples, historyRange);
+    return (
+      <Card className="shrink-0 p-2.5">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-text-muted">14D {label}</p>
+          <p className="text-[10px] text-text-muted">Per day</p>
+        </div>
+        <UsageHistory
+          barLabel="daily"
+          bars={daily.bars}
+          endAt={historyRange.endAt}
+          label={`14D ${label}`}
+          lineLabel="in window"
+          primarySeries="line"
+          segments={daily.segments}
+          startAt={historyRange.startAt}
+        />
+      </Card>
+    );
+  }
+
+  const peaks = buildDailyPeaks(samples, historyRange);
+  return (
+    <Card className="shrink-0 p-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-text-muted">14D {label} peaks</p>
+        <p className="text-[10px] text-text-muted">Highest each day</p>
+      </div>
+      <UsageHistory
+        barLabel="daily peak"
+        bars={peaks}
+        endAt={historyRange.endAt}
+        label={`14D ${label}`}
+        startAt={historyRange.startAt}
+      />
+    </Card>
+  );
 }
 
 function UsageCard({
@@ -195,6 +282,10 @@ export default function App() {
     );
   }
 
+  const historyRange = {
+    startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
+    endAt: now / 1000,
+  };
   const generatedAt = Date.parse(data.generated_at);
   const ageMinutes = Number.isNaN(generatedAt)
     ? null
@@ -208,8 +299,8 @@ export default function App() {
         : 'Fresh';
 
   return (
-    <div className="flex h-screen flex-col gap-3 rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
-      <header className="flex items-center justify-between">
+    <div className="flex h-screen flex-col gap-3 overflow-y-auto rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
+      <header className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-2">
           <Code2 className="h-4 w-4 text-icon" />
           <div>
@@ -238,7 +329,7 @@ export default function App() {
       </header>
 
       <section
-        className={`grid gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
+        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
       >
         {windows.map((window) => (
           <UsageCard
@@ -251,7 +342,7 @@ export default function App() {
       </section>
 
       <section
-        className={`grid min-h-0 flex-1 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
+        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
       >
         {windows.map((window) => {
           const label = formatWindowDuration(window.windowDurationMins);
@@ -264,7 +355,7 @@ export default function App() {
           );
           return (
             <Card
-              className="min-h-0 p-2.5"
+              className="shrink-0 p-2.5"
               key={`${window.windowDurationMins}-${window.resetsAt}`}
             >
               <div className="flex items-center justify-between">
@@ -279,13 +370,30 @@ export default function App() {
                 paceGuide={false}
                 points={history}
                 startAt={range.startAt}
+                viewWidth={420}
               />
             </Card>
           );
         })}
       </section>
 
-      <footer className="flex items-center justify-between text-[10px] text-text-muted">
+      <section
+        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
+      >
+        {windows.map((window) => (
+          <HistoryCard
+            historyRange={historyRange}
+            key={`${window.windowDurationMins}-${window.resetsAt}`}
+            samples={selectWindowSamples(
+              data.history,
+              window.windowDurationMins
+            )}
+            window={window}
+          />
+        ))}
+      </section>
+
+      <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
         <span>{data.history.length} retained samples · 14 days</span>
       </footer>

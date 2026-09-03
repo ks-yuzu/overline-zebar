@@ -205,3 +205,37 @@ export function buildWindowPeaks(
 
   return withGaps;
 }
+
+/**
+ * Reduces each day to the highest the window was seen to reach. For a rolling
+ * window there are no discrete windows to take a peak of, so the day is the
+ * unit that answers how close usage came to the cap.
+ */
+export function buildDailyPeaks(
+  samples: UsageHistorySample[],
+  range: { startAt: number; endAt: number }
+): UsageBar[] {
+  const peakByDay = new Map<number, number>();
+  for (const sample of samples) {
+    if (sample.recordedAt < range.startAt || sample.recordedAt > range.endAt) {
+      continue;
+    }
+    const day = startOfLocalDay(sample.recordedAt);
+    peakByDay.set(day, Math.max(peakByDay.get(day) ?? 0, sample.value));
+  }
+
+  const bars: UsageBar[] = [];
+  for (
+    let day = startOfLocalDay(range.startAt);
+    day <= range.endAt;
+    day = nextLocalDay(day)
+  ) {
+    bars.push({
+      startAt: day,
+      endAt: nextLocalDay(day),
+      value: peakByDay.get(day) ?? 0,
+      hasSamples: peakByDay.has(day),
+    });
+  }
+  return bars;
+}
