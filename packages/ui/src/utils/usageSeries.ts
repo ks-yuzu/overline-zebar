@@ -38,6 +38,7 @@ function nextLocalDay(dayStart: number) {
 }
 
 type UsageWindow = {
+  /** Latest key seen in the run; jitter updates it without opening a window. */
   key: string | undefined;
   samples: UsageHistorySample[];
 };
@@ -46,19 +47,34 @@ function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
   const windows: UsageWindow[] = [];
   for (const sample of samples) {
     const current = windows.at(-1);
-    if (!current || current.key !== sample.windowKey) {
+    const previous = current?.samples.at(-1);
+    // A boundary needs two known, different windows and a fall in usage. A
+    // sample that failed to report its reset time is not one, and neither is
+    // a reset time that shifted while the quota kept climbing.
+    const reset =
+      current !== undefined &&
+      previous !== undefined &&
+      current.key !== undefined &&
+      sample.windowKey !== undefined &&
+      current.key !== sample.windowKey &&
+      sample.value < previous.value;
+
+    if (!current || reset) {
       windows.push({ key: sample.windowKey, samples: [sample] });
       continue;
     }
+    current.key = sample.windowKey ?? current.key;
     current.samples.push(sample);
   }
   return windows;
 }
 
 /**
- * Turns a cumulative usage series into per-day consumption and reset-split
- * segments. Because usage only grows inside a window, a day's consumption is
- * exactly how far the cumulative line rose that day, so both share one axis.
+ * Turns a usage series into per-day consumption and reset-split segments.
+ * Consumption is the sum of the day's rises, so for a window that only grows
+ * until it resets the bars are exactly how far the line climbed that day, and
+ * both share one axis. For a rolling window the line also falls as usage ages
+ * out, so the bars stay meaningful while that identity no longer holds.
  */
 export function buildDailyUsage(
   samples: UsageHistorySample[],
@@ -71,24 +87,33 @@ export function buildDailyUsage(
     )
     .sort((a, b) => a.recordedAt - b.recordedAt);
 
-  const windows = splitIntoWindows(withinRange);
+  const segments = splitIntoWindows(withinRange).map((usageWindow) =>
+    usageWindow.samples.map((sample) => ({
+      recordedAt: sample.recordedAt,
+      value: sample.value,
+    }))
+  );
+
   const consumedByDay = new Map<number, number>();
   const sampledDays = new Set<number>();
 
-  windows.forEach((usageWindow, windowIndex) => {
-    // The oldest window is truncated by the retention limit, so its first
-    // sample already includes consumption from before the range. Later windows
-    // start at a reset, where the quota is known to have been zero.
-    let previous = windowIndex === 0 ? (usageWindow.samples[0]?.value ?? 0) : 0;
-
-    for (const sample of usageWindow.samples) {
-      const day = startOfLocalDay(sample.recordedAt);
+  // Only the rises count. A fall is the quota being handed back - a reset, or
+  // usage ageing out - never something the user spent. Reading consumption
+  // from the values rather than from window boundaries keeps it right for both
+  // kinds of window, and costs only the sliver consumed between a reset and
+  // the first sample after it.
+  let previous = segments[0]?.[0]?.value ?? 0;
+  for (const segment of segments) {
+    for (const point of segment) {
+      const day = startOfLocalDay(point.recordedAt);
       sampledDays.add(day);
-      const consumed = Math.max(0, sample.value - previous);
-      consumedByDay.set(day, (consumedByDay.get(day) ?? 0) + consumed);
-      previous = sample.value;
+      consumedByDay.set(
+        day,
+        (consumedByDay.get(day) ?? 0) + Math.max(0, point.value - previous)
+      );
+      previous = point.value;
     }
-  });
+  }
 
   const bars: UsageBar[] = [];
   for (
@@ -104,15 +129,7 @@ export function buildDailyUsage(
     });
   }
 
-  return {
-    bars,
-    segments: windows.map((usageWindow) =>
-      usageWindow.samples.map((sample) => ({
-        recordedAt: sample.recordedAt,
-        value: sample.value,
-      }))
-    ),
-  };
+  return { bars, segments };
 }
 
 /**

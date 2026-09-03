@@ -74,6 +74,16 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
+- 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
+  - 下降は使い切ったのではなく返却されたもの (reset、またはrolling windowから
+    古い使用分が抜けたもの) なので数えない。
+  - reset時刻に依存しないため、providerがそれを揺らしても壊れない。
+    代償はresetから次のsampleまでに使った分だけで、5分粒度では無視できる。
+- windowの境界と見なすのは、**双方のreset時刻が既知で、異なり、かつ値が下がった**
+  時だけ。実データで次の2つを踏んだ。
+  - Claudeが週次のresetを1分ずれて報告したsampleが1件あり、windowが3つに割れて
+    1日に約49%の幻の消費が出ていた。widget側でreset時刻を5分格子へ丸める。
+  - reset時刻を欠くsampleも境界と解釈されていた。
 - graphの系列色は、progress barと同じ`--success`を使う。
   **1つのgraphで緑にするのは主系列だけとし**、副系列は`--primary`に落とす。
   両方を同じ強さで塗ると、どちらを読めばよいかが伝わらない。

@@ -97,6 +97,18 @@ function getTrendRange(
   return { startAt: endAt - windowSeconds, endAt };
 }
 
+/**
+ * Claude has been seen to report a reset one minute either side of the real
+ * boundary. Snapping to the sampling grid keeps that from reading as a window
+ * of its own.
+ */
+function windowKeyFor(resetsAt: string | undefined) {
+  if (!resetsAt) return undefined;
+  const parsed = Date.parse(resetsAt);
+  if (Number.isNaN(parsed)) return resetsAt;
+  return String(Math.round(parsed / 300_000));
+}
+
 function selectSessionSamples(
   history: ClaudeUsageHistorySample[]
 ): UsageHistorySample[] {
@@ -106,7 +118,7 @@ function selectSessionSamples(
     .map((sample) => ({
       recordedAt: sample.recorded_at,
       value: sample.session_used_percent,
-      windowKey: sample.session_resets_at,
+      windowKey: windowKeyFor(sample.session_resets_at),
     }));
 }
 
@@ -119,7 +131,7 @@ function selectWeekSamples(
     .map((sample) => ({
       recordedAt: sample.recorded_at,
       value: sample.week_used_percent,
-      windowKey: sample.week_resets_at,
+      windowKey: windowKeyFor(sample.week_resets_at),
     }));
 }
 
