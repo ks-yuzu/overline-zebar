@@ -76,24 +76,26 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - usageの色は既存の`systemStatThresholds`を使う。
 - Codex詳細もClaudeと同じ3段構成とし、列をwindowに対応させる (短い順)。
   幅920px、高さ580px。3段目は14日を横軸とし、windowの長さで見方を変える。
-  - **1日未満のwindow**はその日に到達した最大値。rolling windowには畳むべき
-    windowの区切りがないため、日が単位になる。
-  - **1日以上のwindow**は日次の消費量と、その時点の在庫 (`in window`)。
-    分母はその列のwindow自身のquotaで、横断的な基準は要らない。
-  - 1日未満のwindowで日次消費を出さないのは、rolling windowが1日に何度も
-    使い切られ、0-100%の軸に載らないため。
-- **Codexのwindowはresetせずrollする。** `resetsAt`は最も古い使用分が期限切れに
-  なる時刻であり、境界ではない。sampleごとにずれる (5H windowは2571 sampleで
-  1712通り)。
+  Claude・Codexで扱いは同じである。
+  - **1日未満のwindow**はwindowごとの到達点。1日に何度もresetするため、
+    日へ畳むと複数のwindowが混ざる。
+  - **1日以上のwindow**は日次の消費量と累積。windowごとにすると14日で
+    数本しか出ない。分母はその列のwindow自身のquotaで、横断的な基準は要らない。
+- **windowのrangeは利用開始時点で確定する。** 使っていない間、報告される
+  reset時刻は先送りされ続ける。Claude・Codexとも同じ挙動で、次で確認した。
+  - reset時刻が前進した瞬間の使用率は、Claudeで92.9%、Codexで95.5%が0%だった。
+  - **途中の値へ下がる遷移が皆無**である (Claude 0件/2607、Codex 0件/2583)。
+    使用率は必ず「0 → 上昇 → 一気に0」しか通らない。rolling windowなら
+    古い使用分から順に落ちるため、必ず途中の値を通る。
+  - reset時刻が滑ることだけを見てrolling windowと誤判定した経緯がある。
+    **滑るのは未使用の間だけ**であり、判別には減衰の有無を見る。
 - trendの横軸は、開始済みのwindowでは`resets_at`を終端とするそのwindowのrange、
-  未開始なら直近のwindow長とする。使っていない間、報告されるreset時刻は先送り
-  され続けるため、それを終端にすると軸のほとんどが未来になる。
-  - **sampleの絞り込みにreset時刻を使わない。** rangeが既にwindowを区切っており、
-    使うと未開始時に最新の1件しか一致しない。
-  - pace guideは未開始のwindowでは出さない。
+  未開始なら直近のwindow長とする。滑っている値を終端にすると軸のほとんどが
+  未来になる。**sampleの絞り込みにreset時刻を使わない** — rangeが既にwindowを
+  区切っており、使うと未開始時に最新の1件しか一致しない。
+  pace guideも未開始のwindowでは出さない。
 - 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
-  - 下降は使い切ったのではなく返却されたもの (reset、またはrolling windowから
-    古い使用分が抜けたもの) なので数えない。
+  - 下降は使い切ったのではなく返却されたもの (reset) なので数えない。
   - **provider側で定時外のquota resetが起きることがある。** `resets_at`は
     変わらないまま使用率だけが0へ落ちる。値の上昇から求めていればこれも
     正しく扱える (下降は0として無視し、そこからの登り直しを数える)。
@@ -158,6 +160,9 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - resetがまだ来ていないwindowは破線の枠だけで描き、最大値の表示からも除く。
 - `UsageTrend`のviewBox幅は`viewWidth`で渡す。svgは縦横比を保つため、
   card幅に対して比が合わないと、plotだけが中央へ寄って軸ラベルとずれる。
+- `UsageHistory`のバーの横位置は、sampleの`windowEndsAt`から引く。
+  同一性の`windowKey`とは別に持つ。keyは丸めたり不透明にしたりするため、
+  時刻として読み戻せるとは限らない。
 
 リセット表示:
 

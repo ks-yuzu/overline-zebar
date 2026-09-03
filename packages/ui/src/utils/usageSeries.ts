@@ -2,11 +2,15 @@ export type UsageHistorySample = {
   recordedAt: number;
   value: number;
   /**
-   * Identifies the quota window the sample belongs to (a reset timestamp, for
-   * instance). A change marks a reset, which breaks the cumulative series and
-   * restarts consumption from zero.
+   * Identifies the quota window the sample belongs to. Opaque: a caller may
+   * round a jittery reset time to keep one window from splitting in two.
    */
   windowKey?: string;
+  /**
+   * When the window ends, in epoch seconds. Kept apart from the key because
+   * the key may be rounded or otherwise unfit to read back as a time.
+   */
+  windowEndsAt?: number;
 };
 
 export type UsageBar = {
@@ -165,8 +169,7 @@ export function buildWindowPeaks(
     const last = usageWindow.samples.at(-1);
     if (!last) return [];
 
-    const resetAt = usageWindow.key ? Date.parse(usageWindow.key) / 1000 : NaN;
-    const endAt = Number.isFinite(resetAt) ? resetAt : last.recordedAt;
+    const endAt = last.windowEndsAt ?? last.recordedAt;
     return [
       {
         startAt: Math.max(range.startAt, endAt - range.windowSeconds),
@@ -204,38 +207,4 @@ export function buildWindowPeaks(
   }
 
   return withGaps;
-}
-
-/**
- * Reduces each day to the highest the window was seen to reach. For a rolling
- * window there are no discrete windows to take a peak of, so the day is the
- * unit that answers how close usage came to the cap.
- */
-export function buildDailyPeaks(
-  samples: UsageHistorySample[],
-  range: { startAt: number; endAt: number }
-): UsageBar[] {
-  const peakByDay = new Map<number, number>();
-  for (const sample of samples) {
-    if (sample.recordedAt < range.startAt || sample.recordedAt > range.endAt) {
-      continue;
-    }
-    const day = startOfLocalDay(sample.recordedAt);
-    peakByDay.set(day, Math.max(peakByDay.get(day) ?? 0, sample.value));
-  }
-
-  const bars: UsageBar[] = [];
-  for (
-    let day = startOfLocalDay(range.startAt);
-    day <= range.endAt;
-    day = nextLocalDay(day)
-  ) {
-    bars.push({
-      startAt: day,
-      endAt: nextLocalDay(day),
-      value: peakByDay.get(day) ?? 0,
-      hasSamples: peakByDay.has(day),
-    });
-  }
-  return bars;
 }

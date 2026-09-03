@@ -113,6 +113,12 @@ function windowKeyFor(resetsAt: string | undefined) {
   return String(Math.round(parsed / 300_000));
 }
 
+function windowEndFor(resetsAt: string | undefined) {
+  if (!resetsAt) return undefined;
+  const parsed = Date.parse(resetsAt);
+  return Number.isNaN(parsed) ? undefined : parsed / 1000;
+}
+
 function selectSessionSamples(
   history: ClaudeUsageHistorySample[]
 ): UsageHistorySample[] {
@@ -122,6 +128,7 @@ function selectSessionSamples(
     .map((sample) => ({
       recordedAt: sample.recorded_at,
       value: sample.session_used_percent,
+      windowEndsAt: windowEndFor(sample.session_resets_at),
       windowKey: windowKeyFor(sample.session_resets_at),
     }));
 }
@@ -135,6 +142,7 @@ function selectWeekSamples(
     .map((sample) => ({
       recordedAt: sample.recorded_at,
       value: sample.week_used_percent,
+      windowEndsAt: windowEndFor(sample.week_resets_at),
       windowKey: windowKeyFor(sample.week_resets_at),
     }));
 }

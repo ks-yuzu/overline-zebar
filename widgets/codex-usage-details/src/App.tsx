@@ -5,8 +5,8 @@ import {
   Progress,
   UsageHistory,
   UsageTrend,
-  buildDailyPeaks,
   buildDailyUsage,
+  buildWindowPeaks,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
@@ -22,10 +22,9 @@ import type {
 
 const HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 /**
- * A window shorter than a day is asked "how close to the cap did today get";
- * a longer one is asked "how much of it did today consume". Below a day a
- * rolling window is routinely consumed more than once over, which a 0-100%
- * quota axis cannot show.
+ * A window that resets several times a day is read one window at a time; one
+ * that spans days would leave only a handful of bars over the retained
+ * history, so the day becomes the unit instead.
  */
 const DAILY_VIEW_MIN_MINUTES = 24 * 60;
 
@@ -119,10 +118,8 @@ function selectHistory(
 }
 
 /**
- * Codex windows roll rather than reset: `resetsAt` is when the oldest usage
- * ages out, so it slides with almost every sample and marks no boundary. The
- * series is left unsegmented for that reason, and matched on the window's
- * length rather than its reset time.
+ * Matches on the window's length rather than its current reset time, so that
+ * every window the retention holds is kept, not just the one in progress.
  */
 function selectWindowSamples(
   history: CodexUsageHistorySample[],
@@ -136,17 +133,26 @@ function selectWindowSamples(
         (candidate) => candidate.windowDurationMins === windowDurationMins
       );
       return match
-        ? [{ recordedAt: sample.recorded_at, value: match.usedPercent }]
+        ? [
+            {
+              recordedAt: sample.recorded_at,
+              value: match.usedPercent,
+              windowEndsAt: match.resetsAt,
+              windowKey: String(match.resetsAt),
+            },
+          ]
         : [];
     });
 }
 
 function HistoryCard({
   historyRange,
+  now,
   samples,
   window,
 }: {
   historyRange: { startAt: number; endAt: number };
+  now: number;
   samples: UsageHistorySample[];
   window: CodexUsageWindow;
 }) {
@@ -166,7 +172,7 @@ function HistoryCard({
           bars={daily.bars}
           endAt={historyRange.endAt}
           label={`14D ${label}`}
-          lineLabel="in window"
+          lineLabel="cumulative"
           primarySeries="line"
           segments={daily.segments}
           startAt={historyRange.startAt}
@@ -175,15 +181,19 @@ function HistoryCard({
     );
   }
 
-  const peaks = buildDailyPeaks(samples, historyRange);
+  const peaks = buildWindowPeaks(samples, {
+    ...historyRange,
+    now: now / 1000,
+    windowSeconds: window.windowDurationMins * 60,
+  });
   return (
     <Card className="shrink-0 p-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-text-muted">14D {label} peaks</p>
-        <p className="text-[10px] text-text-muted">Highest each day</p>
+        <p className="text-[10px] text-text-muted">Per window</p>
       </div>
       <UsageHistory
-        barLabel="daily peak"
+        barLabel="window peak"
         bars={peaks}
         endAt={historyRange.endAt}
         label={`14D ${label}`}
@@ -387,6 +397,7 @@ export default function App() {
           <HistoryCard
             historyRange={historyRange}
             key={`${window.windowDurationMins}-${window.resetsAt}`}
+            now={now}
             samples={selectWindowSamples(
               data.history,
               window.windowDurationMins
