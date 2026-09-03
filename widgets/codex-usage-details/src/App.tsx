@@ -99,8 +99,9 @@ function selectHistory(
       (sample) => sample.recorded_at >= startAt && sample.recorded_at <= endAt
     )
     .flatMap((sample) => {
-      // Matching the reset time too would keep only the newest sample: a
-      // rolling window reports a different `resetsAt` almost every time.
+      // Matching the reset time too would keep only the newest sample while
+      // the window is unstarted, since the reported reset slides until usage
+      // pins it. The range already bounds the window.
       const matchingWindow = sample.windows.find(
         (candidate) =>
           candidate.windowDurationMins === window.windowDurationMins
