@@ -12,6 +12,11 @@ type Props = {
   endAt: number;
   label: string;
   lineLabel?: string;
+  /**
+   * Which mark carries the reading. Only that one takes the accent colour, so
+   * a chart with two series does not present them as equally important.
+   */
+  primarySeries?: 'bars' | 'line';
   segments?: UsageHistorySegment[];
   startAt: number;
 };
@@ -47,9 +52,14 @@ export default function UsageHistory({
   endAt,
   label,
   lineLabel,
+  primarySeries = 'bars',
   segments = [],
   startAt,
 }: Props) {
+  const barColor =
+    primarySeries === 'bars' ? 'var(--success)' : 'var(--primary)';
+  const lineColor =
+    primarySeries === 'line' ? 'var(--success)' : 'var(--primary-border)';
   const clipId = `usage-history-${useId().replaceAll(':', '')}`;
   const chartHeight = HEIGHT - PADDING_TOP - PADDING_BOTTOM;
   const chartWidth = WIDTH - PADDING_X * 2;
@@ -143,12 +153,12 @@ export default function UsageHistory({
           const y = toY(bar.value);
           return (
             <rect
-              fill={bar.partial ? 'none' : 'var(--primary)'}
+              fill={bar.partial ? 'none' : barColor}
               height={Math.max(0, baselineY - y)}
               key={bar.startAt}
               opacity={bar.partial ? 0.9 : 0.55}
               rx="1"
-              stroke={bar.partial ? 'var(--primary-border)' : 'none'}
+              stroke={bar.partial ? barColor : 'none'}
               strokeDasharray={bar.partial ? '2 2' : undefined}
               strokeWidth={bar.partial ? 1 : 0}
               width={width}
@@ -164,7 +174,7 @@ export default function UsageHistory({
               d={path}
               fill="none"
               key={path}
-              stroke="var(--primary-border)"
+              stroke={lineColor}
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth="1.4"
@@ -201,12 +211,18 @@ export default function UsageHistory({
         <span>{formatDay(startAt)}</span>
         <span className="flex items-center gap-2">
           <span className="flex items-center gap-1">
-            <span className="h-1.5 w-2.5 rounded-[1px] bg-primary/55" />
+            <span
+              className="h-1.5 w-2.5 rounded-[1px]"
+              style={{ backgroundColor: barColor, opacity: 0.55 }}
+            />
             {barLabel}
           </span>
           {lineLabel && (
             <span className="flex items-center gap-1">
-              <span className="h-px w-2.5 bg-primary-border" />
+              <span
+                className="h-px w-2.5"
+                style={{ backgroundColor: lineColor }}
+              />
               {lineLabel}
             </span>
           )}

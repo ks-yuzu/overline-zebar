@@ -74,6 +74,12 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
+- graphの系列色は、progress barと同じ`--success`を使う。
+  **1つのgraphで緑にするのは主系列だけとし**、副系列は`--primary`に落とす。
+  両方を同じ強さで塗ると、どちらを読めばよいかが伝わらない。
+  - 14D weeklyの主系列はcumulative。日次の棒は副系列とする。
+  - 単一系列のgraph (5H/7D trend、14D 5H peaks) はその系列が主系列。
+  - pace guideと「データなし」の帯は系列ではないため`--border`のまま。
 - **Claude/Codex chipの背景は、reset時点の予測使用率を左から塗る。**
   現在値はchipに数字で出ているため、背景は重複させず「このペースで
   reset前に尽きるか」を担う。popupを開かずに常時見えることが要件。

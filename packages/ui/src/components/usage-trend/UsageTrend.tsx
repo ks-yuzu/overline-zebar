@@ -80,10 +80,10 @@ export default function UsageTrend({
         >
           <defs>
             <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.45" />
+              <stop offset="0%" stopColor="var(--success)" stopOpacity="0.45" />
               <stop
                 offset="100%"
-                stopColor="var(--primary)"
+                stopColor="var(--success)"
                 stopOpacity="0.04"
               />
             </linearGradient>
@@ -120,7 +120,7 @@ export default function UsageTrend({
               <path
                 d={linePath}
                 fill="none"
-                stroke="var(--primary-border)"
+                stroke="var(--success)"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth="2"
@@ -133,7 +133,7 @@ export default function UsageTrend({
               cy={lastCoordinate.y}
               fill="var(--primary-text)"
               r="2.2"
-              stroke="var(--primary-border)"
+              stroke="var(--success)"
               strokeWidth="1.5"
             />
           )}

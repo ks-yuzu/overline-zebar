@@ -355,6 +355,7 @@ export default function App() {
             endAt={historyRange.endAt}
             label="14D weekly"
             lineLabel="cumulative"
+            primarySeries="line"
             segments={dailyUsage.segments}
             startAt={historyRange.startAt}
           />
