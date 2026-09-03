@@ -45,7 +45,8 @@ live取得とwidget表示を分離する理由は次のとおりです。
 - `widgets/main/src/components/codexUsage/`
   - Codex JSONの検証、取得、表示を担当する。
 - `widgets/ai-usage-details/`
-  - クリックで開くClaude詳細、5H/7Dの現在値と履歴グラフを表示する。
+  - クリックで開くClaude詳細。左を5H、右を7Dとする3段構成で、
+    現在値・window内の推移・14日の推移を並べる。
   - CPU/RAM詳細と同様、main bar直下へ配置し、focusを失うと閉じる。
 - `widgets/codex-usage-details/`
   - クリックで開くCodex詳細、rate-limit windowの現在値と履歴グラフを表示する。
@@ -75,12 +76,41 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - usageの色は既存の`systemStatThresholds`を使う。
 - リセット表示に`↻`記号は付けない。
 - Claude/Codex chipはクリックで各専用詳細widgetを開く。native tooltipは使用しない。
+- **詳細widgetのサイズは`zpack.json`のpresetではなく、`startWidget`へ渡すplacementが
+  決める。** 各chipの`calculateWidgetPlacementFromRight`に渡す`height`が実際の高さになる。
+  presetだけを変えても反映されないため、両方を同じ値に保つ。
 - 詳細widgetは各windowの使用率、リセット、履歴、最終更新、freshness状態を表示する。
 - graphの横軸は履歴量にかかわらず、reset時刻を終端として各window時間幅に固定する。
   Claudeは5時間・7日間、Codexは`windowDurationMins`の時間幅を使う。
   履歴が0件でも時間軸を表示し、1件ならその時刻の点だけを表示する。
 - window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した
   場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
+- Claude詳細は3段構成とし、**全段で左を5H、右を7Dに固定する。**
+  現在値、window内の推移、14日の推移が同じ列に並び、列が期間を表す。
+  - この配置のため幅は920px、高さは580pxとする。
+  - 3段目は保持履歴14日分を横軸とし、左に5H window単位、右に日単位の推移を置く。
+    日や5H windowをまたぐ傾向は、window内のgraphからは読めない。
+- 右列 (7D) の14日graph:
+  - 棒は各日に消費した週クォータの割合、線は週次使用率の累積で、reset位置で区切る。
+  - 累積はwindow内で単調増加するため、棒は線がその日に上がった高さと一致する。
+    同一単位となり、0-100%の1軸へ二重軸なしで重ねられる。
+  - 軸は使用量に追従させず0-100%へ固定する。追従させると使用が増えた時に
+    軸が伸び、日ごとの比較が壊れるため。
+  - sampleが1件もない日は0%の棒ではなく「データなし」として区別する。
+    cron停止と不使用が同じ見え方になるため。
+  - 保持期間の先頭のwindowは切り詰められているため、その最初のsampleは
+    消費ではなく基準値として扱う。
+- 左列 (5H) の14日graph。5Hの上限は作業を実際に止めるため、100%へ近づいた
+  頻度を週クォータの消費とは別に見られるようにする。
+  - 1本が1つの5H windowで、高さはそのwindowで到達した最大値。
+    生の5H系列は14日の横軸では周期より粗くresampleされ、エイリアシングになる。
+  - 値は最後のsampleではなくwindow内の最大値を取る。resetをまたいだsampleが
+    新しい値と古いresets_atの組で入っても、そのwindowの山を消さないため。
+  - sampleが1件もないwindowは「データなし」の帯にする。cronが取り逃したwindowと
+    使わなかったwindowは、この面では区別が要る。
+  - resetがまだ来ていないwindowは破線の枠だけで描き、最大値の表示からも除く。
+- `UsageTrend`のviewBox幅は`viewWidth`で渡す。svgは縦横比を保つため、
+  card幅に対して比が合わないと、plotだけが中央へ寄って軸ラベルとずれる。
 
 リセット表示:
 
@@ -467,6 +497,8 @@ rebase後は、`App.tsx`内の表示順が
 ```sh
 corepack pnpm exec eslint \
   packages/ui/src/components/usage-trend \
+  packages/ui/src/components/usage-history \
+  packages/ui/src/utils/usageSeries.ts \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage

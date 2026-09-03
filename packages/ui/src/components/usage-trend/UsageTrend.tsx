@@ -10,9 +10,14 @@ type Props = {
   label: string;
   points: TrendPoint[];
   startAt: number;
+  /**
+   * viewBox width. The svg keeps its aspect ratio, so a card much wider than
+   * this letterboxes the plot away from the axis labels beneath it.
+   */
+  viewWidth?: number;
 };
 
-const WIDTH = 180;
+const DEFAULT_WIDTH = 180;
 const HEIGHT = 72;
 const PADDING_X = 8;
 const PADDING_Y = 7;
@@ -38,7 +43,14 @@ function formatSampleTime(epochSeconds: number) {
   }).format(new Date(epochSeconds * 1000));
 }
 
-export default function UsageTrend({ endAt, label, points, startAt }: Props) {
+export default function UsageTrend({
+  endAt,
+  label,
+  points,
+  startAt,
+  viewWidth = DEFAULT_WIDTH,
+}: Props) {
+  const WIDTH = viewWidth;
   const gradientId = `usage-${useId().replaceAll(':', '')}`;
   const sampled = downsample(points);
   const timeRange = Math.max(1, endAt - startAt);

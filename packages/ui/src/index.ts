@@ -9,6 +9,14 @@ export { clampPercentage } from './utils/clampPercentage';
 export { getThresholdColor } from './utils/thresholds';
 export { default as UsageTrend } from './components/usage-trend/UsageTrend';
 export type { TrendPoint } from './components/usage-trend/UsageTrend';
+export { default as UsageHistory } from './components/usage-history/UsageHistory';
+export type { UsageHistorySegment } from './components/usage-history/UsageHistory';
+export { buildDailyUsage, buildWindowPeaks } from './utils/usageSeries';
+export type {
+  DailyUsage,
+  UsageBar,
+  UsageHistorySample,
+} from './utils/usageSeries';
 export {
   Select,
   SelectTrigger,

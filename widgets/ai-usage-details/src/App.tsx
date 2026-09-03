@@ -3,11 +3,14 @@ import type { Threshold } from '@overline-zebar/config';
 import {
   Card,
   Progress,
+  UsageHistory,
   UsageTrend,
+  buildDailyUsage,
+  buildWindowPeaks,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
-import type { TrendPoint } from '@overline-zebar/ui';
+import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
 import { Bot, Clock3, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
@@ -19,6 +22,7 @@ import type {
 
 const SESSION_WINDOW_SECONDS = 5 * 60 * 60;
 const WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+const HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 
 function formatRemaining(resetsAt: string | undefined, now: number) {
   if (!resetsAt) return 'Unknown';
@@ -91,6 +95,32 @@ function getTrendRange(
   const parsedResetAt = resetAt ? Date.parse(resetAt) / 1000 : Number.NaN;
   const endAt = Number.isFinite(parsedResetAt) ? parsedResetAt : now / 1000;
   return { startAt: endAt - windowSeconds, endAt };
+}
+
+function selectSessionSamples(
+  history: ClaudeUsageHistorySample[]
+): UsageHistorySample[] {
+  return history
+    .slice()
+    .sort((a, b) => a.recorded_at - b.recorded_at)
+    .map((sample) => ({
+      recordedAt: sample.recorded_at,
+      value: sample.session_used_percent,
+      windowKey: sample.session_resets_at,
+    }));
+}
+
+function selectWeekSamples(
+  history: ClaudeUsageHistorySample[]
+): UsageHistorySample[] {
+  return history
+    .slice()
+    .sort((a, b) => a.recorded_at - b.recorded_at)
+    .map((sample) => ({
+      recordedAt: sample.recorded_at,
+      value: sample.week_used_percent,
+      windowKey: sample.week_resets_at,
+    }));
 }
 
 function UsageCard({
@@ -214,10 +244,23 @@ export default function App() {
     weekRange.startAt,
     weekRange.endAt
   );
+  const historyRange = {
+    startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
+    endAt: now / 1000,
+  };
+  const dailyUsage = buildDailyUsage(
+    selectWeekSamples(data.history),
+    historyRange
+  );
+  const sessionPeaks = buildWindowPeaks(selectSessionSamples(data.history), {
+    ...historyRange,
+    now: now / 1000,
+    windowSeconds: SESSION_WINDOW_SECONDS,
+  });
 
   return (
-    <div className="flex h-screen flex-col gap-3 rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
-      <header className="flex items-center justify-between">
+    <div className="flex h-screen flex-col gap-3 overflow-y-auto rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
+      <header className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-2">
           <Bot className="h-4 w-4 text-icon" />
           <div>
@@ -243,7 +286,7 @@ export default function App() {
         </div>
       </header>
 
-      <section className="grid grid-cols-2 gap-2">
+      <section className="grid shrink-0 grid-cols-2 gap-2">
         <UsageCard
           label="5H session"
           period={data.current_session}
@@ -258,8 +301,8 @@ export default function App() {
         />
       </section>
 
-      <section className="grid min-h-0 flex-1 grid-cols-2 gap-2">
-        <Card className="min-h-0 p-2.5">
+      <section className="grid shrink-0 grid-cols-2 gap-2">
+        <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">5H trend</p>
             <p className="text-[10px] text-text-muted">Current session</p>
@@ -269,9 +312,10 @@ export default function App() {
             label="5H"
             points={sessionHistory}
             startAt={sessionRange.startAt}
+            viewWidth={420}
           />
         </Card>
-        <Card className="min-h-0 p-2.5">
+        <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">7D trend</p>
             <p className="text-[10px] text-text-muted">Current week</p>
@@ -281,11 +325,43 @@ export default function App() {
             label="7D"
             points={weekHistory}
             startAt={weekRange.startAt}
+            viewWidth={420}
           />
         </Card>
       </section>
 
-      <footer className="flex items-center justify-between text-[10px] text-text-muted">
+      <section className="grid shrink-0 grid-cols-2 gap-2">
+        <Card className="shrink-0 p-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-text-muted">14D 5H peaks</p>
+            <p className="text-[10px] text-text-muted">Per session window</p>
+          </div>
+          <UsageHistory
+            barLabel="session peak"
+            bars={sessionPeaks}
+            endAt={historyRange.endAt}
+            label="14D 5H"
+            startAt={historyRange.startAt}
+          />
+        </Card>
+        <Card className="shrink-0 p-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-text-muted">14D weekly</p>
+            <p className="text-[10px] text-text-muted">Per day</p>
+          </div>
+          <UsageHistory
+            barLabel="daily"
+            bars={dailyUsage.bars}
+            endAt={historyRange.endAt}
+            label="14D weekly"
+            lineLabel="cumulative"
+            segments={dailyUsage.segments}
+            startAt={historyRange.startAt}
+          />
+        </Card>
+      </section>
+
+      <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
         <span>{data.history.length} retained samples · 14 days</span>
       </footer>

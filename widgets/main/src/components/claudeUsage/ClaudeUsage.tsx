@@ -77,8 +77,10 @@ export default function ClaudeUsage() {
       className="flex items-center gap-2.5 h-full px-3"
       onClick={async () => {
         const placement = await calculateWidgetPlacementFromRight(chipRef, {
-          width: 460,
-          height: 380,
+          width: 920,
+          // Keep in sync with the ai-usage-details preset in zpack.json: the
+          // size passed here overrides it.
+          height: 580,
         });
         await zebar.startWidget('ai-usage-details', placement, {});
       }}
