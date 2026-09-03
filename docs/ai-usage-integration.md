@@ -158,6 +158,9 @@ Cache:
 cache directoryはmode `700`、JSONはmode `600`にする。認証tokenそのものはJSONへ
 保存しない。
 
+**JSONは整形しない。** widgetがこのfileを60秒ごとに読み直すため、indentだけで
+Claudeは約3割、Codexは約4割を占めていた。
+
 Claude UIが必要とする主なfield:
 
 - `generated_at`

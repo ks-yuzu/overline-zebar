@@ -353,7 +353,9 @@ my %output = (
 );
 $output{last_known_age} = $age if defined $age;
 
-print JSON::PP->new->canonical->pretty->encode(\%output);
+# Not pretty-printed: the widget re-reads this file every 60s, and indentation
+# was a third of its size.
+print JSON::PP->new->canonical->encode(\%output), "\n";
 PERL
 
 then
