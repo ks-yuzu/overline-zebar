@@ -28,6 +28,10 @@ esac
 
 cache_dir="${CODEX_USAGE_CACHE_DIR:-$HOME/.cache/codex-usage-json}"
 cache_file="$cache_dir/usage.json"
+# Append-only archive of raw samples. The cache prunes to 14 days on every
+# write, so without this the older history is gone for good and no later
+# rollup can be computed for it. The widget never reads this file.
+samples_file="$cache_dir/samples.ndjson"
 lock_file="$cache_dir/update.lock"
 mkdir -p -- "$cache_dir"
 chmod 700 -- "$cache_dir"
@@ -108,6 +112,18 @@ fi
 
 codex_bin_dir="${codex_bin%/*}"
 export PATH="$codex_bin_dir:$PATH"
+
+archive_sample() {
+	# Entries repeat a recorded_at when a run lands within 60s of the previous
+	# one, the same case the cache collapses. Readers dedupe on recorded_at.
+	local existed=0
+	if [[ -e "$samples_file" ]]; then
+		existed=1
+	fi
+	jq -c '.history[-1]' -- "$result_file" >>"$samples_file" 2>/dev/null || return 0
+	(( existed )) || chmod 600 -- "$samples_file"
+	return 0
+}
 
 result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
 error_file="$(mktemp "${TMPDIR:-/tmp}/codex-usage.XXXXXX")"
@@ -246,6 +262,8 @@ refresh_usage() {
 	' >"$result_file" <<<"$response_line"; then
 		return 1
 	fi
+
+	archive_sample
 
 	stop_server
 	return 0

@@ -161,6 +161,19 @@ cache directoryはmode `700`、JSONはmode `600`にする。認証tokenそのも
 **JSONは整形しない。** widgetがこのfileを60秒ごとに読み直すため、indentだけで
 Claudeは約3割、Codexは約4割を占めていた。
 
+生sampleの追記先 (widgetは読まない):
+
+| Provider | Path                                             |
+| -------- | ------------------------------------------------ |
+| Claude   | `$HOME/.cache/claude-usage-json/samples.ndjson`  |
+| Codex    | `$HOME/.cache/codex-usage-json/samples.ndjson`   |
+
+**cacheの`history`は書き込みのたびに14日で切り詰められ、それより古い生データは
+恒久的に失われる。** 後から集計方法を変えても遡れないため、sampleを1行1件で
+別fileへ追記しておく。1日288行、年あたり15-20MB程度で、rotationは行わない。
+60秒以内の再実行ではcacheと同じく`recorded_at`が重複しうるので、読む側で
+除去する。
+
 Claude UIが必要とする主なfield:
 
 - `generated_at`

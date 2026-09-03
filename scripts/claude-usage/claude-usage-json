@@ -34,6 +34,10 @@ esac
 
 cache_dir="${CLAUDE_USAGE_CACHE_DIR:-$HOME/.cache/claude-usage-json}"
 cache_file="$cache_dir/usage.json"
+# Append-only archive of raw samples. The cache prunes to 14 days on every
+# write, so without this the older history is gone for good and no later
+# rollup can be computed for it. The widget never reads this file.
+samples_file="$cache_dir/samples.ndjson"
 lock_file="$cache_dir/update.lock"
 mkdir -p -- "$cache_dir"
 chmod 700 -- "$cache_dir"
@@ -196,11 +200,11 @@ if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
 	install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH"
 fi
 
-if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal - "$capture_file" "$cache_file" >"$result_file" <<'PERL'
+if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal - "$capture_file" "$cache_file" "$samples_file" >"$result_file" <<'PERL'
 use strict;
 use warnings;
 
-my ($capture_file, $cache_file) = @ARGV;
+my ($capture_file, $cache_file, $samples_file) = @ARGV;
 open my $capture, '<:raw', $capture_file
 	or die "cannot read capture file: $!\n";
 local $/;
@@ -292,6 +296,19 @@ sub usage_object {
 	return \%result;
 }
 
+sub archive_sample {
+	my ($path, $sample) = @_;
+	return unless defined $path && length $path;
+
+	# A failed archive write must not cost the caller its usage reading.
+	my $existed = -e $path;
+	open my $log, '>>:raw', $path or return;
+	print {$log} JSON::PP->new->canonical->encode($sample), "\n";
+	close $log;
+	chmod 0600, $path unless $existed;
+	return;
+}
+
 my $compact_text = $text;
 $compact_text =~ s/\s+//g;
 my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
@@ -340,6 +357,7 @@ if ($refresh_status ne 'last_known') {
 	}
 	else {
 		push @history, \%sample;
+		archive_sample($samples_file, \%sample);
 	}
 }
 
