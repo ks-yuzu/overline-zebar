@@ -116,12 +116,13 @@ export PATH="$codex_bin_dir:$PATH"
 archive_sample() {
 	# Entries repeat a recorded_at when a run lands within 60s of the previous
 	# one, the same case the cache collapses. Readers dedupe on recorded_at.
-	local existed=0
-	if [[ -e "$samples_file" ]]; then
-		existed=1
+	# Create it before the redirect does, so a failing jq cannot leave the file
+	# behind at the default umask with no later run willing to fix the mode.
+	if [[ ! -e "$samples_file" ]]; then
+		: >"$samples_file" || return 0
+		chmod 600 -- "$samples_file"
 	fi
 	jq -c '.history[-1]' -- "$result_file" >>"$samples_file" 2>/dev/null || return 0
-	(( existed )) || chmod 600 -- "$samples_file"
 	return 0
 }
 

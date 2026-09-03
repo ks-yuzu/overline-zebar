@@ -365,8 +365,11 @@ if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 	}
 	else {
 		push @history, \%sample;
-		archive_sample($samples_file, \%sample);
 	}
+
+	# Archived even when it replaced the previous cache entry: dropping it
+	# would lose the newer reading for good. Readers dedupe on recorded_at.
+	archive_sample($samples_file, \%sample);
 }
 
 my %output = (
