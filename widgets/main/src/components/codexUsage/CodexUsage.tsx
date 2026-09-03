@@ -4,6 +4,8 @@ import { Code2 } from 'lucide-react';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
+import { worstProjection } from '../../utils/projectWindowUsage';
+import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
 import { getUsageFreshness } from '../aiUsage/freshness';
 import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
@@ -65,13 +67,25 @@ export default function CodexUsage() {
   }
 
   const freshness = getUsageFreshness(data.generated_at, now);
+  const projected = worstProjection(
+    windows.map((window) => ({
+      usedPercent: window.usedPercent,
+      resetsAt: window.resetsAt * 1000,
+      windowSeconds: window.windowDurationMins * 60,
+    })),
+    now
+  );
 
   return (
     <Chip
       ref={chipRef}
-      aria-label="Open Codex usage details"
+      aria-label={
+        projected === null
+          ? 'Open Codex usage details'
+          : `Open Codex usage details. Projected ${Math.round(projected)}% by reset`
+      }
       as="button"
-      className="flex items-center gap-2.5 h-full px-3"
+      className="relative isolate flex items-center gap-2.5 h-full overflow-hidden px-3"
       onClick={async () => {
         const placement = await calculateWidgetPlacementFromRight(chipRef, {
           width: 460,
@@ -80,6 +94,7 @@ export default function CodexUsage() {
         await zebar.startWidget('codex-usage-details', placement, {});
       }}
     >
+      <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
       <Code2 aria-label="Codex usage" className="h-3.5 w-3.5 text-icon" />
       {windows.map((window) => (
         <div

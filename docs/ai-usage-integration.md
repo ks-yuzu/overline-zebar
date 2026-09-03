@@ -74,6 +74,17 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
+- **Claude/Codex chipの背景は、reset時点の予測使用率を左から塗る。**
+  現在値はchipに数字で出ているため、背景は重複させず「このペースで
+  reset前に尽きるか」を担う。popupを開かずに常時見えることが要件。
+  - 予測 = 現在の使用率 ÷ windowの経過割合。詳細viewのpace guideと同じ
+    線形の仮定を、1つの数にしたもの。
+  - 5Hと7D (Codexは各window) のうち**予測が最も高いものだけ**を塗る。
+    背景は信号を1つしか持てず、作業を止めるのは先に尽きるwindowであるため。
+  - 経過が10%未満のwindowは投影しない。除数が小さく、reset直後に
+    値が暴れるため。塗りは出さない。
+  - 塗りの色は予測値に`systemStatThresholds`を当てる。100%を超える予測は
+    満タン + danger色になる。
 - リセット表示に`↻`記号は付けない。
 - Claude/Codex chipはクリックで各専用詳細widgetを開く。native tooltipは使用しない。
 - **詳細widgetのサイズは`zpack.json`のpresetではなく、`startWidget`へ渡すplacementが

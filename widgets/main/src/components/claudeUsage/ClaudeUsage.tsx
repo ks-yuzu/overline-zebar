@@ -4,12 +4,17 @@ import { Bot } from 'lucide-react';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
+import { worstProjection } from '../../utils/projectWindowUsage';
+import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
 import { getUsageFreshness } from '../aiUsage/freshness';
 import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
 import Stat from '../stat/Stat';
 import { useClaudeUsage } from './useClaudeUsage';
 import type { ClaudeUsagePeriod } from './useClaudeUsage';
+
+const SESSION_WINDOW_SECONDS = 5 * 60 * 60;
+const WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 
 function formatReset(period: ClaudeUsagePeriod, includeDate = false) {
   if (!period.resets_at) return period.resets_at_display;
@@ -68,13 +73,35 @@ export default function ClaudeUsage() {
     clampPercentage(data.current_session.used_percent)
   );
   const weekUsage = Math.round(clampPercentage(data.current_week.used_percent));
+  const weekResetsAt = data.current_week.resets_at
+    ? new Date(data.current_week.resets_at).getTime()
+    : NaN;
+  const projected = worstProjection(
+    [
+      {
+        usedPercent: data.current_session.used_percent,
+        resetsAt: sessionResetsAt,
+        windowSeconds: SESSION_WINDOW_SECONDS,
+      },
+      {
+        usedPercent: data.current_week.used_percent,
+        resetsAt: weekResetsAt,
+        windowSeconds: WEEK_WINDOW_SECONDS,
+      },
+    ],
+    now
+  );
 
   return (
     <Chip
       ref={chipRef}
-      aria-label="Open Claude usage details"
+      aria-label={
+        projected === null
+          ? 'Open Claude usage details'
+          : `Open Claude usage details. Projected ${Math.round(projected)}% by reset`
+      }
       as="button"
-      className="flex items-center gap-2.5 h-full px-3"
+      className="relative isolate flex items-center gap-2.5 h-full overflow-hidden px-3"
       onClick={async () => {
         const placement = await calculateWidgetPlacementFromRight(chipRef, {
           width: 920,
@@ -85,6 +112,7 @@ export default function ClaudeUsage() {
         await zebar.startWidget('ai-usage-details', placement, {});
       }}
     >
+      <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
       <Bot aria-label="Claude usage" className="h-3.5 w-3.5 text-icon" />
       <Stat
         Icon={<p className="font-medium text-icon">5H</p>}
