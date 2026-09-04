@@ -48,6 +48,16 @@ function isUsageWindow(value: unknown): value is CodexUsageWindow {
   );
 }
 
+/**
+ * A window Codex does not report is null in the payload - and absent from it
+ * when the key is missing, which the helper's jq validator also treats as
+ * null. Rejecting the payload the helper considered valid would leave the chip
+ * at `--` on every poll with the reason only in devtools.
+ */
+function isReportedWindow(value: unknown): boolean {
+  return value === null || value === undefined || isUsageWindow(value);
+}
+
 function parseCodexUsage(value: string): CodexUsageData {
   const parsed = JSON.parse(value) as Partial<CodexUsageData>;
   const limits = parsed.rate_limits;
@@ -56,8 +66,8 @@ function parseCodexUsage(value: string): CodexUsageData {
     typeof parsed.generated_at !== 'string' ||
     !limits ||
     typeof limits !== 'object' ||
-    (limits.primary !== null && !isUsageWindow(limits.primary)) ||
-    (limits.secondary !== null && !isUsageWindow(limits.secondary))
+    !isReportedWindow(limits.primary) ||
+    !isReportedWindow(limits.secondary)
   ) {
     throw new Error('Codex usage command returned an unexpected JSON shape.');
   }

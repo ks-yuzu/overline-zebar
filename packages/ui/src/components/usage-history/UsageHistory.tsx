@@ -211,7 +211,10 @@ export default function UsageHistory({
             }
             y={Math.max(PADDING_TOP + 7, toY(peakBar.value) - 3)}
           >
-            {Math.round(peakBar.value)}%
+            {/* Clamped like the bar it labels: a percentage of a quota cannot
+                exceed 100, and a full-height bar labelled more than that says
+                the two disagree rather than that the value is remarkable. */}
+            {Math.round(Math.min(100, Math.max(0, peakBar.value)))}%
           </text>
         )}
 

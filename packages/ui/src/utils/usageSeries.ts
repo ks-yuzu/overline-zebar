@@ -197,6 +197,37 @@ function missingSpans(
 }
 
 /**
+ * The parts of `span` no window bar covers. A window bar spans the whole window
+ * even when retention or a sampling gap left samples for only part of it, so a
+ * no-data span can otherwise be drawn underneath a bar and mark as missing a
+ * stretch the bar is already accounting for.
+ */
+function withoutCovered(
+  span: { startAt: number; endAt: number },
+  covered: { startAt: number; endAt: number }[]
+) {
+  let pieces = [span];
+  for (const block of covered) {
+    pieces = pieces.flatMap((piece) => {
+      if (block.endAt <= piece.startAt || block.startAt >= piece.endAt) {
+        return [piece];
+      }
+      return [
+        ...(piece.startAt < block.startAt
+          ? [{ startAt: piece.startAt, endAt: block.startAt }]
+          : []),
+        ...(piece.endAt > block.endAt
+          ? [{ startAt: block.endAt, endAt: piece.endAt }]
+          : []),
+      ];
+    });
+  }
+  return pieces.filter(
+    (piece) => piece.endAt - piece.startAt > MISSING_SAMPLES_SECONDS
+  );
+}
+
+/**
  * Reduces each quota window to a single bar spanning the window, valued at the
  * highest usage it reached. Plotting the raw series instead would alias: a 14
  * day axis resamples a five hour sawtooth far below its period.
@@ -240,11 +271,13 @@ export function buildWindowPeaks(
 
   return [
     ...peaks,
-    ...missingSpans(withinRange, range).map((span) => ({
-      ...span,
-      value: 0,
-      hasSamples: false,
-    })),
+    ...missingSpans(withinRange, range)
+      .flatMap((span) => withoutCovered(span, peaks))
+      .map((span) => ({
+        ...span,
+        value: 0,
+        hasSamples: false,
+      })),
   ].sort((a, b) => a.startAt - b.startAt);
 }
 

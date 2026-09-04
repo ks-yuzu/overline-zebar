@@ -91,30 +91,54 @@ function windowEndFor(resetsAt: string | undefined) {
   return Number.isNaN(parsed) ? undefined : parsed / 1000;
 }
 
-function selectSessionSamples(
-  history: ClaudeUsageHistorySample[]
+/**
+ * A sample whose reset time is missing cannot be placed in a window, and
+ * consumption is derived per window: without it the reading joins the current
+ * window as a fall to 0 and everything before it is counted a second time as
+ * the line climbs back. The helper refuses to record such a reading, but the
+ * cache outlives any one version of it - this is what a cache written before
+ * that rule looks like - so the chart drops them rather than trusting the file.
+ */
+function selectPeriodSamples(
+  history: ClaudeUsageHistorySample[],
+  valueOf: (sample: ClaudeUsageHistorySample) => number,
+  resetOf: (sample: ClaudeUsageHistorySample) => string | undefined
 ): UsageHistorySample[] {
   return history
     .slice()
     .sort((a, b) => a.recorded_at - b.recorded_at)
-    .map((sample) => ({
-      recordedAt: sample.recorded_at,
-      value: sample.session_used_percent,
-      windowEndsAt: windowEndFor(sample.session_resets_at),
-    }));
+    .flatMap((sample) => {
+      const windowEndsAt = windowEndFor(resetOf(sample));
+      return windowEndsAt === undefined
+        ? []
+        : [
+            {
+              recordedAt: sample.recorded_at,
+              value: valueOf(sample),
+              windowEndsAt,
+            },
+          ];
+    });
+}
+
+function selectSessionSamples(
+  history: ClaudeUsageHistorySample[]
+): UsageHistorySample[] {
+  return selectPeriodSamples(
+    history,
+    (sample) => sample.session_used_percent,
+    (sample) => sample.session_resets_at
+  );
 }
 
 function selectWeekSamples(
   history: ClaudeUsageHistorySample[]
 ): UsageHistorySample[] {
-  return history
-    .slice()
-    .sort((a, b) => a.recorded_at - b.recorded_at)
-    .map((sample) => ({
-      recordedAt: sample.recorded_at,
-      value: sample.week_used_percent,
-      windowEndsAt: windowEndFor(sample.week_resets_at),
-    }));
+  return selectPeriodSamples(
+    history,
+    (sample) => sample.week_used_percent,
+    (sample) => sample.week_resets_at
+  );
 }
 
 function UsageCard({

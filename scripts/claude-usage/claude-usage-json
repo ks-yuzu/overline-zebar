@@ -411,12 +411,18 @@ if (-s $cache_file) {
 
 	if (ref($previous) eq 'HASH' && ref($previous->{history}) eq 'ARRAY') {
 		my $cutoff = $generated_epoch - 14 * 24 * 60 * 60;
+		# The same rule the write below applies: a reading that lost a reset
+		# time was caught mid-draw and its percentages cannot be trusted. Read
+		# on every write, so this also purges samples a helper without that
+		# rule left behind - they would otherwise poison the graphs for 14 days.
 		@history = grep {
 			ref($_) eq 'HASH'
 				&& looks_like_number($_->{recorded_at})
 				&& $_->{recorded_at} >= $cutoff
 				&& looks_like_number($_->{session_used_percent})
 				&& looks_like_number($_->{week_used_percent})
+				&& defined $_->{session_resets_at}
+				&& defined $_->{week_resets_at}
 		} @{$previous->{history}};
 	}
 }

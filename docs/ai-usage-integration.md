@@ -265,6 +265,17 @@ reset時刻が取れないのは画面を描画途中で拾った時で、その
 (観測された1件は、前後が8%の週次を0%と報告していた)。現在値の公開は続ける。
 次回の取得で自然に直る一方、historyに入ると長期graphの消費量が二重計上になる。
 
+**同じ規則を14日retentionのfilterにも適用する。** 書き込み時に弾くだけでは、
+その規則が無かった頃のhelperが残したsampleが14日間cacheに居座る。実際に、
+`week_resets_at`を持たないsampleが17件残っていた状態で週次graphを描くと、
+ある日の消費が449% (14日合計547) になった。該当sampleを除くと40% (合計101)
+である。retention側でも弾くことで、次回の書き込みで消える。
+
+**widget側も、window識別子を持たないsampleをgraphから落とす。** cacheはhelperの
+どのversionよりも長生きするため、fileの内容を信用しない。消費量はwindow単位で
+求めるので、reset時刻の無いsampleは現在windowへ0%への落下として混ざり、その後の
+上昇で以前の分がもう一度計上されてしまう。
+
 **reset時刻は「現在時刻に最も近い候補」として解釈する。** Claudeはsessionのreset
 を時刻だけ (`5:50am`)、weekのresetを月日だけ (`Sep 7, 9am`) で表示し、どちらも
 日付や年を持たない。候補 (前日・当日・翌日 / 前年・当年・翌年) のうちnowに最も
@@ -328,7 +339,9 @@ Codex UIが必要とする主なfield:
 - 各windowの`usedPercent`、`windowDurationMins`、`resetsAt`
 - `history`
   - 5分ごとに、その時点で報告された全windowの使用率、時間幅、reset時刻を保持する。
-  - 14日分を保持し、現在windowと時間幅・reset時刻が一致するsampleだけを描画する。
+  - 14日分を保持し、描画時は**時間幅だけで**選ぶ (reset時刻は見ない)。retentionが
+    保持する全windowを残すためで、reset時刻まで一致させると進行中のwindowしか
+    残らない。
 
 ## Widgetが実行するcommand
 
