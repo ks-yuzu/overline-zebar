@@ -4,6 +4,12 @@ export function getThresholdColor(
   value: number,
   thresholds: Threshold[]
 ): LabelColor {
+  // The type says this is an array, but the value reaches here from config: a
+  // config that fails validation is merged into the defaults and used as-is,
+  // and deepMerge replaces an array wholesale when the stored value is not one.
+  // A string here would throw on .find and take down every caller's render.
+  if (!Array.isArray(thresholds)) return '--text';
+
   const range = thresholds.find(
     (threshold) => value >= threshold.min && value <= threshold.max
   );
