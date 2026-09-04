@@ -26,6 +26,9 @@ export function projectWindowUsage(
 
   const windowMs = windowSeconds * 1000;
   const elapsedFraction = (windowMs - (resetsAt - now)) / windowMs;
+  // A window with no duration reported divides by zero, and NaN would pass
+  // both bounds below to be announced as "Projected NaN%".
+  if (!Number.isFinite(elapsedFraction)) return null;
   if (elapsedFraction >= 1) return usedPercent;
   if (elapsedFraction < MIN_ELAPSED_FRACTION) return null;
 
