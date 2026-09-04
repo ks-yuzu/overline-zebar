@@ -382,13 +382,51 @@ install -Dm755 scripts/codex-usage/codex-usage-json \
 
 ### 2. Widgetをbuildする
 
+**先に`packages/ui`をbuildする。** 各widgetは`packages/ui/dist/index.js`を
+解決するため、共有componentやutilを追加した状態でwidgetだけbuildすると
+`"selectCurrentWindow" is not exported by "../../packages/ui/dist/index.js"`
+のようなrollupのexportエラーで落ちる。
+
 main barとクリック時の各詳細viewは別widgetなので、3つともbuildする。
 
 ```sh
-corepack pnpm --filter @overline-zebar/main build
-corepack pnpm --filter @overline-zebar/ai-usage-details build
-corepack pnpm --filter @overline-zebar/codex-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/ui build
+CI=1 corepack pnpm --filter @overline-zebar/main build
+CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```
+
+`CI=1`はWSLでは必須である。各widgetのvite configはbuild後に`postbuild` hookで
+`taskkill /IM zebar.exe`と`start zebar.exe`を実行する。WSLにはどちらのcommandも
+無いため`start`の失敗が`closeBundle`から例外として上がり、**widgetによっては
+distが書かれる前にbuildが中断する**。`CI`が設定されているとこのhookはskipされる
+(Zebarの再起動は手順4で行う)。
+
+`ENOENT: pnpm install` / `spawnSync pnpm ENOENT`でbuildが始まる前に落ちる場合は、
+pnpmがscript実行前のdeps checkで`node_modules`をlockfileとout of syncと判定し、
+自動で`pnpm install`を実行しようとしている。このとき起動するのは`pnpm`という
+**bareなcommand**なので、corepack経由でしかpnpmを持たない環境では解決できず
+ENOENTになる。`pnpm`をPATHへ通してある環境ではこの症状は出ない。
+
+判定理由は`--config.verify-deps-before-run=warn`で確認できる。warnではcheckは
+警告だけになりscriptはそのまま走るため、切り分けと回避を兼ねられる。
+
+```sh
+CI=1 corepack pnpm --config.verify-deps-before-run=warn \
+  --filter @overline-zebar/ui build
+# [WARN] Your node_modules are out of sync with your lockfile. ...
+```
+
+out of syncの理由が`node_modules`の作られ方 (pnpmのversionやvirtual storeの設定の
+変化) にある場合、`corepack pnpm install`は「Already up to date」を返すだけで
+解消しない。deps checkを外して進めるなら
+`--config.verify-deps-before-run=false`を付ける。
+
+なお`corepack pnpm install`を実行すると、pnpm 11は`esbuild`のbuild script未承認を
+`ERR_PNPM_IGNORED_BUILDS`で報告し、**`pnpm-workspace.yaml`へ`allowBuilds`の
+placeholder (`esbuild: set this to true or false`) を書き込む。** 値を埋めるまで
+installは非0で終わる。`esbuild: false`でもwidgetのbuildは通る (viteはplatform別
+packageのbinaryを使う)。placeholderを残したままcommitしないよう注意する。
 
 ### 3. Zebarの実行packへ同期する
 
@@ -398,16 +436,22 @@ corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```sh
 ZEBAR_PACK_DIR="/mnt/c/Users/<windows-user>/.glzr/zebar/<pack>@<version>"
 
-install -d "$ZEBAR_PACK_DIR/widgets/main/dist"
-install -d "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist"
-install -d "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist"
-cp -a widgets/main/dist/. "$ZEBAR_PACK_DIR/widgets/main/dist/"
-cp -a widgets/ai-usage-details/dist/. \
-  "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist/"
-cp -a widgets/codex-usage-details/dist/. \
-  "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist/"
+for w in main ai-usage-details codex-usage-details; do
+  rsync -rt --delete --no-perms --no-owner --no-group \
+    "widgets/$w/dist/" "$ZEBAR_PACK_DIR/widgets/$w/dist/"
+done
 install -m644 zpack.json "$ZEBAR_PACK_DIR/zpack.json"
 ```
+
+`dist`はすべて生成物なので`--delete`で同期する。asset名はcontent hashを含むため、
+上書きコピーだけでは古いhashのfileがpack側へ残り続ける。`-rt`と
+`--no-perms --no-owner --no-group`は、NTFS (drvfs) 側でpermissionやownerを
+再現できないことによる失敗を避けるためである。
+
+**`cp -a`で同期する場合は`cp`のaliasに注意する。** shellが`cp -i`をaliasして
+いると、既存fileごとに確認待ちになる。非interactiveな実行では応答が無いまま
+全fileがskipされ、しかも`cp`は終了code 0を返すため、`set -e`でも成功したように
+見える。この経路を使うなら`command cp -a`のようにaliasを外す。
 
 同期後は、少なくとも各entry pointがbuild元と一致することを確認する。
 次の`cmp`がすべて終了code 0なら、Zebarが次回読む`index.html`は最新である。
@@ -426,8 +470,17 @@ cmp widgets/codex-usage-details/dist/index.html \
 
 ### 4. Zebarを再起動して確認する
 
-Zebarのtray menuから終了して再起動する。main barのClaude/Codex chipをクリックし、
-次を確認する。
+Zebarのtray menuから終了して再起動する。WSLから行う場合は次のとおり。exe pathは
+自分の環境のものへ読み替える (`(Get-Process zebar).Path`で確認できる)。
+
+```sh
+powershell.exe -NoProfile -Command \
+  "Stop-Process -Name zebar -Force; Start-Sleep -Seconds 2; \
+   Start-Process 'C:\Program Files\glzr.io\Zebar\zebar.exe'"
+```
+
+再起動後、`Get-Process zebar`のPIDが変わっていることを確認する。main barの
+Claude/Codex chipをクリックし、次を確認する。
 
 - `ai-usage-details`と`codex-usage-details`がmain bar直下に開く。
 - 5H・7Dの現在値とreset時刻が表示される。
