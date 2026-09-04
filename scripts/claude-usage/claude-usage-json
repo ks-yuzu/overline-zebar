@@ -300,12 +300,18 @@ sub archive_sample {
 	my ($path, $sample) = @_;
 	return unless defined $path && length $path;
 
+	# Give it its mode before anything writes, so the file is never briefly
+	# readable at the process umask. The Codex helper does the same.
+	unless (-e $path) {
+		open my $created, '>>:raw', $path or return;
+		close $created;
+		chmod 0600, $path;
+	}
+
 	# A failed archive write must not cost the caller its usage reading.
-	my $existed = -e $path;
 	open my $log, '>>:raw', $path or return;
 	print {$log} JSON::PP->new->canonical->encode($sample), "\n";
 	close $log;
-	chmod 0600, $path unless $existed;
 	return;
 }
 
