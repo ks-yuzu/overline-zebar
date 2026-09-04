@@ -92,7 +92,7 @@ export default function UsageHistory({
   return (
     <div>
       <svg
-        aria-label={`${label} daily consumption and cumulative usage`}
+        aria-label={`${label} ${barLabel}${lineLabel ? ` and ${lineLabel}` : ''}`}
         className="h-[132px] w-full"
         role="img"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
