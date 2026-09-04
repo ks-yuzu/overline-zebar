@@ -166,6 +166,43 @@ my @cases = (
 		expect => undef,
 	},
 	{
+		# Past this much staleness the nearest candidate is the next window's
+		# reset, which has not started. 6h remaining on a 5h window is not a
+		# reading Claude can have produced.
+		name => 'session reset on a screen a window stale',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 23, 50],
+		kind => 'session',
+		display => '5:50am',
+		expect => undef,
+	},
+	{
+		# A window that has just started reads almost its whole length ahead,
+		# and the label is rounded to the minute, so this has to stay accepted.
+		name => 'session reset a whole window ahead',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 0, 49],
+		kind => 'session',
+		display => '5:50am',
+		expect => '2026-09-05 05:50',
+	},
+	{
+		name => 'week reset on a screen a window stale',
+		timezone => $tokyo,
+		now => [2026, 9, 15, 10, 0],
+		kind => 'week',
+		display => 'Sep 7, 9am',
+		expect => undef,
+	},
+	{
+		name => 'week reset a whole window ahead',
+		timezone => $tokyo,
+		now => [2026, 8, 31, 9, 0],
+		kind => 'week',
+		display => 'Sep 7, 9am',
+		expect => '2026-09-07 09:00',
+	},
+	{
 		name => 'session reset in a DST timezone',
 		timezone => $new_york,
 		now => [2026, 3, 8, 4, 0],

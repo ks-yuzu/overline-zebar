@@ -261,19 +261,33 @@ sub local_epoch {
 	return $epoch;
 }
 
+# Each window is a fixed length, so a reset cannot be further from now than
+# that in either direction: ahead of it the window would not have started, and
+# behind it the screen would be more than a whole window stale. Displayed to
+# the minute, a reset can read a little beyond its own window, hence the grace.
+my %window_seconds = (
+	session => 5 * 60 * 60,
+	week => 7 * 24 * 60 * 60,
+);
+my $window_grace_seconds = 600;
+
 # Claude reports the session reset as a bare time of day and the week reset as
 # a month and day: neither carries the date or year the reading belongs to, so
-# the occurrence has to be inferred. Take the one nearest to now. A screen
-# Claude has just refreshed always shows a reset that is still ahead, and the
-# alternatives are a day or a year away, so this picks the same instant the
-# arithmetic below used to. A `last_known` screen is what makes the direction
-# matter: its reset may already have passed, and rolling that forward would
-# publish a reset a whole day (session) or year (week) out.
+# the occurrence has to be inferred. Take the one nearest to now, of those the
+# window length allows. A screen Claude has just refreshed always shows a reset
+# that is still ahead, and the alternatives are a day or a year away, so this
+# picks the same instant the arithmetic used to. A `last_known` screen is what
+# makes the rest matter: its reset may already have passed, and rolling that
+# forward would publish a reset a whole day (session) or year (week) out. Once
+# such a screen is more than a window stale, no candidate is credible - the
+# nearest would be the next window's, which has not started - so nothing is
+# published and the widget falls back to Claude's own label without a countdown.
 sub nearest_occurrence {
-	my ($now, @candidates) = @_;
+	my ($now, $limit, @candidates) = @_;
 	my $nearest;
 	for my $candidate (@candidates) {
 		next unless defined $candidate;
+		next if defined $limit && abs($candidate - $now) > $limit;
 		$nearest = $candidate
 			if !defined $nearest || abs($candidate - $now) < abs($nearest - $now);
 	}
@@ -286,6 +300,11 @@ sub normalize_reset {
 	tzset();
 	my $now = time;
 	my $epoch;
+	# The week label is also what a session reset falls back to when it carries
+	# a date, so the limit follows the kind rather than the pattern that matched.
+	my $limit = defined $window_seconds{$kind}
+		? $window_seconds{$kind} + $window_grace_seconds
+		: undef;
 
 	if ($kind eq 'session' && $display =~ /^(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
 		my $minute = defined $2 ? $2 : 0;
@@ -296,7 +315,7 @@ sub normalize_reset {
 			my @day = localtime($now + $_ * 86_400);
 			local_epoch($minute, $hour, $day[3], $day[4], $day[5]);
 		} (-1, 0, 1);
-		$epoch = nearest_occurrence($now, @candidates);
+		$epoch = nearest_occurrence($now, $limit, @candidates);
 	}
 	elsif ($display =~ /^([A-Za-z]{3})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
 		my %month;
@@ -309,7 +328,7 @@ sub normalize_reset {
 		if (defined $month) {
 			my $hour = hour_24($3, $5);
 			my $year = (localtime($now))[5];
-			$epoch = nearest_occurrence($now,
+			$epoch = nearest_occurrence($now, $limit,
 				map { local_epoch($minute, $hour, $2, $month, $_) }
 					($year - 1, $year, $year + 1));
 		}
