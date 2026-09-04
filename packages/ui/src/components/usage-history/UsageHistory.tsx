@@ -17,11 +17,16 @@ type Props = {
    * a chart with two series does not present them as equally important.
    */
   primarySeries?: 'bars' | 'line';
+  /**
+   * viewBox width. The svg keeps its aspect ratio, so a card much wider than
+   * this letterboxes the plot away from the axis labels beneath it.
+   */
+  viewWidth?: number;
   segments?: UsageHistorySegment[];
   startAt: number;
 };
 
-const WIDTH = 420;
+const DEFAULT_WIDTH = 420;
 const HEIGHT = 132;
 const PADDING_X = 10;
 const PADDING_TOP = 8;
@@ -55,7 +60,9 @@ export default function UsageHistory({
   primarySeries = 'bars',
   segments = [],
   startAt,
+  viewWidth = DEFAULT_WIDTH,
 }: Props) {
+  const WIDTH = viewWidth;
   const barColor =
     primarySeries === 'bars' ? 'var(--success)' : 'var(--primary)';
   const lineColor =

@@ -120,11 +120,13 @@ function HistoryCard({
   historyRange,
   now,
   samples,
+  viewWidth,
   window,
 }: {
   historyRange: { startAt: number; endAt: number };
   now: number;
   samples: UsageHistorySample[];
+  viewWidth: number;
   window: CodexUsageWindow;
 }) {
   const label = formatWindowDuration(window.windowDurationMins);
@@ -147,6 +149,7 @@ function HistoryCard({
           primarySeries="line"
           segments={daily.segments}
           startAt={historyRange.startAt}
+          viewWidth={viewWidth}
         />
       </Card>
     );
@@ -169,6 +172,7 @@ function HistoryCard({
         endAt={historyRange.endAt}
         label={`14D ${label}`}
         startAt={historyRange.startAt}
+        viewWidth={viewWidth}
       />
     </Card>
   );
@@ -266,6 +270,9 @@ export default function App() {
     );
   }
 
+  // One window fills the row, so the plots need a viewBox matching the wider
+  // card or they letterbox away from their own axis labels.
+  const plotWidth = windows.length === 1 ? 860 : 420;
   const historyRange = {
     startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
     endAt: now / 1000,
@@ -357,7 +364,7 @@ export default function App() {
                 paceGuide={range.started}
                 points={history}
                 startAt={range.startAt}
-                viewWidth={420}
+                viewWidth={plotWidth}
               />
             </Card>
           );
@@ -376,6 +383,7 @@ export default function App() {
               data.history,
               window.windowDurationMins
             )}
+            viewWidth={plotWidth}
             window={window}
           />
         ))}
