@@ -330,6 +330,9 @@ widgetのcommandは各`config.ts`、許可する完全一致commandは`zpack.jso
 
 ## 配置・更新手順
 
+配られたreleaseから入れる場合は[Releaseから導入する](./install-from-release.md)を見る。
+ここはソースから作って実機へ反映する手順である。
+
 この構成では、WSL上のソースリポジトリと、Windows側でZebarが実際に読む
 インストール済みpackは別directoryである。ソースをbuildしただけでは実行中の
 widgetは更新されないため、生成物と`zpack.json`をpack側へ同期してZebarを
