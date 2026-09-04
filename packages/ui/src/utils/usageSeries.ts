@@ -114,13 +114,17 @@ export function buildDailyUsage(
   const consumedByDay = new Map<number, number>();
   const sampledDays = new Set<number>();
 
-  // Only the rises count. A fall is the quota being handed back - a reset, or
-  // usage ageing out - never something the user spent. Reading consumption
-  // from the values rather than from window boundaries keeps it right for both
-  // kinds of window, and costs only the sliver consumed between a reset and
-  // the first sample after it.
-  let previous = segments[0]?.[0]?.value ?? 0;
-  for (const segment of segments) {
+  // Only the rises count within a window: a fall is the quota being handed
+  // back, never something the user spent.
+  let previous = 0;
+  segments.forEach((segment, index) => {
+    // A window opens empty, so its first reading is all consumption. Carrying
+    // the previous window's total over instead would lose everything used
+    // before the first sample of the new window - the whole of it when a
+    // sampling gap swallows the reset. The oldest segment is the exception:
+    // retention cut it off mid-window, so its first reading is a baseline.
+    previous = index === 0 ? (segment[0]?.value ?? 0) : 0;
+
     for (const point of segment) {
       const day = startOfLocalDay(point.recordedAt);
       sampledDays.add(day);
@@ -130,7 +134,7 @@ export function buildDailyUsage(
       );
       previous = point.value;
     }
-  }
+  });
 
   const bars: UsageBar[] = [];
   for (
@@ -138,11 +142,16 @@ export function buildDailyUsage(
     day <= range.endAt;
     day = nextLocalDay(day)
   ) {
+    const nextDay = nextLocalDay(day);
     bars.push({
       startAt: day,
-      endAt: nextLocalDay(day),
+      endAt: nextDay,
       value: consumedByDay.get(day) ?? 0,
       hasSamples: sampledDays.has(day),
+      // The day at either end of the axis is only partly inside it, so it
+      // holds part of a day's consumption and cannot be read against days
+      // that are whole.
+      partial: day < range.startAt || nextDay > range.endAt,
     });
   }
 
