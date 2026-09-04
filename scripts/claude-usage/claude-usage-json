@@ -349,6 +349,14 @@ if (-s $cache_file) {
 my $reset_times_parsed = defined $session_usage->{resets_at}
 	&& defined $week_usage->{resets_at};
 
+if ($refresh_status ne 'last_known' && !$reset_times_parsed) {
+	# Left silent this would stop history collection for good if the wording or
+	# date format ever changes: `generated_at` keeps moving, so the freshness
+	# indicator stays green while the graphs empty out as the window rolls on.
+	# cron pipes stderr to logger.
+	printf {*STDERR} "claude usage: reset time did not parse; sample not recorded\n";
+}
+
 if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 	my %sample = (
 		recorded_at => 0 + $generated_epoch,
