@@ -1,0 +1,221 @@
+#!/usr/bin/env perl
+
+# Checks how claude-usage-json turns Claude's reset labels into timestamps.
+#
+# Claude shows the session reset as a bare time of day and the week reset as a
+# month and day, so the helper has to infer which occurrence is meant. Getting
+# that wrong is invisible in the JSON - the timestamp still looks well formed -
+# and only shows up as a chip counting down to the wrong hour, or a graph whose
+# axis has moved a year away from its samples.
+#
+# The subroutines are read out of the helper rather than duplicated here: this
+# has to break when the helper changes, not track it. Run from anywhere:
+#
+#   perl scripts/claude-usage/test-normalize-reset
+
+use strict;
+use warnings;
+use File::Basename qw(dirname);
+use POSIX qw(strftime tzset);
+use Time::Local qw(timelocal);
+
+# normalize_reset reads the clock through time(), so the cases below can place
+# "now" wherever a case needs it.
+our $now_override;
+BEGIN { *CORE::GLOBAL::time = sub () { $main::now_override } }
+
+my $helper = dirname(__FILE__) . '/claude-usage-json';
+open my $fh, '<', $helper or die "cannot read $helper: $!\n";
+my $source = do { local $/; <$fh> };
+close $fh;
+
+my ($subs) = $source =~ /^(sub hour_24\b.*?)^sub usage_object\b/ms;
+die "could not find the reset subroutines in $helper\n" unless $subs;
+eval "$subs 1" or die "could not load the reset subroutines: $@";
+
+sub epoch_at {
+	my ($timezone, $year, $month, $day, $hour, $minute) = @_;
+	local $ENV{TZ} = $timezone;
+	tzset();
+	return timelocal(0, $minute, $hour, $day, $month - 1, $year);
+}
+
+sub local_time_of {
+	my ($timezone, $epoch) = @_;
+	local $ENV{TZ} = $timezone;
+	tzset();
+	return strftime('%Y-%m-%d %H:%M %Z', localtime($epoch));
+}
+
+my $tokyo = 'Asia/Tokyo';
+my $new_york = 'America/New_York';
+
+my @cases = (
+	{
+		name => 'session reset later today',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 2, 0],
+		kind => 'session',
+		display => '5:50am',
+		expect => '2026-09-05 05:50',
+	},
+	{
+		# A last-known screen can show a reset that has already gone by. Rolling
+		# it forward would publish a reset ~24h out and the chip would read 23h.
+		name => 'session reset already past',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 6, 20],
+		kind => 'session',
+		display => '5:50am',
+		expect => '2026-09-05 05:50',
+	},
+	{
+		name => 'session reset across midnight',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 23, 0],
+		kind => 'session',
+		display => '1am',
+		expect => '2026-09-06 01:00',
+	},
+	{
+		name => 'session reset at 12am',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 22, 0],
+		kind => 'session',
+		display => '12am',
+		expect => '2026-09-06 00:00',
+	},
+	{
+		name => 'session reset at 12pm',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 10, 0],
+		kind => 'session',
+		display => '12pm',
+		expect => '2026-09-05 12:00',
+	},
+	{
+		name => 'week reset in two days',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 2, 0],
+		kind => 'week',
+		display => 'Sep 7, 9am',
+		expect => '2026-09-07 09:00',
+	},
+	{
+		# Same as the session case: a year out would be far worse, and the chip
+		# prints month and day only, so it would look plausible.
+		name => 'week reset already past',
+		timezone => $tokyo,
+		now => [2026, 9, 7, 9, 30],
+		kind => 'week',
+		display => 'Sep 7, 9am',
+		expect => '2026-09-07 09:00',
+	},
+	{
+		name => 'week reset in the next year',
+		timezone => $tokyo,
+		now => [2026, 12, 30, 10, 0],
+		kind => 'week',
+		display => 'Jan 2, 9am',
+		expect => '2027-01-02 09:00',
+	},
+	{
+		name => 'week reset in the previous year',
+		timezone => $tokyo,
+		now => [2027, 1, 1, 10, 0],
+		kind => 'week',
+		display => 'Dec 31, 9am',
+		expect => '2026-12-31 09:00',
+	},
+	{
+		# The session pattern has always accepted either case.
+		name => 'week reset in upper case',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 2, 0],
+		kind => 'week',
+		display => 'SEP 7, 9AM',
+		expect => '2026-09-07 09:00',
+	},
+	{
+		# An unparsed reset keeps the reading out of the history, which the
+		# helper reports on stderr. A month silently read as January would put a
+		# wrong timestamp in instead.
+		name => 'week reset with an unknown month',
+		timezone => $tokyo,
+		now => [2026, 9, 5, 2, 0],
+		kind => 'week',
+		display => 'Sqp 7, 9am',
+		expect => undef,
+	},
+	{
+		name => 'week reset on Feb 29 of a leap year',
+		timezone => $tokyo,
+		now => [2028, 2, 27, 10, 0],
+		kind => 'week',
+		display => 'Feb 29, 9am',
+		expect => '2028-02-29 09:00',
+	},
+	{
+		# The date does not exist in the neighbouring years. Constructing one
+		# used to be fatal, taking the whole reading with it.
+		name => 'week reset on Feb 29 outside a leap year',
+		timezone => $tokyo,
+		now => [2026, 2, 27, 10, 0],
+		kind => 'week',
+		display => 'Feb 29, 9am',
+		expect => undef,
+	},
+	{
+		name => 'session reset in a DST timezone',
+		timezone => $new_york,
+		now => [2026, 3, 8, 4, 0],
+		kind => 'session',
+		display => '6:30am',
+		expect => '2026-03-08 06:30',
+	},
+	{
+		# 2:30am does not exist on this date in this timezone. Any answer will
+		# do; dying is what must not happen.
+		name => 'session reset in an hour DST skips',
+		timezone => $new_york,
+		now => [2026, 3, 8, 1, 0],
+		kind => 'session',
+		display => '2:30am',
+		expect => 'any',
+	},
+);
+
+my $failures = 0;
+for my $case (@cases) {
+	$now_override = epoch_at($case->{timezone}, @{ $case->{now} });
+
+	my $result = eval {
+		normalize_reset($case->{display}, $case->{timezone}, $case->{kind});
+	};
+	if ($@) {
+		printf "not ok - %s: died: %s", $case->{name}, $@;
+		$failures++;
+		next;
+	}
+
+	my $got = 'undef';
+	if (defined $result) {
+		my ($date, $time) = $result =~ /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/;
+		$got = defined $date ? "$date $time" : $result;
+	}
+
+	my $expect = defined $case->{expect} ? $case->{expect} : 'undef';
+	my $ok = $expect eq 'any' ? defined $result : $got eq $expect;
+	$failures++ unless $ok;
+
+	printf "%s - %s\n", $ok ? 'ok' : 'not ok', $case->{name};
+	printf "    now=%s display=%s got=%s%s\n",
+		local_time_of($case->{timezone}, $now_override),
+		$case->{display},
+		$got,
+		$ok ? '' : " expected=$expect";
+}
+
+printf "\n%d of %d cases failed\n", $failures, scalar @cases if $failures;
+printf "\nall %d cases pass\n", scalar @cases unless $failures;
+exit($failures ? 1 : 0);

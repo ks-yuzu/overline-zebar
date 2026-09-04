@@ -265,6 +265,18 @@ reset時刻が取れないのは画面を描画途中で拾った時で、その
 (観測された1件は、前後が8%の週次を0%と報告していた)。現在値の公開は続ける。
 次回の取得で自然に直る一方、historyに入ると長期graphの消費量が二重計上になる。
 
+**reset時刻は「現在時刻に最も近い候補」として解釈する。** Claudeはsessionのreset
+を時刻だけ (`5:50am`)、weekのresetを月日だけ (`Sep 7, 9am`) で表示し、どちらも
+日付や年を持たない。候補 (前日・当日・翌日 / 前年・当年・翌年) のうちnowに最も
+近いものを採る。
+
+refreshされた直後の画面ならresetは必ず先にあり、他の候補は1日・1年離れている
+ため、この規則は単純に先送りするのと同じ結果になる。**向きが問題になるのは
+`last_known`の画面である。** 表示されているresetが既に過ぎていることがあり、
+それを先送りするとsessionは約24時間後、weekは約1年後のresetを公開してしまう。
+chipの残り時間が「23h」と出たり、詳細viewの横軸が未来へ飛んで
+「No samples yet」になったりする。過ぎたresetは過ぎたまま公開する。
+
 定時外のresetと取得失敗は、**0へ落ちた後の戻り方**で区別できる。元の値へ戻れば
 取得失敗、0付近から積み上がればresetである。
 
@@ -588,7 +600,12 @@ CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
+perl scripts/claude-usage/test-normalize-reset
 ```
+
+`test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
+subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
+落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
 
 実機反映を伴うUI変更の完了条件は次のとおり。
 

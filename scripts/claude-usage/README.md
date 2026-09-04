@@ -72,6 +72,17 @@ After changing the settings, rebuild the main widget:
 pnpm --filter @overline-zebar/main build
 ```
 
+## Tests
+
+Claude reports the session reset as a bare time of day (`5:50am`) and the week
+reset as a month and day (`Sep 7, 9am`), so the helper has to work out which
+occurrence is meant. It takes the one nearest to now. The cases live in a
+script that reads those subroutines out of the helper:
+
+```sh
+perl scripts/claude-usage/test-normalize-reset
+```
+
 ## Helper options
 
 - `--force`: refresh the cache by opening Claude Code `/usage`.

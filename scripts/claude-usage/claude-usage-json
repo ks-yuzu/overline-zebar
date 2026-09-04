@@ -253,27 +253,65 @@ sub iso_local {
 	return $value;
 }
 
+# A local time that does not exist (the hour a DST change skips) is not an
+# error here, just a candidate to drop.
+sub local_epoch {
+	my ($minute, $hour, $mday, $month, $year) = @_;
+	my $epoch = eval { timelocal(0, $minute, $hour, $mday, $month, $year) };
+	return $epoch;
+}
+
+# Claude reports the session reset as a bare time of day and the week reset as
+# a month and day: neither carries the date or year the reading belongs to, so
+# the occurrence has to be inferred. Take the one nearest to now. A screen
+# Claude has just refreshed always shows a reset that is still ahead, and the
+# alternatives are a day or a year away, so this picks the same instant the
+# arithmetic below used to. A `last_known` screen is what makes the direction
+# matter: its reset may already have passed, and rolling that forward would
+# publish a reset a whole day (session) or year (week) out.
+sub nearest_occurrence {
+	my ($now, @candidates) = @_;
+	my $nearest;
+	for my $candidate (@candidates) {
+		next unless defined $candidate;
+		$nearest = $candidate
+			if !defined $nearest || abs($candidate - $now) < abs($nearest - $now);
+	}
+	return $nearest;
+}
+
 sub normalize_reset {
 	my ($display, $timezone, $kind) = @_;
 	local $ENV{TZ} = $timezone;
 	tzset();
 	my $now = time;
-	my @now = localtime($now);
 	my $epoch;
 
 	if ($kind eq 'session' && $display =~ /^(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
 		my $minute = defined $2 ? $2 : 0;
-		$epoch = timelocal(0, $minute, hour_24($1, $3), $now[3], $now[4], $now[5]);
-		$epoch += 86_400 if $epoch < $now - 120;
+		my $hour = hour_24($1, $3);
+		# Derived from each day's own calendar date rather than by adding 86400,
+		# so a DST change does not shift the wall-clock time being matched.
+		my @candidates = map {
+			my @day = localtime($now + $_ * 86_400);
+			local_epoch($minute, $hour, $day[3], $day[4], $day[5]);
+		} (-1, 0, 1);
+		$epoch = nearest_occurrence($now, @candidates);
 	}
-	elsif ($display =~ /^([A-Z][a-z]{2})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)$/) {
+	elsif ($display =~ /^([A-Za-z]{3})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
 		my %month;
 		@month{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)} = 0 .. 11;
-		my $year = $now[5];
+		# The session pattern has always been case-insensitive. Matching that
+		# here costs a normalized lookup: an unknown month name must not reach
+		# timelocal as undef.
+		my $month = $month{ucfirst lc $1};
 		my $minute = defined $4 ? $4 : 0;
-		$epoch = timelocal(0, $minute, hour_24($3, $5), $2, $month{$1}, $year);
-		if ($epoch < $now - 120) {
-			$epoch = timelocal(0, $minute, hour_24($3, $5), $2, $month{$1}, $year + 1);
+		if (defined $month) {
+			my $hour = hour_24($3, $5);
+			my $year = (localtime($now))[5];
+			$epoch = nearest_occurrence($now,
+				map { local_epoch($minute, $hour, $2, $month, $_) }
+					($year - 1, $year, $year + 1));
 		}
 	}
 
