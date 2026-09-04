@@ -57,30 +57,42 @@ type UsageWindow = {
   /** Latest end seen in the run; jitter updates it without opening a window. */
   endsAt: number | undefined;
   samples: UsageHistorySample[];
+  /** Whether anything has been spent in this run yet. */
+  used: boolean;
 };
 
 function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
   const windows: UsageWindow[] = [];
   for (const sample of samples) {
     const current = windows.at(-1);
-    const previous = current?.samples.at(-1);
-    // A window ends where the reported end moves beyond jitter. While the
-    // quota sits unused that end slides on its own, so a move between two
-    // readings that are both at zero opens nothing - there was no window to
-    // end. Requiring a fall in usage instead would miss every window whose
-    // reset landed inside a sampling gap, since the reading after the gap is
-    // as likely to be higher as lower.
+    // A window ends where the reported end moves beyond jitter, but only once
+    // something has been spent in it. While the quota sits unused that end
+    // slides on its own, and there is no window there to end - the idle run
+    // simply joins the window that starts next, which is where it belongs.
+    //
+    // Asking whether the run has seen usage, rather than whether this one
+    // reading is above zero, matters when a sample lands on the reset already
+    // at 0% while still carrying the old end. It joins the window it belongs
+    // to, and the move that follows still closes that window; keying off the
+    // previous reading alone would let the idle run swallow the next window
+    // whole. Requiring a fall in usage instead would miss every reset that
+    // landed inside a sampling gap, since the reading after a gap is as likely
+    // to be higher as lower.
     const reset =
       current !== undefined &&
-      previous !== undefined &&
-      !isSameWindow(current.endsAt, sample.windowEndsAt) &&
-      !(previous.value === 0 && sample.value === 0);
+      current.used &&
+      !isSameWindow(current.endsAt, sample.windowEndsAt);
 
     if (!current || reset) {
-      windows.push({ endsAt: sample.windowEndsAt, samples: [sample] });
+      windows.push({
+        endsAt: sample.windowEndsAt,
+        samples: [sample],
+        used: sample.value > 0,
+      });
       continue;
     }
     current.endsAt = sample.windowEndsAt ?? current.endsAt;
+    current.used = current.used || sample.value > 0;
     current.samples.push(sample);
   }
   return windows;
@@ -274,14 +286,20 @@ export function selectCurrentWindow(
       .map(({ recordedAt, value }) => ({ recordedAt, value }));
   }
 
-  let lastUsed = -1;
-  for (let index = sorted.length - 1; index >= 0; index -= 1) {
-    if ((sorted[index]?.value ?? 0) > 0) {
-      lastUsed = index;
+  // No end to match on - either nothing has been spent yet, or the reading
+  // that would carry it was unreadable. Either way the run since usage last
+  // fell is this window's: for an unused quota that is the stretch of zeros
+  // since it reset, and for an unreadable one it is the climb so far.
+  let windowStart = 0;
+  for (let index = sorted.length - 1; index > 0; index -= 1) {
+    const value = sorted[index]?.value ?? 0;
+    const before = sorted[index - 1]?.value ?? 0;
+    if (value < before) {
+      windowStart = index;
       break;
     }
   }
   return sorted
-    .slice(lastUsed + 1)
+    .slice(windowStart)
     .map(({ recordedAt, value }) => ({ recordedAt, value }));
 }
