@@ -286,6 +286,13 @@ chipの残り時間が「23h」と出たり、詳細viewの横軸が未来へ飛
 この上限が無いと、`last_known`が12時間以上古い時に翌日の候補が最も近くなる。
 5H windowに対して「6h」残っていると表示するようなreadingが出てしまう。
 
+**window長は3箇所に重複している。** helperの`%window_seconds`、
+`widgets/main/src/components/claudeUsage/ClaudeUsage.tsx`と
+`widgets/ai-usage-details/src/App.tsx`の`SESSION_WINDOW_SECONDS` /
+`WEEK_WINDOW_SECONDS`である。helper側は「公開するか否か」を決めるため、
+providerがwindow長を変えた場合は`resets_at`とhistory収集が止まる (手がかりは
+1 runあたりstderr 1行のみ)。変更時は3箇所を揃える。
+
 定時外のresetと取得失敗は、**0へ落ちた後の戻り方**で区別できる。元の値へ戻れば
 取得失敗、0付近から積み上がればresetである。
 

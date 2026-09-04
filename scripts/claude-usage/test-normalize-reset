@@ -211,8 +211,20 @@ my @cases = (
 		expect => '2026-03-08 06:30',
 	},
 	{
-		# 2:30am does not exist on this date in this timezone. Any answer will
-		# do; dying is what must not happen.
+		# The day before a spring-forward is 23 hours long, so walking to the
+		# next day by adding 86400 seconds skips it entirely and the reset two
+		# hours away is not among the candidates at all.
+		name => 'session reset on the eve of a spring-forward',
+		timezone => $new_york,
+		now => [2026, 3, 7, 23, 30],
+		kind => 'session',
+		display => '1:30am',
+		expect => '2026-03-08 01:30',
+	},
+	{
+		# 2:30am does not exist on this date in this timezone. timelocal shifts
+		# it rather than failing, and which instant it picks is its business:
+		# what matters here is that the reading survives.
 		name => 'session reset in an hour DST skips',
 		timezone => $new_york,
 		now => [2026, 3, 8, 1, 0],
