@@ -66,16 +66,6 @@ if [[ "$force_refresh" == false ]] && cache_is_fresh; then
 	exit 0
 fi
 
-# The main Zebar widget runs once per monitor. Serialize cache refreshes so only
-# one of those processes opens Claude's interactive /usage screen.
-exec 9>"$lock_file"
-flock 9
-
-if [[ "$force_refresh" == false ]] && cache_is_fresh; then
-	cat -- "$cache_file"
-	exit 0
-fi
-
 for command_name in expect perl flock; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		printf 'required command not found: %s\n' "$command_name" >&2
@@ -86,6 +76,16 @@ for command_name in expect perl flock; do
 		exit 69
 	fi
 done
+
+# The main Zebar widget runs once per monitor. Serialize cache refreshes so only
+# one of those processes opens Claude's interactive /usage screen.
+exec 9>"$lock_file"
+flock 9
+
+if [[ "$force_refresh" == false ]] && cache_is_fresh; then
+	cat -- "$cache_file"
+	exit 0
+fi
 
 default_claude_bin="$HOME/bin/claude"
 if [[ ! -x "$default_claude_bin" ]]; then
