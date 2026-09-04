@@ -94,9 +94,10 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     **滑るのは未使用の間だけ**であり、判別には減衰の有無を見る。
 - trendの横軸は、開始済みのwindowでは`resets_at`を終端とするそのwindowのrange、
   未開始なら直近のwindow長とする。滑っている値を終端にすると軸のほとんどが
-  未来になる。**sampleの絞り込みにreset時刻を使わない** — rangeが既にwindowを
-  区切っており、使うと未開始時に最新の1件しか一致しない。
-  pace guideも未開始のwindowでは出さない。
+  未来になる。pace guideも未開始のwindowでは出さない。
+  - **sampleは時間範囲ではなく、そのwindowのものを選ぶ。** 開始済みなら終端が
+    一致するsample、未開始ならresetからの0%の連なり。範囲で選ぶと、reset直後の
+    枠に前のwindowの登りが入る。
 - 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
   - 下降は使い切ったのではなく返却されたもの (reset) なので数えない。
   - **provider側で定時外のquota resetが起きることがある。** `resets_at`は
@@ -104,11 +105,15 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     正しく扱える (下降は0として無視し、そこからの登り直しを数える)。
   - reset時刻に依存しないため、providerがそれを揺らしても壊れない。
     代償はresetから次のsampleまでに使った分だけで、5分粒度では無視できる。
-- windowの境界と見なすのは、**双方のreset時刻が既知で、異なり、かつ値が下がった**
-  時だけ。実データで次の2つを踏んだ。
-  - Claudeが週次のresetを1分ずれて報告したsampleが1件あり、windowが3つに割れて
-    1日に約49%の幻の消費が出ていた。widget側でreset時刻を5分格子へ丸める。
-  - reset時刻を欠くsampleも境界と解釈されていた。
+- windowを識別するのは`windowEndsAt`で、**±5分の許容差**をもって比較する。
+  揺れ幅はproviderで違う (Claudeは1分、Codexは秒) が、稼働中の終端は両者とも固定。
+  - 未使用の間だけ終端が自走するため、**両端とも0%の移動では境界を開かない。**
+  - **「値が下がったこと」を境界の条件にしてはいけない。** sampling gapがresetを
+    またぐと、gap明けの値はgap前より高いことも同じくらいあり、境界が立たずに
+    gap中のwindowがすべて融合する。実cacheで3本のwindowが消えていた。
+  - 揺れへの耐性は許容差が担う。以前は「値が下がった」で代用していたが、Claudeが
+    週次のresetを1分ずれて報告したsample1件でwindowが3つに割れ、1日に約49%の
+    幻の消費が出た経緯がある。
 - graphの系列色は、progress barと同じ`--success`を使う。
   **1つのgraphで緑にするのは主系列だけとし**、副系列は`--primary`に落とす。
   両方を同じ強さで塗ると、どちらを読めばよいかが伝わらない。
@@ -144,8 +149,10 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     日や5H windowをまたぐ傾向は、window内のgraphからは読めない。
 - 右列 (7D) の14日graph:
   - 棒は各日に消費した週クォータの割合、線は週次使用率の累積で、reset位置で区切る。
-  - 累積はwindow内で単調増加するため、棒は線がその日に上がった高さと一致する。
-    同一単位となり、0-100%の1軸へ二重軸なしで重ねられる。
+  - 棒は線がその日に上がった高さであり、同一単位となって0-100%の1軸へ二重軸なしで
+    重ねられる。
+  - ただし**定時外のresetが入ると、棒の合計は線の終端を上回る。** 同じ週の枠内で
+    quotaが複数回配り直されるためで、消費量としてはそれが正しい。
   - 軸は使用量に追従させず0-100%へ固定する。追従させると使用が増えた時に
     軸が伸び、日ごとの比較が壊れるため。
   - sampleが1件もない日は0%の棒ではなく「データなし」として区別する。
@@ -161,11 +168,12 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - sampleが1件もないwindowは「データなし」の帯にする。cronが取り逃したwindowと
     使わなかったwindowは、この面では区別が要る。
   - resetがまだ来ていないwindowは破線の枠だけで描き、最大値の表示からも除く。
+    日次の棒も同じで、軸の両端にかかる日は一部しか入っていないため同じ扱いにする。
 - `UsageTrend`のviewBox幅は`viewWidth`で渡す。svgは縦横比を保つため、
   card幅に対して比が合わないと、plotだけが中央へ寄って軸ラベルとずれる。
-- `UsageHistory`のバーの横位置は、sampleの`windowEndsAt`から引く。
-  同一性の`windowKey`とは別に持つ。keyは丸めたり不透明にしたりするため、
-  時刻として読み戻せるとは限らない。
+- `UsageHistory`のバーの横位置は、sampleの`windowEndsAt`から引く。これはwindowの
+  同一性そのものでもある。以前は丸めた識別子を別に持っていたが、それを時刻として
+  読み戻せずバーの位置がずれたため、許容差付きの比較へ一本化した。
 
 リセット表示:
 
