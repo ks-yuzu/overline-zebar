@@ -7,6 +7,7 @@ import {
   UsageTrend,
   buildDailyUsage,
   buildWindowPeaks,
+  selectCurrentWindow,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
@@ -88,36 +89,6 @@ function getTrendRange(window: CodexUsageWindow, now: number) {
   return { startAt: endAt - window.windowDurationMins * 60, endAt, started };
 }
 
-function selectHistory(
-  history: CodexUsageHistorySample[],
-  window: CodexUsageWindow,
-  startAt: number,
-  endAt: number
-): TrendPoint[] {
-  return history
-    .filter(
-      (sample) => sample.recorded_at >= startAt && sample.recorded_at <= endAt
-    )
-    .flatMap((sample) => {
-      // Matching the reset time too would keep only the newest sample while
-      // the window is unstarted, since the reported reset slides until usage
-      // pins it. The range already bounds the window.
-      const matchingWindow = sample.windows.find(
-        (candidate) =>
-          candidate.windowDurationMins === window.windowDurationMins
-      );
-      return matchingWindow
-        ? [
-            {
-              recordedAt: sample.recorded_at,
-              value: matchingWindow.usedPercent,
-            },
-          ]
-        : [];
-    })
-    .sort((a, b) => a.recordedAt - b.recordedAt);
-}
-
 /**
  * Matches on the window's length rather than its current reset time, so that
  * every window the retention holds is kept, not just the one in progress.
@@ -139,7 +110,6 @@ function selectWindowSamples(
               recordedAt: sample.recorded_at,
               value: match.usedPercent,
               windowEndsAt: match.resetsAt,
-              windowKey: String(match.resetsAt),
             },
           ]
         : [];
@@ -361,11 +331,14 @@ export default function App() {
         {windows.map((window) => {
           const label = formatWindowDuration(window.windowDurationMins);
           const range = getTrendRange(window, now);
-          const history = selectHistory(
-            data.history,
-            window,
-            range.startAt,
-            range.endAt
+          const history: TrendPoint[] = selectCurrentWindow(
+            selectWindowSamples(data.history, window.windowDurationMins),
+            {
+              endAt: range.endAt,
+              endsAt: window.resetsAt,
+              startAt: range.startAt,
+              started: range.started,
+            }
           );
           return (
             <Card

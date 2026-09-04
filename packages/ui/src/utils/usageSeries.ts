@@ -2,13 +2,8 @@ export type UsageHistorySample = {
   recordedAt: number;
   value: number;
   /**
-   * Identifies the quota window the sample belongs to. Opaque: a caller may
-   * round a jittery reset time to keep one window from splitting in two.
-   */
-  windowKey?: string;
-  /**
-   * When the window ends, in epoch seconds. Kept apart from the key because
-   * the key may be rounded or otherwise unfit to read back as a time.
+   * When the window ends, in epoch seconds. This identifies the window: it is
+   * pinned once usage starts and only slides while the quota sits unused.
    */
   windowEndsAt?: number;
 };
@@ -46,9 +41,21 @@ function nextLocalDay(dayStart: number) {
   return Math.floor(date.getTime() / 1000);
 }
 
+/**
+ * Providers report the window's end a little differently from one reading to
+ * the next - a minute either side for Claude, seconds for Codex - so ends this
+ * close apart are the same window.
+ */
+const WINDOW_END_TOLERANCE_SECONDS = 5 * 60;
+
+export function isSameWindow(a: number | undefined, b: number | undefined) {
+  if (a === undefined || b === undefined) return true;
+  return Math.abs(a - b) <= WINDOW_END_TOLERANCE_SECONDS;
+}
+
 type UsageWindow = {
-  /** Latest key seen in the run; jitter updates it without opening a window. */
-  key: string | undefined;
+  /** Latest end seen in the run; jitter updates it without opening a window. */
+  endsAt: number | undefined;
   samples: UsageHistorySample[];
 };
 
@@ -57,22 +64,23 @@ function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
   for (const sample of samples) {
     const current = windows.at(-1);
     const previous = current?.samples.at(-1);
-    // A boundary needs two known, different windows and a fall in usage. A
-    // sample that failed to report its reset time is not one, and neither is
-    // a reset time that shifted while the quota kept climbing.
+    // A window ends where the reported end moves beyond jitter. While the
+    // quota sits unused that end slides on its own, so a move between two
+    // readings that are both at zero opens nothing - there was no window to
+    // end. Requiring a fall in usage instead would miss every window whose
+    // reset landed inside a sampling gap, since the reading after the gap is
+    // as likely to be higher as lower.
     const reset =
       current !== undefined &&
       previous !== undefined &&
-      current.key !== undefined &&
-      sample.windowKey !== undefined &&
-      current.key !== sample.windowKey &&
-      sample.value < previous.value;
+      !isSameWindow(current.endsAt, sample.windowEndsAt) &&
+      !(previous.value === 0 && sample.value === 0);
 
     if (!current || reset) {
-      windows.push({ key: sample.windowKey, samples: [sample] });
+      windows.push({ endsAt: sample.windowEndsAt, samples: [sample] });
       continue;
     }
-    current.key = sample.windowKey ?? current.key;
+    current.endsAt = sample.windowEndsAt ?? current.endsAt;
     current.samples.push(sample);
   }
   return windows;
@@ -141,6 +149,32 @@ export function buildDailyUsage(
   return { bars, segments };
 }
 
+/** Below this a gap is just sampling jitter, not a stretch without data. */
+const MISSING_SAMPLES_SECONDS = 15 * 60;
+
+/**
+ * Spans of the range that hold no samples at all. Drawn apart from the windows
+ * so that a stretch the cron missed does not read as a window left unused -
+ * the one distinction this panel exists to make.
+ */
+function missingSpans(
+  samples: UsageHistorySample[],
+  range: { startAt: number; endAt: number }
+) {
+  const spans: { startAt: number; endAt: number }[] = [];
+  let cursor = range.startAt;
+  for (const sample of samples) {
+    if (sample.recordedAt - cursor > MISSING_SAMPLES_SECONDS) {
+      spans.push({ startAt: cursor, endAt: sample.recordedAt });
+    }
+    cursor = Math.max(cursor, sample.recordedAt);
+  }
+  if (range.endAt - cursor > MISSING_SAMPLES_SECONDS) {
+    spans.push({ startAt: cursor, endAt: range.endAt });
+  }
+  return spans;
+}
+
 /**
  * Reduces each quota window to a single bar spanning the window, valued at the
  * highest usage it reached. Plotting the raw series instead would alias: a 14
@@ -148,12 +182,9 @@ export function buildDailyUsage(
  *
  * Usage only grows inside a window, so the peak is normally the last sample.
  * Taking the maximum instead keeps a sample that straddles a reset - already
- * back at zero, but still carrying the previous window's key - from erasing
+ * back at zero, but still carrying the previous window's end - from erasing
  * the window it is grouped with.
  */
-/** Below this a gap is just sampling jitter, not a window without data. */
-const MISSING_WINDOW_SECONDS = 15 * 60;
-
 export function buildWindowPeaks(
   samples: UsageHistorySample[],
   range: {
@@ -186,43 +217,62 @@ export function buildWindowPeaks(
     ];
   });
 
-  // A stretch with no bar is either a window the cron missed or one that went
-  // unused, and this panel has to keep those apart. Only the absence of
-  // samples means missing - an unused window reports 0% and never falls, so it
-  // opens no boundary and leaves a gap of its own.
-  const covered = (from: number, to: number) =>
-    withinRange.some(
-      (sample) => sample.recordedAt >= from && sample.recordedAt < to
-    );
-
-  const withGaps: UsageBar[] = [];
-  let cursor = range.startAt;
-  for (const peak of peaks) {
-    if (
-      peak.startAt - cursor > MISSING_WINDOW_SECONDS &&
-      !covered(cursor, peak.startAt)
-    ) {
-      withGaps.push({
-        startAt: cursor,
-        endAt: peak.startAt,
-        value: 0,
-        hasSamples: false,
-      });
-    }
-    withGaps.push(peak);
-    cursor = Math.max(cursor, peak.endAt);
-  }
-  if (
-    range.endAt - cursor > MISSING_WINDOW_SECONDS &&
-    !covered(cursor, range.endAt)
-  ) {
-    withGaps.push({
-      startAt: cursor,
-      endAt: range.endAt,
+  return [
+    ...peaks,
+    ...missingSpans(withinRange, range).map((span) => ({
+      ...span,
       value: 0,
       hasSamples: false,
-    });
+    })),
+  ].sort((a, b) => a.startAt - b.startAt);
+}
+
+/**
+ * The samples belonging to the window on show. A started window is pinned to
+ * its end, so its samples are the ones reporting that end. An unstarted one
+ * has no end yet - its reported reset slides - so it is the run of zeros since
+ * the last window closed. Selecting by time range instead would carry the
+ * previous window's climb into a card labelled as the current one.
+ */
+export function selectCurrentWindow(
+  samples: UsageHistorySample[],
+  window: {
+    endsAt: number | undefined;
+    started: boolean;
+    startAt: number;
+    endAt: number;
+  }
+): { recordedAt: number; value: number }[] {
+  const sorted = samples
+    .filter(
+      (sample) =>
+        sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
+    )
+    .sort((a, b) => a.recordedAt - b.recordedAt)
+    .map(({ recordedAt, value, windowEndsAt }) => ({
+      recordedAt,
+      value,
+      windowEndsAt,
+    }));
+
+  if (window.started) {
+    return sorted
+      .filter(
+        (sample) =>
+          sample.windowEndsAt !== undefined &&
+          isSameWindow(sample.windowEndsAt, window.endsAt)
+      )
+      .map(({ recordedAt, value }) => ({ recordedAt, value }));
   }
 
-  return withGaps;
+  let lastUsed = -1;
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    if ((sorted[index]?.value ?? 0) > 0) {
+      lastUsed = index;
+      break;
+    }
+  }
+  return sorted
+    .slice(lastUsed + 1)
+    .map(({ recordedAt, value }) => ({ recordedAt, value }));
 }

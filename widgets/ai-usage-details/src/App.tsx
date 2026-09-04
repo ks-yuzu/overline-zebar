@@ -7,6 +7,7 @@ import {
   UsageTrend,
   buildDailyUsage,
   buildWindowPeaks,
+  selectCurrentWindow,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
@@ -65,23 +66,6 @@ function formatUpdatedAt(generatedAt: string) {
   }).format(date);
 }
 
-function selectHistory(
-  history: ClaudeUsageHistorySample[],
-  valueKey: 'session_used_percent' | 'week_used_percent',
-  startAt: number,
-  endAt: number
-): TrendPoint[] {
-  return history
-    .filter(
-      (sample) => sample.recorded_at >= startAt && sample.recorded_at <= endAt
-    )
-    .sort((a, b) => a.recorded_at - b.recorded_at)
-    .map((sample) => ({
-      recordedAt: sample.recorded_at,
-      value: sample[valueKey],
-    }));
-}
-
 /**
  * A window's range is pinned when usage starts, and until then the reported
  * reset keeps sliding ahead. Plotting against that sliding value puts almost
@@ -101,18 +85,6 @@ function getTrendRange(
   return { startAt: endAt - windowSeconds, endAt, started };
 }
 
-/**
- * Claude has been seen to report a reset one minute either side of the real
- * boundary. Snapping to the sampling grid keeps that from reading as a window
- * of its own.
- */
-function windowKeyFor(resetsAt: string | undefined) {
-  if (!resetsAt) return undefined;
-  const parsed = Date.parse(resetsAt);
-  if (Number.isNaN(parsed)) return resetsAt;
-  return String(Math.round(parsed / 300_000));
-}
-
 function windowEndFor(resetsAt: string | undefined) {
   if (!resetsAt) return undefined;
   const parsed = Date.parse(resetsAt);
@@ -129,7 +101,6 @@ function selectSessionSamples(
       recordedAt: sample.recorded_at,
       value: sample.session_used_percent,
       windowEndsAt: windowEndFor(sample.session_resets_at),
-      windowKey: windowKeyFor(sample.session_resets_at),
     }));
 }
 
@@ -143,7 +114,6 @@ function selectWeekSamples(
       recordedAt: sample.recorded_at,
       value: sample.week_used_percent,
       windowEndsAt: windowEndFor(sample.week_resets_at),
-      windowKey: windowKeyFor(sample.week_resets_at),
     }));
 }
 
@@ -242,33 +212,32 @@ export default function App() {
         : ageMinutes >= 8
           ? `${ageMinutes}m old`
           : 'Fresh';
+  const sessionSamples = selectSessionSamples(data.history);
+  const weekSamples = selectWeekSamples(data.history);
   const sessionRange = getTrendRange(
     data.current_session,
     SESSION_WINDOW_SECONDS,
     now
   );
   const weekRange = getTrendRange(data.current_week, WEEK_WINDOW_SECONDS, now);
-  const sessionHistory = selectHistory(
-    data.history,
-    'session_used_percent',
-    sessionRange.startAt,
-    sessionRange.endAt
-  );
-  const weekHistory = selectHistory(
-    data.history,
-    'week_used_percent',
-    weekRange.startAt,
-    weekRange.endAt
-  );
+  const sessionHistory: TrendPoint[] = selectCurrentWindow(sessionSamples, {
+    endsAt: windowEndFor(data.current_session.resets_at),
+    endAt: sessionRange.endAt,
+    startAt: sessionRange.startAt,
+    started: sessionRange.started,
+  });
+  const weekHistory: TrendPoint[] = selectCurrentWindow(weekSamples, {
+    endsAt: windowEndFor(data.current_week.resets_at),
+    endAt: weekRange.endAt,
+    startAt: weekRange.startAt,
+    started: weekRange.started,
+  });
   const historyRange = {
     startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
     endAt: now / 1000,
   };
-  const dailyUsage = buildDailyUsage(
-    selectWeekSamples(data.history),
-    historyRange
-  );
-  const sessionPeaks = buildWindowPeaks(selectSessionSamples(data.history), {
+  const dailyUsage = buildDailyUsage(weekSamples, historyRange);
+  const sessionPeaks = buildWindowPeaks(sessionSamples, {
     ...historyRange,
     now: now / 1000,
     windowSeconds: SESSION_WINDOW_SECONDS,

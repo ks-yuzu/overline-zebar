@@ -11,7 +11,11 @@ export { default as UsageTrend } from './components/usage-trend/UsageTrend';
 export type { TrendPoint } from './components/usage-trend/UsageTrend';
 export { default as UsageHistory } from './components/usage-history/UsageHistory';
 export type { UsageHistorySegment } from './components/usage-history/UsageHistory';
-export { buildDailyUsage, buildWindowPeaks } from './utils/usageSeries';
+export {
+  buildDailyUsage,
+  buildWindowPeaks,
+  selectCurrentWindow,
+} from './utils/usageSeries';
 export type {
   DailyUsage,
   UsageBar,
