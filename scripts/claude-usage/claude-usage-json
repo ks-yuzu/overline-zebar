@@ -263,20 +263,34 @@ sub reading_from {
 	return [$percent, $1, $2];
 }
 
-# A heading with no parenthetical is the all-models week: the wording was bare
-# before the per-model windows existed, and some versions still print it that
-# way. Only a parenthetical that names something else marks a per-model window.
+# `(all models)` names the window that spans every model. Matched loosely on
+# purpose: this is the only route to `current_week`, so wording that drifted
+# would take the session window down with it rather than just losing the new
+# one - the helper needs both windows or it publishes neither.
 sub is_all_models {
 	my ($label) = @_;
-	return 1 unless defined $label;
-	return $label =~ /^all\s*models$/i ? 1 : 0;
+	return 0 unless defined $label;
+	return $label =~ /all[\s\-]*models/i ? 1 : 0;
 }
 
 sub read_windows {
 	my ($screen) = @_;
 	my ($session, $week, %model);
+	my @sections = scan_sections($screen);
 
-	for my $section (scan_sections($screen)) {
+	# A screen that labels one weekly window labels them all. So a weekly
+	# heading whose parenthetical did not parse - wrapped inside the brackets,
+	# brackets within the label, a separator that is not a bracket at all - is
+	# not the bare heading of the older wording. It is a label that could not
+	# be read, and on a screen with two weekly windows it is the per-model one.
+	# Taking it for the all-models week publishes one model's consumption as
+	# the weekly total, which is the failure the section boundaries exist to
+	# stop, re-entered through the fallback.
+	my $labelled_week = grep {
+		$_->{kind} eq 'week' && defined $_->{label}
+	} @sections;
+
+	for my $section (@sections) {
 		my $reading = reading_from($section->{body})
 			or next;
 		my $window = { label => $section->{label}, reading => $reading };
@@ -289,6 +303,12 @@ sub read_windows {
 		}
 		elsif (is_all_models($section->{label})) {
 			$week = $window;
+		}
+		elsif (!defined $section->{label}) {
+			# The wording from before the per-model windows existed. Trusted
+			# only while nothing on this screen carries a label to read it
+			# against.
+			$week = $window unless $labelled_week;
 		}
 		else {
 			$model{lc $section->{label}} = $window;
@@ -304,7 +324,8 @@ sub read_windows {
 		# Only a tie-break between windows already found by their shape, never
 		# the test for what a per-model window is. Naming the model there would
 		# make a renamed one read as a plan that has no such window at all.
-		my @fable = grep { /fable/ } @model_labels;
+		my @fable = grep { $_ eq 'fable' } @model_labels;
+		@fable = grep { /fable/ } @model_labels unless @fable;
 		$model_week = $model{ $fable[0] } if @fable == 1;
 	}
 
@@ -473,7 +494,17 @@ my $week = $windows->{week};
 my $model_week = $windows->{model_week};
 
 if (!$session || !$week) {
-	die "could not parse Current session and Current week from Claude /usage\n";
+	# Name what was found. A weekly heading whose label went unrecognised is
+	# read as a per-model window, and then the message alone would send the
+	# reader looking for a window that was on the screen all along.
+	die sprintf
+		"could not parse Current session and Current week from Claude /usage"
+			. " (session %s, all-models week %s, per-model weekly labels: %s)\n",
+		$session ? 'found' : 'missing',
+		$week ? 'found' : 'missing',
+		@{ $windows->{model_labels} }
+			? join(', ', @{ $windows->{model_labels} })
+			: 'none';
 }
 
 # Two of them and no way to tell which the widget should draw. Recording either
