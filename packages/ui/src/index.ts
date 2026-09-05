@@ -14,7 +14,9 @@ export type { UsageHistorySegment } from './components/usage-history/UsageHistor
 export {
   buildDailyUsage,
   buildWindowPeaks,
+  hasJustReset,
   selectCurrentWindow,
+  windowTrendRange,
 } from './utils/usageSeries';
 export type {
   DailyUsage,

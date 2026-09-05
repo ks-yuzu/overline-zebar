@@ -7,7 +7,9 @@ import {
   UsageTrend,
   buildDailyUsage,
   buildWindowPeaks,
+  hasJustReset,
   selectCurrentWindow,
+  windowTrendRange,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
@@ -66,23 +68,22 @@ function formatUpdatedAt(generatedAt: string) {
   }).format(date);
 }
 
-/**
- * A window's range is pinned when usage starts, and until then the reported
- * reset keeps sliding ahead. Plotting against that sliding value puts almost
- * the whole axis in the future, so an unstarted window falls back to the hours
- * just gone - which is all there is to show.
- */
+/** Reads Claude's period shape into the shared range. */
 function getTrendRange(
   period: ClaudeUsagePeriod,
   windowSeconds: number,
-  now: number
+  now: number,
+  justReset: boolean
 ) {
-  const parsedResetAt = period.resets_at
-    ? Date.parse(period.resets_at) / 1000
-    : Number.NaN;
-  const started = period.used_percent > 0 && Number.isFinite(parsedResetAt);
-  const endAt = started ? parsedResetAt : now / 1000;
-  return { startAt: endAt - windowSeconds, endAt, started };
+  return windowTrendRange({
+    resetsAt: period.resets_at
+      ? Date.parse(period.resets_at) / 1000
+      : Number.NaN,
+    windowSeconds,
+    usedPercent: period.used_percent,
+    justReset,
+    now: now / 1000,
+  });
 }
 
 function windowEndFor(resetsAt: string | undefined) {
@@ -241,9 +242,15 @@ export default function App() {
   const sessionRange = getTrendRange(
     data.current_session,
     SESSION_WINDOW_SECONDS,
-    now
+    now,
+    hasJustReset(sessionSamples)
   );
-  const weekRange = getTrendRange(data.current_week, WEEK_WINDOW_SECONDS, now);
+  const weekRange = getTrendRange(
+    data.current_week,
+    WEEK_WINDOW_SECONDS,
+    now,
+    hasJustReset(weekSamples)
+  );
   const sessionHistory: TrendPoint[] = selectCurrentWindow(sessionSamples, {
     endsAt: windowEndFor(data.current_session.resets_at),
     endAt: sessionRange.endAt,

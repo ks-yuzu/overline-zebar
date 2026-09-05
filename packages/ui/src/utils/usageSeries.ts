@@ -256,6 +256,63 @@ export function buildWindowPeaks(
 }
 
 /**
+ * Whether the newest reading is the first one taken after a reset.
+ *
+ * A window's range is pinned when usage starts, so before that the reported
+ * reset slides and cannot be used as an axis. Zero usage alone does not say
+ * which of the two we are in: it is equally the reading taken seconds after a
+ * reset, whose window has begun. The history tells them apart - the newest
+ * sample fell to nothing and reports a different window than the one before
+ * it, which only happens on the reading that follows a reset.
+ *
+ * It stays true for one sampling interval. After that the run is either
+ * spending, which pins the window, or a flat line of zeros, which is the
+ * unstarted case the sliding reset was meant for.
+ */
+export function hasJustReset(samples: UsageHistorySample[]): boolean {
+  const previous = samples.at(-2);
+  const latest = samples.at(-1);
+  if (!previous || !latest) return false;
+
+  return (
+    latest.value === 0 &&
+    previous.value > 0 &&
+    !isSameWindow(previous.windowEndsAt, latest.windowEndsAt)
+  );
+}
+
+/**
+ * The axis a window's trend is drawn against.
+ *
+ * A started window is pinned to its end, so the axis is the window itself. An
+ * unstarted one has no end yet - the reported reset slides ahead of now - and
+ * anchoring to it would put the whole axis in the future, so it falls back to
+ * the hours just gone, which is all there is to show.
+ *
+ * `justReset` is what separates the reading taken seconds after a reset from a
+ * quota that has sat idle: both report nothing spent, but the first names the
+ * window now running. Without it that reading is drawn at the right edge of the
+ * axis of the window that just ended - a window ending empty, next to a card
+ * saying the reset is a whole window away.
+ *
+ * Both detail views derive their axis here rather than each keeping this
+ * judgement: they had it twice, and the same fault with it.
+ */
+export function windowTrendRange(window: {
+  resetsAt: number;
+  windowSeconds: number;
+  usedPercent: number;
+  justReset: boolean;
+  now: number;
+}) {
+  const started =
+    (window.usedPercent > 0 || window.justReset) &&
+    Number.isFinite(window.resetsAt);
+  const endAt = started ? window.resetsAt : window.now;
+  return { startAt: endAt - window.windowSeconds, endAt, started };
+}
+
+/**
  * The samples belonging to the window on show. A started window is pinned to
  * its end, so its samples are the ones reporting that end. An unstarted one
  * has no end yet - its reported reset slides - so it is the run of zeros since
