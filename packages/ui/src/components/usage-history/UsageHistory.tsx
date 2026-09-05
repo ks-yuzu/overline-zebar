@@ -20,6 +20,10 @@ type Props = {
   bars: UsageBar[];
   endAt: number;
   label: string;
+  /**
+   * How the line aggregates, as a qualifier of "usage" - "cumulative", say.
+   * Not the word usage itself: the aria label reads it as one.
+   */
   lineLabel?: string;
   /**
    * Which mark carries the reading. Only that one takes the accent colour, so

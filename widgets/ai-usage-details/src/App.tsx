@@ -321,9 +321,11 @@ export default function App() {
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              5H usage trend
+              [5H] usage trend
             </p>
-            <p className="text-[10px] text-text-muted">Current session</p>
+            <p className="text-[10px] text-text-muted">
+              {sessionHistory.length} samples
+            </p>
           </div>
           <UsageTrend
             endAt={sessionRange.endAt}
@@ -336,9 +338,11 @@ export default function App() {
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              7D usage trend
+              [7D] usage trend
             </p>
-            <p className="text-[10px] text-text-muted">Current week</p>
+            <p className="text-[10px] text-text-muted">
+              {weekHistory.length} samples
+            </p>
           </div>
           <UsageTrend
             endAt={weekRange.endAt}
@@ -354,9 +358,11 @@ export default function App() {
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              5H usage peaks
+              [14D] 5H usage peak per window
             </p>
-            <p className="text-[10px] text-text-muted">Per window · 14D</p>
+            <p className="text-[10px] text-text-muted">
+              {sessionSamples.length} samples
+            </p>
           </div>
           <UsageHistory
             barLabel="window peak"
@@ -370,9 +376,11 @@ export default function App() {
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              7D usage trend &amp; daily use
+              [14D] 7D usage trend and daily usage
             </p>
-            <p className="text-[10px] text-text-muted">Per day · 14D</p>
+            <p className="text-[10px] text-text-muted">
+              {weekSamples.length} samples
+            </p>
           </div>
           <UsageHistory
             barLabel="daily"
@@ -390,7 +398,6 @@ export default function App() {
 
       <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
-        <span>{data.history.length} retained samples · 14 days</span>
       </footer>
     </div>
   );

@@ -177,8 +177,16 @@ export default function UsageTrend({
       </div>
       <div className="flex justify-between text-[10px] tabular-nums text-text-muted">
         <span>{formatSampleTime(startAt)}</span>
-        <span>
-          {sampled.length} {sampled.length === 1 ? 'sample' : 'samples'}
+        {/* One series, but the slot holds the legend in both charts: the same
+            place saying the same kind of thing is what lets the column be read
+            as one. The line here is the quantity the fortnight chart draws as
+            its own line. */}
+        <span className="flex items-center gap-1">
+          <span
+            className="h-px w-2.5"
+            style={{ backgroundColor: 'var(--success)' }}
+          />
+          usage
         </span>
         <span>{formatSampleTime(endAt)}</span>
       </div>

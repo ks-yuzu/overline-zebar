@@ -143,9 +143,11 @@ function HistoryCard({
       <Card className="shrink-0 p-2.5">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-text-muted">
-            {label} usage trend &amp; daily use
+            [14D] {label} usage trend and daily usage
           </p>
-          <p className="text-[10px] text-text-muted">Per day · 14D</p>
+          <p className="text-[10px] text-text-muted">
+            {samples.length} samples
+          </p>
         </div>
         <UsageHistory
           barLabel="daily"
@@ -172,9 +174,9 @@ function HistoryCard({
     <Card className="shrink-0 p-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-text-muted">
-          {label} usage peaks
+          [14D] {label} usage peak per window
         </p>
-        <p className="text-[10px] text-text-muted">Per window · 14D</p>
+        <p className="text-[10px] text-text-muted">{samples.length} samples</p>
       </div>
       <UsageHistory
         barLabel="window peak"
@@ -370,9 +372,11 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-text-muted">
-                  {label} usage trend
+                  [{label}] usage trend
                 </p>
-                <p className="text-[10px] text-text-muted">Current window</p>
+                <p className="text-[10px] text-text-muted">
+                  {history.length} samples
+                </p>
               </div>
               <UsageTrend
                 endAt={range.endAt}
@@ -407,7 +411,6 @@ export default function App() {
 
       <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
-        <span>{data.history.length} retained samples · 14 days</span>
       </footer>
     </div>
   );
