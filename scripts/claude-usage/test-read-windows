@@ -73,7 +73,11 @@ my @cases = (
 		labels => 'fable',
 	},
 	{
-		name => 'per-model heading wrapped onto its own line',
+		# A label has to sit on its heading's line. Reading one from the line
+		# below cannot be told apart from reading the first line of the body,
+		# and the body's own bracket then becomes a window that was never on
+		# the screen - taking the weekly total down with it.
+		name => 'per-model label on the line below its heading',
 		screen => join("\r\n",
 			'Current session',
 			'23% 23% used',
@@ -88,9 +92,84 @@ my @cases = (
 		),
 		session => 23,
 		week => 31,
-		model => 68,
-		model_label => 'Fable',
-		labels => 'fable',
+		model => undef,
+		labels => '',
+	},
+	{
+		name => 'bracketed text below a bare heading is body, not a label',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week',
+			'(resets weekly)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The expression this replaced was case-insensitive, and dropping that
+		# would turn a capitalisation change into a helper that dies on every
+		# run and serves the same frozen cache for good.
+		name => 'panel rendered with different capitalisation',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% Used',
+			'resets 11:10am (Asia/Tokyo)',
+			'CURRENT WEEK (ALL MODELS)',
+			'31% 31% USED',
+			'RESETS Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The session window got none of the guards the weekly one did. A
+		# session split by model would publish one model's five hours as
+		# everything the session had used.
+		name => 'session window split by model',
+		screen => join("\r\n",
+			'Current session (all models)',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current session (Fable)',
+			'68% 68% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The session heading carries no parenthetical today, so a bare one
+		# beside a labelled one is still the aggregate. Dropping it the way an
+		# unlabelled weekly heading is dropped would kill a working screen.
+		name => 'bare session heading beside a per-model one',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current session (Fable)',
+			'68% 68% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
 	},
 	{
 		# The wording before the per-model windows existed. It has to stay the

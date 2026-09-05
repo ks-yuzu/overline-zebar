@@ -237,7 +237,11 @@ sub normalize_screen {
 sub scan_sections {
 	my ($screen) = @_;
 	my @sections;
-	while ($screen =~ /Current\s*(session|week)\b\s*(?:\(\s*([^()\n]{1,40}?)\s*\))?/gi) {
+	# The label has to sit on its own heading's line. Allowed to wrap, a
+	# bracket that opens the body - `(resets weekly)`, a footnote - becomes a
+	# window that was never on the screen, and the heading it was taken from
+	# loses its own numbers to it.
+	while ($screen =~ /Current\s*(session|week)\b[ \t]*(?:\(\s*([^()\n]{1,40}?)\s*\))?/gi) {
 		push @sections, {
 			kind => lc $1,
 			label => $2,
@@ -257,9 +261,13 @@ sub scan_sections {
 # taken from the one the word follows, not the first on the line.
 sub reading_from {
 	my ($body) = @_;
-	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/;
+	# Case-insensitive, as the expression this replaced was. The helper
+	# publishes nothing unless both windows parse, so a capitalisation change
+	# would not cost the new window - it would stop the helper outright and
+	# leave the widget re-reading a cache that never moves again.
+	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/i;
 	my $percent = $1;
-	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/;
+	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/i;
 	return [$percent, $1, $2];
 }
 
@@ -299,6 +307,17 @@ sub read_windows {
 		# half-drawn one carry no numbers yet, so each window keeps the last
 		# render that was complete rather than the last heading seen.
 		if ($section->{kind} eq 'session') {
+			# A session window scoped to one model is not collected: there is
+			# no field for it, and taking it for the whole session would put
+			# one model's five hours under every model's name.
+			#
+			# Unlike the weekly heading, a bare one here is still the
+			# aggregate. The panel labels its weekly total `(all models)`
+			# today and leaves the session heading bare, so an unlabelled
+			# session heading beside a labelled one is the wording in use,
+			# not a label that failed to parse.
+			next if defined $section->{label}
+				&& !is_all_models($section->{label});
 			$session = $window;
 		}
 		elsif (is_all_models($section->{label})) {
