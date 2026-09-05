@@ -154,6 +154,11 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     **1つ前のwindowの軸の右端に新windowの最初の0%を置く**ことになり、5時間残って
     いるwindowが「空のまま終わった」ように読める。同じcardのtextは
     "Resets in 4h 58m" と出るため、textとgraphが食い違う。
+  - **例外は「落下も読み取りも15分以内」の場合に限る。** historyは連続しない —
+    Claude helperはlast_known表示の間sampleを記録せず (数時間続き得る)、cronは
+    機械のスリープで止まる。そのgapをまたいだ落下は「今resetを観測した」ではなく、
+    resetの後に未使用のまま放置されreset時刻がまた滑っている可能性がある。15分は
+    このfileが既に「jitterかgapか」の境界として持つ値 (`MISSING_SAMPLES_SECONDS`)。
   - この判定はClaude・Codexで共通なので`packages/ui`の`hasJustReset`と
     `windowTrendRange`が持つ。両viewは自分のfield名を読み替えるだけにする。
 - window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した

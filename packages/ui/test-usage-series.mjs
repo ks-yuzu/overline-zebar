@@ -128,6 +128,21 @@ const cases = [
     expect: false,
   },
   {
+    // Both widgets sort before calling, so nothing here depends on the sort
+    // inside - which is the reason to pin it: a caller that does not sort
+    // would otherwise read whichever two entries happen to be last.
+    name: 'samples handed over out of order',
+    run: () =>
+      hasJustReset(
+        [
+          { recordedAt: NOW, value: 0, windowEndsAt: NOW + WINDOW },
+          { recordedAt: NOW - 300, value: 22, windowEndsAt: NOW + 300 },
+        ],
+        NOW
+      ),
+    expect: true,
+  },
+  {
     name: 'a history too short to compare',
     run: () => hasJustReset(series([[0, 0, NOW + WINDOW]]), NOW),
     expect: false,
@@ -223,6 +238,22 @@ const cases = [
           startAt: NOW,
           endAt: NOW + WINDOW,
         }
+      ).length,
+    expect: 1,
+  },
+  {
+    // isSameWindow treats an undefined end as matching anything, so without
+    // the guard a window with no end of its own takes every sample it is
+    // handed - 14 days of them onto a five-hour axis. With it, the selection
+    // falls back to the range, which keeps the one sample inside it.
+    name: 'window: a started window with no end of its own falls back to the range',
+    run: () =>
+      selectCurrentWindow(
+        [
+          { recordedAt: NOW - 600, value: 40, windowEndsAt: NOW - 300 },
+          { recordedAt: NOW, value: 3, windowEndsAt: NOW + WINDOW },
+        ],
+        { endsAt: undefined, started: true, startAt: NOW, endAt: NOW + WINDOW }
       ).length,
     expect: 1,
   },

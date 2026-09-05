@@ -273,6 +273,9 @@ export function buildWindowPeaks(
  * Anchoring to that would put the whole axis in the future, which is what the
  * unstarted fallback exists to avoid. So both the fall and the reading itself
  * must be inside the span a gap is still jitter.
+ *
+ * `now` is epoch seconds, like every recordedAt here. Milliseconds make the
+ * age comparison enormous and this quietly answer false for good.
  */
 export function hasJustReset(
   samples: UsageHistorySample[],
@@ -310,6 +313,8 @@ export function hasJustReset(
  *
  * Both detail views derive their axis here rather than each keeping this
  * judgement: they had it twice, and the same fault with it.
+ *
+ * `now` and `resetsAt` are epoch seconds, like every recordedAt here.
  */
 export function windowTrendRange(window: {
   resetsAt: number;
