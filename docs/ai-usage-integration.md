@@ -161,11 +161,26 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     このfileが既に「jitterかgapか」の境界として持つ値 (`MISSING_SAMPLES_SECONDS`)。
   - この判定はClaude・Codexで共通なので`packages/ui`の`hasJustReset`と
     `windowTrendRange`が持つ。両viewは自分のfield名を読み替えるだけにする。
+- **panelの見出しは「<quota> usage <棒/線が何か>」、範囲は副題へ置く。** 「14D 5H
+  peaks」は範囲 (14D) とquota幅 (5H) を区切り無しに並べており、どちらがどちらの
+  修飾か読めなかった。現在は次のとおり。
+  - 2段目: 「5H usage trend」「7D usage trend」/ 副題は「Current session」など
+  - 3段目: 「5H usage peaks」(棒のみ)、「7D usage trend & daily use」(線と棒) /
+    副題は「Per window · 14D」「Per day · 14D」
+  - 3段目右の線は2段目と同じ累積のusageなので`trend`と呼び、棒 (その日の消費) を
+    並記する。1語でまとめると、trendも累積である以上、両者を分ける語にならない。
+- **2つのgraphは縦の幾何を共有する** (`packages/ui/src/utils/chartGeometry.ts`)。
+  同じ列に縦に並ぶため、同じ100%が同じ高さで描かれないと傾きや高さを比べられない。
+  panelの高さ、plot上下の余白、左右のinset、既定のviewBox幅を共有する。高さだけ
+  揃えても、余白が違えば帯がその差だけずれる。左右のinsetが違えばplot矩形が縦に
+  揃わない。既定幅が違うと、片方でpropを省いた時に無言で別の幾何になる。
+- **軸の造作も揃える。** 破線グリッドと%ラベル、下端の実線baselineを両方が持つ。
+  片方にラベルとbaselineが無いと、同じ尺度でも別種のgraphに見える。
 - window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した
   場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
 - Claude詳細は3段構成とし、**全段で左を5H、右を7Dに固定する。**
   現在値、window内の推移、14日の推移が同じ列に並び、列が期間を表す。
-  - この配置のため幅は920px、高さは580pxとする。
+  - この配置のため幅は920px、高さは630pxとする。
   - 3段目は保持履歴14日分を横軸とし、左に5H window単位、右に日単位の推移を置く。
     日や5H windowをまたぐ傾向は、window内のgraphからは読めない。
 - 右列 (7D) の14日graph:
@@ -178,6 +193,12 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     軸が伸び、日ごとの比較が壊れるため。
   - sampleが1件もない日は0%の棒ではなく「データなし」として区別する。
     cron停止と不使用が同じ見え方になるため。
+  - **ただし最初のsampleより前は「データなし」にしない。** retentionは14日遡るが
+    収集がそこまで遡るとは限らず、収集前の区間は何かが記録に失敗した区間ではない。
+    欠測として塗ると、収集期間が短い間は軸の大半が覆われ (実測で71%)、地の色と
+    見分けがつかなくなるうえ、印が「ここでcronが止まった」を意味しなくなる。
+  - 棒が1本も無い時は「No samples yet」を出す。上の規則により、収集開始直後は
+    軸だけが残るため。
   - 保持期間の先頭のwindowは切り詰められているため、その最初のsampleは
     消費ではなく基準値として扱う。
 - 左列 (5H) の14日graph。5Hの上限は作業を実際に止めるため、100%へ近づいた

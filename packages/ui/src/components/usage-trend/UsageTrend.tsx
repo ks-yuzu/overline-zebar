@@ -1,4 +1,11 @@
 import { useId } from 'react';
+import {
+  CHART_DEFAULT_WIDTH as DEFAULT_WIDTH,
+  CHART_HEIGHT as HEIGHT,
+  CHART_PADDING_TOP as PADDING_TOP,
+  CHART_PADDING_X as PADDING_X,
+  CHART_PLOT_HEIGHT,
+} from '../../utils/chartGeometry';
 
 export type TrendPoint = {
   recordedAt: number;
@@ -22,10 +29,6 @@ type Props = {
   viewWidth?: number;
 };
 
-const DEFAULT_WIDTH = 180;
-const HEIGHT = 72;
-const PADDING_X = 8;
-const PADDING_Y = 7;
 const MAX_POINTS = 120;
 
 function downsample(points: TrendPoint[]) {
@@ -60,27 +63,29 @@ export default function UsageTrend({
   const gradientId = `usage-${useId().replaceAll(':', '')}`;
   const sampled = downsample(points);
   const timeRange = Math.max(1, endAt - startAt);
-  const chartHeight = HEIGHT - PADDING_Y * 2;
+  const chartHeight = CHART_PLOT_HEIGHT;
   const chartWidth = WIDTH - PADDING_X * 2;
+  const baselineY = PADDING_TOP + chartHeight;
   const coordinates = sampled.map((point) => {
     const x =
       PADDING_X + ((point.recordedAt - startAt) / timeRange) * chartWidth;
     const value = Math.min(100, Math.max(0, point.value));
-    const y = PADDING_Y + ((100 - value) / 100) * chartHeight;
+    const y = PADDING_TOP + ((100 - value) / 100) * chartHeight;
     return { x, y };
   });
   const linePath = coordinates
     .map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
     .join(' ');
-  const areaPath = `${linePath} L ${coordinates.at(-1)?.x ?? PADDING_X} ${HEIGHT - PADDING_Y} L ${coordinates.at(0)?.x ?? PADDING_X} ${HEIGHT - PADDING_Y} Z`;
+  const areaPath = `${linePath} L ${coordinates.at(-1)?.x ?? PADDING_X} ${baselineY} L ${coordinates.at(0)?.x ?? PADDING_X} ${baselineY} Z`;
   const lastCoordinate = coordinates.at(-1);
 
   return (
     <div>
       <div className="relative">
         <svg
-          aria-label={`${label} usage history`}
-          className="h-[82px] w-full"
+          aria-label={`${label} usage as read, across the window on show`}
+          className="w-full"
+          style={{ height: HEIGHT }}
           role="img"
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         >
@@ -94,21 +99,31 @@ export default function UsageTrend({
               />
             </linearGradient>
           </defs>
-          {[0, 0.5, 1].map((ratio) => {
-            const y = PADDING_Y + ratio * chartHeight;
-            return (
+          {/* Same furniture as the fortnight chart below: the pair is read as
+              one scale, and an axis drawn two ways breaks that before the
+              numbers are even compared. */}
+          {[0, 0.5].map((ratio) => (
+            <g key={ratio}>
               <line
-                key={ratio}
                 stroke="var(--border)"
                 strokeDasharray="2 3"
                 strokeWidth="0.7"
                 x1={PADDING_X}
                 x2={WIDTH - PADDING_X}
-                y1={y}
-                y2={y}
+                y1={PADDING_TOP + ratio * chartHeight}
+                y2={PADDING_TOP + ratio * chartHeight}
               />
-            );
-          })}
+              <text
+                fill="var(--text-muted)"
+                fontSize="8"
+                opacity="0.7"
+                x={PADDING_X + 2}
+                y={PADDING_TOP + ratio * chartHeight - 2}
+              >
+                {100 - ratio * 100}%
+              </text>
+            </g>
+          ))}
           {paceGuide && (
             <line
               aria-hidden="true"
@@ -118,8 +133,8 @@ export default function UsageTrend({
               strokeWidth="0.75"
               x1={PADDING_X}
               x2={WIDTH - PADDING_X}
-              y1={HEIGHT - PADDING_Y}
-              y2={PADDING_Y}
+              y1={baselineY}
+              y2={PADDING_TOP}
             />
           )}
           {coordinates.length >= 2 && (
@@ -135,6 +150,14 @@ export default function UsageTrend({
               />
             </>
           )}
+          <line
+            stroke="var(--border)"
+            strokeWidth="0.7"
+            x1={PADDING_X}
+            x2={WIDTH - PADDING_X}
+            y1={baselineY}
+            y2={baselineY}
+          />
           {lastCoordinate && (
             <circle
               cx={lastCoordinate.x}

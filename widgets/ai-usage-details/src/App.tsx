@@ -320,7 +320,9 @@ export default function App() {
       <section className="grid shrink-0 grid-cols-2 gap-2">
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">5H trend</p>
+            <p className="text-xs font-medium text-text-muted">
+              5H usage trend
+            </p>
             <p className="text-[10px] text-text-muted">Current session</p>
           </div>
           <UsageTrend
@@ -329,12 +331,13 @@ export default function App() {
             paceGuide={sessionRange.started}
             points={sessionHistory}
             startAt={sessionRange.startAt}
-            viewWidth={420}
           />
         </Card>
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">7D trend</p>
+            <p className="text-xs font-medium text-text-muted">
+              7D usage trend
+            </p>
             <p className="text-[10px] text-text-muted">Current week</p>
           </div>
           <UsageTrend
@@ -343,7 +346,6 @@ export default function App() {
             paceGuide={weekRange.started}
             points={weekHistory}
             startAt={weekRange.startAt}
-            viewWidth={420}
           />
         </Card>
       </section>
@@ -351,27 +353,33 @@ export default function App() {
       <section className="grid shrink-0 grid-cols-2 gap-2">
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">14D 5H peaks</p>
-            <p className="text-[10px] text-text-muted">Per window</p>
+            <p className="text-xs font-medium text-text-muted">
+              5H usage peaks
+            </p>
+            <p className="text-[10px] text-text-muted">Per window · 14D</p>
           </div>
           <UsageHistory
             barLabel="window peak"
+            barUnit="window"
             bars={sessionPeaks}
             endAt={historyRange.endAt}
-            label="14D 5H"
+            label="5H"
             startAt={historyRange.startAt}
           />
         </Card>
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">14D weekly</p>
-            <p className="text-[10px] text-text-muted">Per day</p>
+            <p className="text-xs font-medium text-text-muted">
+              7D usage trend &amp; daily use
+            </p>
+            <p className="text-[10px] text-text-muted">Per day · 14D</p>
           </div>
           <UsageHistory
             barLabel="daily"
+            barUnit="day"
             bars={dailyUsage.bars}
             endAt={historyRange.endAt}
-            label="14D weekly"
+            label="7D"
             lineLabel="cumulative"
             primarySeries="line"
             segments={dailyUsage.segments}
