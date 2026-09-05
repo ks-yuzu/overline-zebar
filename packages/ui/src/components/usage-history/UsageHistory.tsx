@@ -211,6 +211,14 @@ export default function UsageHistory({
             }
             y={Math.max(PADDING_TOP + 7, toY(peakBar.value) - 3)}
           >
+            {/* Not clamped to the axis. These bars carry two different
+                quantities: a window peak, which is a share of a quota and so
+                never above 100, and a day's consumption, which sums the rises
+                of however many windows the day held and passes 100 whenever a
+                reset falls inside the day. The bar stops at the ceiling
+                because the axis does; the label is what says how far past it
+                went - and it is what made a poisoned series legible as 449%
+                rather than as one more full day. */}
             {Math.round(peakBar.value)}%
           </text>
         )}

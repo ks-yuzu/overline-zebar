@@ -265,6 +265,45 @@ reset時刻が取れないのは画面を描画途中で拾った時で、その
 (観測された1件は、前後が8%の週次を0%と報告していた)。現在値の公開は続ける。
 次回の取得で自然に直る一方、historyに入ると長期graphの消費量が二重計上になる。
 
+**同じ規則を14日retentionのfilterにも適用する。** 書き込み時に弾くだけでは、
+その規則が無かった頃のhelperが残したsampleが14日間cacheに居座る。実際に、
+`week_resets_at`を持たないsampleが17件残っていた状態で週次graphを描くと、
+ある日の消費が449% (14日合計547) になった。該当sampleを除くと40% (合計101)
+である。retention側でも弾くことで、次回の書き込みで消える。
+
+**widget側も、window識別子を持たないsampleをgraphから落とす。** cacheはhelperの
+どのversionよりも長生きするため、fileの内容を信用しない。消費量はwindow単位で
+求めるので、reset時刻の無いsampleは現在windowへ0%への落下として混ざり、その後の
+上昇で以前の分がもう一度計上されてしまう。
+
+**reset時刻は「現在時刻に最も近い候補」として解釈する。** Claudeはsessionのreset
+を時刻だけ (`5:50am`)、weekのresetを月日だけ (`Sep 7, 9am`) で表示し、どちらも
+日付や年を持たない。候補 (前日・当日・翌日 / 前年・当年・翌年) のうちnowに最も
+近いものを採る。
+
+refreshされた直後の画面ならresetは必ず先にあり、他の候補は1日・1年離れている
+ため、この規則は単純に先送りするのと同じ結果になる。**向きが問題になるのは
+`last_known`の画面である。** 表示されているresetが既に過ぎていることがあり、
+それを先送りするとsessionは約24時間後、weekは約1年後のresetを公開してしまう。
+chipの残り時間が「23h」と出たり、詳細viewの横軸が未来へ飛んで
+「No samples yet」になったりする。過ぎたresetは過ぎたまま公開する。
+
+**候補はwindow長 (5H / 7D、表示が分単位に丸まる分の猶予10分を加える) 以内に
+限る。** window長より離れたresetは、先ならまだ始まっていない window のもので、
+後ろなら画面がwindow 1本以上古いことになり、どちらもそのreadingのresetでは
+ない。該当する候補が無い場合は`resets_at`を公開しない。widgetはClaudeの表示
+文字列 (`5:50am`) をそのまま出し、残り時間のcount downをやめる。
+
+この上限が無いと、`last_known`が12時間以上古い時に翌日の候補が最も近くなる。
+5H windowに対して「6h」残っていると表示するようなreadingが出てしまう。
+
+**window長は3箇所に重複している。** helperの`%window_seconds`、
+`widgets/main/src/components/claudeUsage/ClaudeUsage.tsx`と
+`widgets/ai-usage-details/src/App.tsx`の`SESSION_WINDOW_SECONDS` /
+`WEEK_WINDOW_SECONDS`である。helper側は「公開するか否か」を決めるため、
+providerがwindow長を変えた場合は`resets_at`とhistory収集が止まる (手がかりは
+1 runあたりstderr 1行のみ)。変更時は3箇所を揃える。
+
 定時外のresetと取得失敗は、**0へ落ちた後の戻り方**で区別できる。元の値へ戻れば
 取得失敗、0付近から積み上がればresetである。
 
@@ -300,7 +339,9 @@ Codex UIが必要とする主なfield:
 - 各windowの`usedPercent`、`windowDurationMins`、`resetsAt`
 - `history`
   - 5分ごとに、その時点で報告された全windowの使用率、時間幅、reset時刻を保持する。
-  - 14日分を保持し、現在windowと時間幅・reset時刻が一致するsampleだけを描画する。
+  - 14日分を保持し、描画時は**時間幅だけで**選ぶ (reset時刻は見ない)。retentionが
+    保持する全windowを残すためで、reset時刻まで一致させると進行中のwindowしか
+    残らない。
 
 ## Widgetが実行するcommand
 
@@ -641,7 +682,12 @@ CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
+perl scripts/claude-usage/test-normalize-reset
 ```
+
+`test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
+subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
+落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
 
 実機反映を伴うUI変更の完了条件は次のとおり。
 

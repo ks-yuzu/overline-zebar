@@ -32,7 +32,12 @@ export function StatRing({
     '--warning': { text: 'text-warning', stroke: 'stroke-warning' },
     '--danger': { text: 'text-danger', stroke: 'stroke-danger' },
   };
-  const colors = colorClassMap[thresholdColor];
+  // The type says the lookup always hits, but the value comes from config: a
+  // config that fails validation is merged into the defaults and used as-is,
+  // so labelColor can still hold something outside the union (a legacy or
+  // hand-edited '--primary', say). Without the fallback that renders the whole
+  // bar as a TypeError, on every monitor.
+  const colors = colorClassMap[thresholdColor] ?? colorClassMap['--text'];
 
   return (
     <div

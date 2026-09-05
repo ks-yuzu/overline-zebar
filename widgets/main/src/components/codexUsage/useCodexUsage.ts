@@ -11,8 +11,12 @@ export type CodexUsageWindow = {
 export type CodexRateLimits = {
   limitId: string;
   limitName: string | null;
-  primary: CodexUsageWindow | null;
-  secondary: CodexUsageWindow | null;
+  // Optional as well as nullable: Codex omits the key rather than sending
+  // null, and the helper's jq validator treats the two alike. Declaring it
+  // non-optional would let `primary === null ? … : primary.usedPercent` past
+  // the compiler and throw on exactly the payload this accepts.
+  primary?: CodexUsageWindow | null;
+  secondary?: CodexUsageWindow | null;
   credits: {
     hasCredits: boolean;
     unlimited: boolean;
@@ -48,6 +52,16 @@ function isUsageWindow(value: unknown): value is CodexUsageWindow {
   );
 }
 
+/**
+ * A window Codex does not report is null in the payload - and absent from it
+ * when the key is missing, which the helper's jq validator also treats as
+ * null. Rejecting the payload the helper considered valid would leave the chip
+ * at `--` on every poll with the reason only in devtools.
+ */
+function isReportedWindow(value: unknown): boolean {
+  return value === null || value === undefined || isUsageWindow(value);
+}
+
 function parseCodexUsage(value: string): CodexUsageData {
   const parsed = JSON.parse(value) as Partial<CodexUsageData>;
   const limits = parsed.rate_limits;
@@ -56,8 +70,12 @@ function parseCodexUsage(value: string): CodexUsageData {
     typeof parsed.generated_at !== 'string' ||
     !limits ||
     typeof limits !== 'object' ||
-    (limits.primary !== null && !isUsageWindow(limits.primary)) ||
-    (limits.secondary !== null && !isUsageWindow(limits.secondary))
+    // Without this an array, whose keys are both absent, reads as two
+    // unreported windows and reaches the UI as "unavailable" rather than as
+    // the shape error it is.
+    Array.isArray(limits) ||
+    !isReportedWindow(limits.primary) ||
+    !isReportedWindow(limits.secondary)
   ) {
     throw new Error('Codex usage command returned an unexpected JSON shape.');
   }
