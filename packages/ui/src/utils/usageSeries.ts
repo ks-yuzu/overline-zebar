@@ -329,10 +329,7 @@ export function selectCurrentWindow(
   }
 ): { recordedAt: number; value: number }[] {
   const sorted = samples
-    .filter(
-      (sample) =>
-        sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
-    )
+    .slice()
     .sort((a, b) => a.recordedAt - b.recordedAt)
     .map(({ recordedAt, value, windowEndsAt }) => ({
       recordedAt,
@@ -340,6 +337,11 @@ export function selectCurrentWindow(
       windowEndsAt,
     }));
 
+  // Reporting this window's end is what makes a sample part of it, and a window
+  // end is unique in time, so no time range is needed to keep other windows out
+  // - and using one loses the sample that opens the window. Providers derive
+  // the end from a moment after the reading: one second was enough to put the
+  // only sample a just-reset window had a second before its own axis began.
   if (window.started) {
     return sorted
       .filter(
@@ -350,20 +352,25 @@ export function selectCurrentWindow(
       .map(({ recordedAt, value }) => ({ recordedAt, value }));
   }
 
+  const withinRange = sorted.filter(
+    (sample) =>
+      sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
+  );
+
   // No end to match on - either nothing has been spent yet, or the reading
   // that would carry it was unreadable. Either way the run since usage last
   // fell is this window's: for an unused quota that is the stretch of zeros
   // since it reset, and for an unreadable one it is the climb so far.
   let windowStart = 0;
-  for (let index = sorted.length - 1; index > 0; index -= 1) {
-    const value = sorted[index]?.value ?? 0;
-    const before = sorted[index - 1]?.value ?? 0;
+  for (let index = withinRange.length - 1; index > 0; index -= 1) {
+    const value = withinRange[index]?.value ?? 0;
+    const before = withinRange[index - 1]?.value ?? 0;
     if (value < before) {
       windowStart = index;
       break;
     }
   }
-  return sorted
+  return withinRange
     .slice(windowStart)
     .map(({ recordedAt, value }) => ({ recordedAt, value }));
 }

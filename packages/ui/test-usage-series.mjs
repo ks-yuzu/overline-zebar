@@ -12,7 +12,11 @@
 //   CI=1 corepack pnpm --filter @overline-zebar/ui build
 //   node packages/ui/test-usage-series.mjs
 
-import { hasJustReset, windowTrendRange } from './dist/utils/usageSeries.js';
+import {
+  hasJustReset,
+  selectCurrentWindow,
+  windowTrendRange,
+} from './dist/utils/usageSeries.js';
 
 const WINDOW = 5 * 3600;
 const NOW = 1_600_000_000;
@@ -146,6 +150,47 @@ const cases = [
         now: NOW,
       }),
     expect: { startAt: NOW - WINDOW, endAt: NOW, started: false },
+  },
+  {
+    // Providers derive the window end from a moment after the reading, so the
+    // sample that opens a window can sit a second before the axis that window
+    // defines. Keeping it is the difference between a chart with the reading
+    // on it and one that says there is nothing to show.
+    name: 'window: the sample that opens it, taken a second early',
+    run: () =>
+      selectCurrentWindow(
+        [
+          { recordedAt: NOW - 300, value: 42, windowEndsAt: NOW - 300 },
+          { recordedAt: NOW - 1, value: 0, windowEndsAt: NOW + WINDOW },
+        ],
+        {
+          endsAt: NOW + WINDOW,
+          started: true,
+          startAt: NOW,
+          endAt: NOW + WINDOW,
+        }
+      ).length,
+    expect: 1,
+  },
+  {
+    // The previous window's samples report their own end, so no time range is
+    // needed to keep them out.
+    name: 'window: samples from the window before are left out',
+    run: () =>
+      selectCurrentWindow(
+        [
+          { recordedAt: NOW - 600, value: 40, windowEndsAt: NOW - 300 },
+          { recordedAt: NOW - 300, value: 42, windowEndsAt: NOW - 300 },
+          { recordedAt: NOW, value: 3, windowEndsAt: NOW + WINDOW },
+        ],
+        {
+          endsAt: NOW + WINDOW,
+          started: true,
+          startAt: NOW,
+          endAt: NOW + WINDOW,
+        }
+      ).length,
+    expect: 1,
   },
 ];
 
