@@ -83,6 +83,22 @@ script that reads those subroutines out of the helper:
 perl scripts/claude-usage/test-normalize-reset
 ```
 
+The panel lists one window per heading: `Current session`, `Current week (all
+models)`, and on a plan that caps one model separately a further `Current week
+(<model>)`. Each window's numbers are read from its own heading up to the next
+one, and a per-model window is recognised by its shape rather than by the model
+it names. Reading that split wrong swaps two plausible percentages and leaves
+the JSON looking correct, so the cases live in their own script:
+
+```sh
+perl scripts/claude-usage/test-read-windows
+```
+
+The per-model window reaches the JSON as the optional `current_week_model`, with
+the model name in its `label`. Plans without one have no such field. To see what
+the helper actually read, point `CLAUDE_USAGE_CAPTURE_PATH` at a file and run
+`--force`; the capture holds the raw terminal output of the panel.
+
 ## Helper options
 
 - `--force`: refresh the cache by opening Claude Code `/usage`.

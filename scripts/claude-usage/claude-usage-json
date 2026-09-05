@@ -208,35 +208,152 @@ my ($capture_file, $cache_file, $samples_file) = @ARGV;
 open my $capture, '<:raw', $capture_file
 	or die "cannot read capture file: $!\n";
 local $/;
-my $text = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
+my $raw_screen = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
 close $capture;
 
 # Remove OSC, CSI, and remaining short escape sequences emitted by the TUI.
-$text =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
-$text =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
-$text =~ s/\e.//gs;
-$text =~ tr/\x{00a0}/ /;
-$text =~ s/\r/\n/g;
-$text =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
-$text =~ s/[ \t]+/ /g;
-$text =~ s/\n+/\n/g;
-
-sub extract_usage {
-	my ($heading) = @_;
-	my @matches;
-	while (
-		$text =~ /$heading\b.*?(\d+(?:\.\d+)?)%\s*used.*?Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/gsi
-	) {
-		push @matches, [$1, $2, $3];
-	}
-	return $matches[-1];
+sub normalize_screen {
+	my ($screen) = @_;
+	$screen =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
+	$screen =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
+	$screen =~ s/\e.//gs;
+	$screen =~ tr/\x{00a0}/ /;
+	$screen =~ s/\r/\n/g;
+	$screen =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
+	$screen =~ s/[ \t]+/ /g;
+	$screen =~ s/\n+/\n/g;
+	return $screen;
 }
 
-my $session = extract_usage(qr/Current\s*session/i);
-my $week = extract_usage(qr/Current\s*week(?:\s*\(all\s*models\))?/i);
+# The panel gives each window a heading of its own: `Current session`, then
+# `Current week (all models)`, and on a plan that caps one model separately a
+# further `Current week (<model>)`. Cut the screen at those headings so a
+# window's numbers are read only from its own stretch.
+#
+# A single expression per window cannot do this. `Current week` followed by
+# `.*?% used` scans past the end of its own section, so the moment a second
+# weekly heading appears the all-models window reads the per-model figures -
+# a wrong value written under a name that has been right for months.
+sub scan_sections {
+	my ($screen) = @_;
+	my @sections;
+	# The label has to sit on its own heading's line. Allowed to wrap, a
+	# bracket that opens the body - `(resets weekly)`, a footnote - becomes a
+	# window that was never on the screen, and the heading it was taken from
+	# loses its own numbers to it.
+	while ($screen =~ /Current\s*(session|week)\b[ \t]*(?:\(\s*([^()\n]{1,40}?)\s*\))?/gi) {
+		push @sections, {
+			kind => lc $1,
+			label => $2,
+			heading_at => $-[0],
+			body_at => $+[0],
+		};
+	}
+	for my $i (0 .. $#sections) {
+		my $body_end = $i < $#sections ? $sections[$i + 1]{heading_at} : length $screen;
+		$sections[$i]{body} = substr $screen, $sections[$i]{body_at},
+			$body_end - $sections[$i]{body_at};
+	}
+	return @sections;
+}
 
-if (!$session || !$week) {
-	die "could not parse Current session and Current week from Claude /usage\n";
+# The gauge prints the figure twice - `31% 31% used` - so the percentage is
+# taken from the one the word follows, not the first on the line.
+sub reading_from {
+	my ($body) = @_;
+	# Case-insensitive, as the expression this replaced was. The helper
+	# publishes nothing unless both windows parse, so a capitalisation change
+	# would not cost the new window - it would stop the helper outright and
+	# leave the widget re-reading a cache that never moves again.
+	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/i;
+	my $percent = $1;
+	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/i;
+	return [$percent, $1, $2];
+}
+
+# `(all models)` names the window that spans every model. Matched loosely on
+# purpose: this is the only route to `current_week`, so wording that drifted
+# would take the session window down with it rather than just losing the new
+# one - the helper needs both windows or it publishes neither.
+sub is_all_models {
+	my ($label) = @_;
+	return 0 unless defined $label;
+	return $label =~ /all[\s\-]*models/i ? 1 : 0;
+}
+
+sub read_windows {
+	my ($screen) = @_;
+	my ($session, $week, %model);
+	my @sections = scan_sections($screen);
+
+	# A screen that labels one weekly window labels them all. So a weekly
+	# heading whose parenthetical did not parse - wrapped inside the brackets,
+	# brackets within the label, a separator that is not a bracket at all - is
+	# not the bare heading of the older wording. It is a label that could not
+	# be read, and on a screen with two weekly windows it is the per-model one.
+	# Taking it for the all-models week publishes one model's consumption as
+	# the weekly total, which is the failure the section boundaries exist to
+	# stop, re-entered through the fallback.
+	my $labelled_week = grep {
+		$_->{kind} eq 'week' && defined $_->{label}
+	} @sections;
+
+	for my $section (@sections) {
+		my $reading = reading_from($section->{body})
+			or next;
+		my $window = { label => $section->{label}, reading => $reading };
+
+		# The capture holds every redraw of the panel, and the headings of a
+		# half-drawn one carry no numbers yet, so each window keeps the last
+		# render that was complete rather than the last heading seen.
+		if ($section->{kind} eq 'session') {
+			# A session window scoped to one model is not collected: there is
+			# no field for it, and taking it for the whole session would put
+			# one model's five hours under every model's name.
+			#
+			# Unlike the weekly heading, a bare one here is still the
+			# aggregate. The panel labels its weekly total `(all models)`
+			# today and leaves the session heading bare, so an unlabelled
+			# session heading beside a labelled one is the wording in use,
+			# not a label that failed to parse.
+			next if defined $section->{label}
+				&& !is_all_models($section->{label});
+			$session = $window;
+		}
+		elsif (is_all_models($section->{label})) {
+			$week = $window;
+		}
+		elsif (!defined $section->{label}) {
+			# The wording from before the per-model windows existed. Trusted
+			# only while nothing on this screen carries a label to read it
+			# against.
+			$week = $window unless $labelled_week;
+		}
+		else {
+			$model{lc $section->{label}} = $window;
+		}
+	}
+
+	my @model_labels = sort keys %model;
+	my $model_week;
+	if (@model_labels == 1) {
+		$model_week = $model{ $model_labels[0] };
+	}
+	elsif (@model_labels > 1) {
+		# Only a tie-break between windows already found by their shape, never
+		# the test for what a per-model window is. Naming the model there would
+		# make a renamed one read as a plan that has no such window at all.
+		my @fable = grep { $_ eq 'fable' } @model_labels;
+		@fable = grep { /fable/ } @model_labels unless @fable;
+		$model_week = $model{ $fable[0] } if @fable == 1;
+	}
+
+	return {
+		session => $session,
+		week => $week,
+		model_week => $model_week,
+		model_labels => \@model_labels,
+	};
 }
 
 sub hour_24 {
@@ -389,14 +506,51 @@ sub archive_sample {
 	return;
 }
 
+my $text = normalize_screen($raw_screen);
+my $windows = read_windows($text);
+my $session = $windows->{session};
+my $week = $windows->{week};
+my $model_week = $windows->{model_week};
+
+if (!$session || !$week) {
+	# Name what was found. A weekly heading whose label went unrecognised is
+	# read as a per-model window, and then the message alone would send the
+	# reader looking for a window that was on the screen all along.
+	die sprintf
+		"could not parse Current session and Current week from Claude /usage"
+			. " (session %s, all-models week %s, per-model weekly labels: %s)\n",
+		$session ? 'found' : 'missing',
+		$week ? 'found' : 'missing',
+		@{ $windows->{model_labels} }
+			? join(', ', @{ $windows->{model_labels} })
+			: 'none';
+}
+
+# Two of them and no way to tell which the widget should draw. Recording either
+# would put one model's consumption under the other's name for as long as the
+# screen stays that way, so the window is left out and the other two go on.
+if (!$model_week && @{ $windows->{model_labels} } > 1) {
+	printf {*STDERR} "claude usage: %d per-model weekly windows on screen (%s); none recorded\n",
+		scalar @{ $windows->{model_labels} },
+		join ', ', @{ $windows->{model_labels} };
+}
+
 my $compact_text = $text;
 $compact_text =~ s/\s+//g;
 my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
 my $refresh_status = defined $age ? 'last_known' : 'not_reported';
 my $generated_epoch = time;
 my $generated_at = iso_local($generated_epoch);
-my $session_usage = usage_object($session, 'session');
-my $week_usage = usage_object($week, 'week');
+my $session_usage = usage_object($session->{reading}, 'session');
+my $week_usage = usage_object($week->{reading}, 'week');
+
+# A per-model week is a week: same length, so the same rule decides which
+# occurrence of the reset label is meant.
+my $model_week_usage;
+if ($model_week) {
+	$model_week_usage = usage_object($model_week->{reading}, 'week');
+	$model_week_usage->{label} = $model_week->{label};
+}
 
 my @history;
 if (-s $cache_file) {
@@ -431,6 +585,21 @@ if (-s $cache_file) {
 				&& defined $_->{session_resets_at}
 				&& defined $_->{week_resets_at}
 		} @{$previous->{history}};
+
+		# The per-model window is carried as a complete triple or not at all. A
+		# percentage with no reset cannot be placed in a window, and one with no
+		# label cannot be told apart from the next model's, so a sample that has
+		# part of the triple loses that part and keeps the two windows that were
+		# always there. Applied on every write, so a cache an earlier helper left
+		# half-written is cleaned rather than drawn for the next 14 days.
+		for my $sample (@history) {
+			next if looks_like_number($sample->{week_model_used_percent})
+				&& defined $sample->{week_model_resets_at}
+				&& defined $sample->{week_model_label};
+			delete @{$sample}{
+				qw(week_model_used_percent week_model_resets_at week_model_label)
+			};
+		}
 	}
 }
 
@@ -441,6 +610,13 @@ if (-s $cache_file) {
 # that must not enter the history the graphs are derived from.
 my $reset_times_parsed = defined $session_usage->{resets_at}
 	&& defined $week_usage->{resets_at};
+
+if ($refresh_status ne 'last_known'
+	&& $model_week_usage
+	&& !defined $model_week_usage->{resets_at}) {
+	printf {*STDERR}
+		"claude usage: per-model weekly reset time did not parse; that window not recorded\n";
+}
 
 if ($refresh_status ne 'last_known' && !$reset_times_parsed) {
 	# Left silent this would stop history collection for good if the wording or
@@ -460,6 +636,16 @@ if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 		if defined $session_usage->{resets_at};
 	$sample{week_resets_at} = $week_usage->{resets_at}
 		if defined $week_usage->{resets_at};
+
+	# The per-model window rides along; it does not gate the sample the way the
+	# other two do. Its heading and its reset wording are the newest part of the
+	# screen and the likeliest to change, and letting a change there stop the
+	# sample would empty the graphs for the two windows that still parsed.
+	if ($model_week_usage && defined $model_week_usage->{resets_at}) {
+		$sample{week_model_used_percent} = 0 + $model_week_usage->{used_percent};
+		$sample{week_model_resets_at} = $model_week_usage->{resets_at};
+		$sample{week_model_label} = $model_week_usage->{label};
+	}
 
 	if (@history && $generated_epoch - $history[-1]->{recorded_at} < 60) {
 		$history[-1] = \%sample;
@@ -481,6 +667,7 @@ my %output = (
 	current_week => $week_usage,
 	history => \@history,
 );
+$output{current_week_model} = $model_week_usage if $model_week_usage;
 $output{last_known_age} = $age if defined $age;
 
 # Not pretty-printed: the widget re-reads this file every 60s, and indentation
