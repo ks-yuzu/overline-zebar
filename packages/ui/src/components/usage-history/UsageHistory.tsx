@@ -2,9 +2,9 @@ import { useId } from 'react';
 import {
   CHART_DEFAULT_WIDTH as DEFAULT_WIDTH,
   CHART_HEIGHT as HEIGHT,
-  CHART_PADDING_BOTTOM as PADDING_BOTTOM,
   CHART_PADDING_TOP as PADDING_TOP,
   CHART_PADDING_X as PADDING_X,
+  CHART_PLOT_HEIGHT,
 } from '../../utils/chartGeometry';
 import type { UsageBar } from '../../utils/usageSeries';
 
@@ -77,7 +77,7 @@ export default function UsageHistory({
   const lineColor =
     primarySeries === 'line' ? 'var(--success)' : 'var(--primary-border)';
   const clipId = `usage-history-${useId().replaceAll(':', '')}`;
-  const chartHeight = HEIGHT - PADDING_TOP - PADDING_BOTTOM;
+  const chartHeight = CHART_PLOT_HEIGHT;
   const chartWidth = WIDTH - PADDING_X * 2;
   const timeRange = Math.max(1, endAt - startAt);
   const baselineY = PADDING_TOP + chartHeight;

@@ -75,11 +75,11 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
 - Codex詳細もClaudeと同じ3段構成とし、列をwindowに対応させる (短い順)。
-  幅920px、高さ580px。3段目は14日を横軸とし、windowの長さで見方を変える。
+  幅920px、高さ630px。3段目は14日を横軸とし、windowの長さで見方を変える。
   Claude・Codexで扱いは同じである。
   - **1日未満のwindow**はwindowごとの到達点。1日に何度もresetするため、
     日へ畳むと複数のwindowが混ざる。
-  - 集計単位を示すラベル (`Per window` / `Per day`、凡例) は両providerで同じ語に
+  - 集計単位を示す語 (見出しの`per window` / `per day`、凡例) は両providerで同じ語に
     する。providerごとの呼び分け (Claudeは5Hを"session"と呼ぶ) を持ち込むと、
     同じ集計を別物として読ませてしまう。呼び名は上段のcardに残る。
   - **1日以上のwindow**は日次の消費量と累積。windowごとにすると14日で
@@ -161,14 +161,20 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     このfileが既に「jitterかgapか」の境界として持つ値 (`MISSING_SAMPLES_SECONDS`)。
   - この判定はClaude・Codexで共通なので`packages/ui`の`hasJustReset`と
     `windowTrendRange`が持つ。両viewは自分のfield名を読み替えるだけにする。
-- **panelの見出しは「<quota> usage <棒/線が何か>」、範囲は副題へ置く。** 「14D 5H
-  peaks」は範囲 (14D) とquota幅 (5H) を区切り無しに並べており、どちらがどちらの
-  修飾か読めなかった。現在は次のとおり。
-  - 2段目: 「5H usage trend」「7D usage trend」/ 副題は「Current session」など
-  - 3段目: 「5H usage peaks」(棒のみ)、「7D usage trend & daily use」(線と棒) /
-    副題は「Per window · 14D」「Per day · 14D」
-  - 3段目右の線は2段目と同じ累積のusageなので`trend`と呼び、棒 (その日の消費) を
-    並記する。1語でまとめると、trendも累積である以上、両者を分ける語にならない。
+- **panelの見出しは`[<軸の時間幅>] <系列の意味>`とする。** 「14D 5H peaks」は範囲
+  (14D) とquota幅 (5H) を区切り無しに並べており、どちらがどちらの修飾か読めなかった。
+  - 2段目: `[5H] usage trend`、`[7D] usage trend`
+  - 3段目: `[14D] 5H usage peak per window`、`[14D] 7D usage trend and daily usage`
+  - **軸幅とquotaが一致する段ではquotaを省く。** 2段目は軸そのものがquotaのwindow
+    なので、`[5H] 5H usage trend`とはしない。
+  - 3段目右が両系列を並記するのは、線が2段目と同じ累積のusageだからである。1語で
+    まとめると、trendも累積である以上、両者を分ける語にならない。
+  - 見出しの右にはsample数だけを置く。集計単位 (`per window` / `per day`) は見出しが
+    持ち、範囲は角括弧が持つ。
+- **panel下部の中央は、両段とも凡例にする。** 2段目は系列が1つで見分ける相手が
+  いないが、同じ位置に同じ種類のものが入ることが、列として読める条件である。
+  3段目右は`daily`と`cumulative`で増分と累積を対比させる。2段目の線は対比する相手が
+  いないため`usage`とし、揃えない。
 - **2つのgraphは縦の幾何を共有する** (`packages/ui/src/utils/chartGeometry.ts`)。
   同じ列に縦に並ぶため、同じ100%が同じ高さで描かれないと傾きや高さを比べられない。
   panelの高さ、plot上下の余白、左右のinset、既定のviewBox幅を共有する。高さだけ
@@ -199,6 +205,11 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     見分けがつかなくなるうえ、印が「ここでcronが止まった」を意味しなくなる。
   - 棒が1本も無い時は「No samples yet」を出す。上の規則により、収集開始直後は
     軸だけが残るため。
+  - **この規則は「収集前」と「保持期間より古い停止」を区別しない。** cacheは14日で
+    切り詰められるため、最古のsampleより前が未収集なのか、機械が止まっていたのかは
+    cacheからは分からない。長期停止からの復帰直後は、止まっていた期間が印無しの軸
+    として出る。生sampleの追記先 (`samples.ndjson`) には判別できる情報が残るが、
+    widgetはそれを読まない。
   - 保持期間の先頭のwindowは切り詰められているため、その最初のsampleは
     消費ではなく基準値として扱う。
 - 左列 (5H) の14日graph。5Hの上限は作業を実際に止めるため、100%へ近づいた
