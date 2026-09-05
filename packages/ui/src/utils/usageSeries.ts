@@ -256,6 +256,81 @@ export function buildWindowPeaks(
 }
 
 /**
+ * Whether the newest reading is the first one taken after a reset.
+ *
+ * A window's range is pinned when usage starts, so before that the reported
+ * reset slides and cannot be used as an axis. Zero usage alone does not say
+ * which of the two we are in: it is equally the reading taken seconds after a
+ * reset, whose window has begun. The history tells them apart - the newest
+ * sample fell to nothing and reports a different window than the one before
+ * it, which only happens on the reading that follows a reset.
+ *
+ * Both readings have to be recent for that to hold. History is not continuous:
+ * the Claude helper records nothing while the screen shows last-known values,
+ * which can run for hours, and cron does not run while the machine sleeps. A
+ * fall read across a gap like that is not a reset just observed - the window
+ * may have reset and then sat unused, and its reported reset is sliding again.
+ * Anchoring to that would put the whole axis in the future, which is what the
+ * unstarted fallback exists to avoid. So both the fall and the reading itself
+ * must be inside the span a gap is still jitter.
+ *
+ * `now` is epoch seconds, like every recordedAt here. Milliseconds make the
+ * age comparison enormous and this quietly answer false for good.
+ */
+export function hasJustReset(
+  samples: UsageHistorySample[],
+  now: number
+): boolean {
+  // Sorted here rather than assumed: every other export in this file does the
+  // same, and reading the wrong two samples fails silently.
+  const sorted = samples.slice().sort((a, b) => a.recordedAt - b.recordedAt);
+  const previous = sorted.at(-2);
+  const latest = sorted.at(-1);
+  if (!previous || !latest) return false;
+
+  return (
+    latest.value === 0 &&
+    previous.value > 0 &&
+    !isSameWindow(previous.windowEndsAt, latest.windowEndsAt) &&
+    latest.recordedAt - previous.recordedAt <= MISSING_SAMPLES_SECONDS &&
+    now - latest.recordedAt <= MISSING_SAMPLES_SECONDS
+  );
+}
+
+/**
+ * The axis a window's trend is drawn against.
+ *
+ * A started window is pinned to its end, so the axis is the window itself. An
+ * unstarted one has no end yet - the reported reset slides ahead of now - and
+ * anchoring to it would put the whole axis in the future, so it falls back to
+ * the hours just gone, which is all there is to show.
+ *
+ * `justReset` is what separates the reading taken seconds after a reset from a
+ * quota that has sat idle: both report nothing spent, but the first names the
+ * window now running. Without it that reading is drawn at the right edge of the
+ * axis of the window that just ended - a window ending empty, next to a card
+ * saying the reset is a whole window away.
+ *
+ * Both detail views derive their axis here rather than each keeping this
+ * judgement: they had it twice, and the same fault with it.
+ *
+ * `now` and `resetsAt` are epoch seconds, like every recordedAt here.
+ */
+export function windowTrendRange(window: {
+  resetsAt: number;
+  windowSeconds: number;
+  usedPercent: number;
+  justReset: boolean;
+  now: number;
+}) {
+  const started =
+    (window.usedPercent > 0 || window.justReset) &&
+    Number.isFinite(window.resetsAt);
+  const endAt = started ? window.resetsAt : window.now;
+  return { startAt: endAt - window.windowSeconds, endAt, started };
+}
+
+/**
  * The samples belonging to the window on show. A started window is pinned to
  * its end, so its samples are the ones reporting that end. An unstarted one
  * has no end yet - its reported reset slides - so it is the run of zeros since
@@ -272,10 +347,7 @@ export function selectCurrentWindow(
   }
 ): { recordedAt: number; value: number }[] {
   const sorted = samples
-    .filter(
-      (sample) =>
-        sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
-    )
+    .slice()
     .sort((a, b) => a.recordedAt - b.recordedAt)
     .map(({ recordedAt, value, windowEndsAt }) => ({
       recordedAt,
@@ -283,7 +355,15 @@ export function selectCurrentWindow(
       windowEndsAt,
     }));
 
-  if (window.started) {
+  // Reporting this window's end is what makes a sample part of it, and a window
+  // end is unique in time, so no time range is needed to keep other windows out
+  // - and using one loses the sample that opens the window. Providers derive
+  // the end from a moment after the reading: one second was enough to put the
+  // only sample a just-reset window had a second before its own axis began.
+  // `endsAt` is what the samples are matched against, and isSameWindow treats
+  // an undefined end as matching anything, so without it here every retained
+  // sample would be returned for a 5-hour axis.
+  if (window.started && window.endsAt !== undefined) {
     return sorted
       .filter(
         (sample) =>
@@ -293,20 +373,25 @@ export function selectCurrentWindow(
       .map(({ recordedAt, value }) => ({ recordedAt, value }));
   }
 
+  const withinRange = sorted.filter(
+    (sample) =>
+      sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
+  );
+
   // No end to match on - either nothing has been spent yet, or the reading
   // that would carry it was unreadable. Either way the run since usage last
   // fell is this window's: for an unused quota that is the stretch of zeros
   // since it reset, and for an unreadable one it is the climb so far.
   let windowStart = 0;
-  for (let index = sorted.length - 1; index > 0; index -= 1) {
-    const value = sorted[index]?.value ?? 0;
-    const before = sorted[index - 1]?.value ?? 0;
+  for (let index = withinRange.length - 1; index > 0; index -= 1) {
+    const value = withinRange[index]?.value ?? 0;
+    const before = withinRange[index - 1]?.value ?? 0;
     if (value < before) {
       windowStart = index;
       break;
     }
   }
-  return sorted
+  return withinRange
     .slice(windowStart)
     .map(({ recordedAt, value }) => ({ recordedAt, value }));
 }

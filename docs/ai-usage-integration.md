@@ -146,6 +146,21 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - graphの横軸は履歴量にかかわらず、reset時刻を終端として各window時間幅に固定する。
   Claudeは5時間・7日間、Codexは`windowDurationMins`の時間幅を使う。
   履歴が0件でも時間軸を表示し、1件ならその時刻の点だけを表示する。
+- **windowが始まっていない間は、reset時刻ではなく直近の時間帯を軸にする。** rangeは
+  最初の使用時点で確定し、それまでreset時刻は滑り続けるため、軸がほぼ未来になる。
+  - **ただしreset直後の1読み取りは例外で、報告されたresetを軸にする。** 未使用と
+    「resetした直後」は使用率0で区別できないが、historyは区別できる (最新sampleが
+    0へ落ち、1つ前と異なるwindow endを報告している)。直近時間帯へ退避すると、
+    **1つ前のwindowの軸の右端に新windowの最初の0%を置く**ことになり、5時間残って
+    いるwindowが「空のまま終わった」ように読める。同じcardのtextは
+    "Resets in 4h 58m" と出るため、textとgraphが食い違う。
+  - **例外は「落下も読み取りも15分以内」の場合に限る。** historyは連続しない —
+    Claude helperはlast_known表示の間sampleを記録せず (数時間続き得る)、cronは
+    機械のスリープで止まる。そのgapをまたいだ落下は「今resetを観測した」ではなく、
+    resetの後に未使用のまま放置されreset時刻がまた滑っている可能性がある。15分は
+    このfileが既に「jitterかgapか」の境界として持つ値 (`MISSING_SAMPLES_SECONDS`)。
+  - この判定はClaude・Codexで共通なので`packages/ui`の`hasJustReset`と
+    `windowTrendRange`が持つ。両viewは自分のfield名を読み替えるだけにする。
 - window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した
   場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
 - Claude詳細は3段構成とし、**全段で左を5H、右を7Dに固定する。**
@@ -683,7 +698,12 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 perl scripts/claude-usage/test-normalize-reset
+node packages/ui/test-usage-series.mjs
 ```
+
+`test-usage-series.mjs`は**buildした`dist`に対して**動くので、`packages/ui`のbuildを
+先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が出るため目視で
+気付きにくい。
 
 `test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
 subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で

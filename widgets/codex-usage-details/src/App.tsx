@@ -7,7 +7,9 @@ import {
   UsageTrend,
   buildDailyUsage,
   buildWindowPeaks,
+  hasJustReset,
   selectCurrentWindow,
+  windowTrendRange,
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
@@ -77,16 +79,19 @@ function formatUpdatedAt(generatedAt: string) {
   }).format(date);
 }
 
-/**
- * A window's range is pinned when usage starts, and until then the reported
- * reset keeps sliding ahead. Plotting against that sliding value puts almost
- * the whole axis in the future, so an unstarted window falls back to the hours
- * just gone - which is all there is to show.
- */
-function getTrendRange(window: CodexUsageWindow, now: number) {
-  const started = window.usedPercent > 0;
-  const endAt = started ? window.resetsAt : now / 1000;
-  return { startAt: endAt - window.windowDurationMins * 60, endAt, started };
+/** Reads Codex's window shape into the shared range. */
+function getTrendRange(
+  window: CodexUsageWindow,
+  now: number,
+  justReset: boolean
+) {
+  return windowTrendRange({
+    resetsAt: window.resetsAt,
+    windowSeconds: window.windowDurationMins * 60,
+    usedPercent: window.usedPercent,
+    justReset,
+    now: now / 1000,
+  });
 }
 
 /**
@@ -337,16 +342,21 @@ export default function App() {
       >
         {windows.map((window) => {
           const label = formatWindowDuration(window.windowDurationMins);
-          const range = getTrendRange(window, now);
-          const history: TrendPoint[] = selectCurrentWindow(
-            selectWindowSamples(data.history, window.windowDurationMins),
-            {
-              endAt: range.endAt,
-              endsAt: window.resetsAt,
-              startAt: range.startAt,
-              started: range.started,
-            }
+          const samples = selectWindowSamples(
+            data.history,
+            window.windowDurationMins
           );
+          const range = getTrendRange(
+            window,
+            now,
+            hasJustReset(samples, now / 1000)
+          );
+          const history: TrendPoint[] = selectCurrentWindow(samples, {
+            endAt: range.endAt,
+            endsAt: window.resetsAt,
+            startAt: range.startAt,
+            started: range.started,
+          });
           return (
             <Card
               className="shrink-0 p-2.5"
