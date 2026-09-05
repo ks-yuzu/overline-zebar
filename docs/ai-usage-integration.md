@@ -316,8 +316,17 @@ Fable 5.1)、待ち時間 (5〜90秒) を変えても再現した。**解析側�
 
 同じ値は`$HOME/.claude.json`の`cachedUsageUtilization.utilization.limits`にもあり、
 そちらには`kind: "weekly_scoped"`、`scope.model.display_name: "Fable"`として
-3つ目のwindowが入っている。取得元をそちらへ移すかは別途決める。画面から読むのを
-やめると、cronがClaude Codeを起動して更新を強制する今の仕組みも一緒に変わる。
+3つ目のwindowが入っている。値もresetもClaudeの画面と一致する。
+
+**このfileは、cronがhelperを起動した時に更新される。**Claude Codeは概ね5分のTTLで
+利用状況を取り直しており、helperが起動するsessionもその取得を起こす。計測では
+07:27:33に更新された後、07:30と07:31の実行では更新されず (TTL内)、07:34:10の実行で
+07:34:14へ進んだ。つまり**取得元をfileへ移しても、更新を強制する仕組みは今のまま
+使える。**加えてfile側は`resets_at`をISO 8601で持つため、`5:50am`や`Sep 7, 9am`から
+どの occurrence かを推定する処理が要らなくなる。
+
+取得元を移すかは未決。移す場合、Claude Codeの内部fileに依存することになり、
+その形式が変わると静かに壊れる点が画面解析との引き換えになる。
 
 **model別の週次はsampleの記録条件にしない。** 見出しもreset表記も画面の中で最も
 新しい部分で、変わる可能性が高い。そこが読めないことでsample全体を落とすと、
