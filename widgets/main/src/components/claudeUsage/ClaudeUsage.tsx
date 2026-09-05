@@ -107,7 +107,7 @@ export default function ClaudeUsage() {
           width: 920,
           // Keep in sync with the ai-usage-details preset in zpack.json: the
           // size passed here overrides it.
-          height: 580,
+          height: 630,
         });
         await zebar.startWidget('ai-usage-details', placement, {});
       }}

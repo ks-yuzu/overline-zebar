@@ -1,4 +1,11 @@
 import { useId } from 'react';
+import {
+  CHART_DEFAULT_WIDTH as DEFAULT_WIDTH,
+  CHART_HEIGHT as HEIGHT,
+  CHART_PADDING_BOTTOM as PADDING_BOTTOM,
+  CHART_PADDING_TOP as PADDING_TOP,
+  CHART_PADDING_X as PADDING_X,
+} from '../../utils/chartGeometry';
 import type { UsageBar } from '../../utils/usageSeries';
 
 export type UsageHistorySegment = {
@@ -8,9 +15,15 @@ export type UsageHistorySegment = {
 
 type Props = {
   barLabel: string;
+  /** What one bar covers: the aria label says so, since the bars aggregate. */
+  barUnit: 'window' | 'day';
   bars: UsageBar[];
   endAt: number;
   label: string;
+  /**
+   * How the line aggregates, as a qualifier of "usage" - "cumulative", say.
+   * Not the word usage itself: the aria label reads it as one.
+   */
   lineLabel?: string;
   /**
    * Which mark carries the reading. Only that one takes the accent colour, so
@@ -26,11 +39,6 @@ type Props = {
   startAt: number;
 };
 
-const DEFAULT_WIDTH = 420;
-const HEIGHT = 132;
-const PADDING_X = 10;
-const PADDING_TOP = 8;
-const PADDING_BOTTOM = 16;
 const BAR_GAP = 2;
 const MAX_POINTS_PER_SEGMENT = 160;
 
@@ -53,6 +61,7 @@ function formatDay(epochSeconds: number) {
 
 export default function UsageHistory({
   barLabel,
+  barUnit,
   bars,
   endAt,
   label,
@@ -98,120 +107,126 @@ export default function UsageHistory({
 
   return (
     <div>
-      <svg
-        aria-label={`${label} ${barLabel}${lineLabel ? ` and ${lineLabel}` : ''}`}
-        className="h-[132px] w-full"
-        role="img"
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      >
-        <defs>
-          <clipPath id={clipId}>
-            <rect
-              height={chartHeight}
-              width={chartWidth}
-              x={PADDING_X}
-              y={PADDING_TOP}
-            />
-          </clipPath>
-        </defs>
-
-        {[0, 0.5].map((ratio) => (
-          <g key={ratio}>
-            <line
-              stroke="var(--border)"
-              strokeDasharray="2 3"
-              strokeWidth="0.7"
-              x1={PADDING_X}
-              x2={WIDTH - PADDING_X}
-              y1={PADDING_TOP + ratio * chartHeight}
-              y2={PADDING_TOP + ratio * chartHeight}
-            />
-            {/* The axis stays pinned to the full quota so the headroom above
-                the bars keeps meaning as usage grows. */}
-            <text
-              fill="var(--text-muted)"
-              fontSize="8"
-              opacity="0.7"
-              x={PADDING_X + 2}
-              y={PADDING_TOP + ratio * chartHeight - 2}
-            >
-              {100 - ratio * 100}%
-            </text>
-          </g>
-        ))}
-
-        {bars.map((bar) => {
-          // A bar may reach past either end of the axis - a window that began
-          // before it, or a day that runs on past it - so it is clipped here
-          // rather than in the data, where two clipped bars would collide.
-          const left = Math.max(PADDING_X, toX(bar.startAt));
-          const right = Math.min(WIDTH - PADDING_X, toX(bar.endAt));
-          if (right <= left) return null;
-
-          const x = left;
-          const span = right - left;
-          const width = Math.max(1, span - Math.min(BAR_GAP, span * 0.25));
-          if (!bar.hasSamples) {
-            return (
+      <div className="relative">
+        <svg
+          aria-label={`${label} usage over the last ${Math.round(
+            (endAt - startAt) / 86_400
+          )} days, one bar per ${barUnit}${
+            lineLabel ? `, with the ${lineLabel} usage as a line` : ''
+          }`}
+          className="w-full"
+          style={{ height: HEIGHT }}
+          role="img"
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        >
+          <defs>
+            <clipPath id={clipId}>
               <rect
-                fill="var(--border)"
                 height={chartHeight}
-                key={`${bar.startAt}-${bar.endAt}`}
-                opacity="0.1"
-                width={width}
-                x={x}
+                width={chartWidth}
+                x={PADDING_X}
                 y={PADDING_TOP}
               />
-            );
-          }
-          const y = toY(bar.value);
-          return (
-            <rect
-              fill={bar.partial ? 'none' : barColor}
-              height={Math.max(0, baselineY - y)}
-              key={`${bar.startAt}-${bar.endAt}`}
-              opacity={bar.partial ? 0.9 : 0.55}
-              rx="1"
-              stroke={bar.partial ? barColor : 'none'}
-              strokeDasharray={bar.partial ? '2 2' : undefined}
-              strokeWidth={bar.partial ? 1 : 0}
-              width={width}
-              x={x}
-              y={y}
-            />
-          );
-        })}
+            </clipPath>
+          </defs>
 
-        <g clipPath={`url(#${clipId})`}>
-          {linePaths.map((path) => (
-            <path
-              d={path}
-              fill="none"
-              key={path}
-              stroke={lineColor}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="1.4"
-            />
+          {[0, 0.5].map((ratio) => (
+            <g key={ratio}>
+              <line
+                stroke="var(--border)"
+                strokeDasharray="2 3"
+                strokeWidth="0.7"
+                x1={PADDING_X}
+                x2={WIDTH - PADDING_X}
+                y1={PADDING_TOP + ratio * chartHeight}
+                y2={PADDING_TOP + ratio * chartHeight}
+              />
+              {/* The axis stays pinned to the full quota so the headroom above
+                the bars keeps meaning as usage grows. */}
+              <text
+                fill="var(--text-muted)"
+                fontSize="8"
+                opacity="0.7"
+                x={PADDING_X + 2}
+                y={PADDING_TOP + ratio * chartHeight - 2}
+              >
+                {100 - ratio * 100}%
+              </text>
+            </g>
           ))}
-        </g>
 
-        {peakBar && (
-          <text
-            fill="var(--text-muted)"
-            fontSize="9"
-            paintOrder="stroke"
-            stroke="var(--background)"
-            strokeWidth="2.5"
-            textAnchor="middle"
-            x={
-              (Math.max(PADDING_X, toX(peakBar.startAt)) +
-                Math.min(WIDTH - PADDING_X, toX(peakBar.endAt))) /
-              2
+          {bars.map((bar) => {
+            // A bar may reach past either end of the axis - a window that began
+            // before it, or a day that runs on past it - so it is clipped here
+            // rather than in the data, where two clipped bars would collide.
+            const left = Math.max(PADDING_X, toX(bar.startAt));
+            const right = Math.min(WIDTH - PADDING_X, toX(bar.endAt));
+            if (right <= left) return null;
+
+            const x = left;
+            const span = right - left;
+            const width = Math.max(1, span - Math.min(BAR_GAP, span * 0.25));
+            if (!bar.hasSamples) {
+              return (
+                <rect
+                  fill="var(--border)"
+                  height={chartHeight}
+                  key={`${bar.startAt}-${bar.endAt}`}
+                  opacity="0.1"
+                  width={width}
+                  x={x}
+                  y={PADDING_TOP}
+                />
+              );
             }
-            y={Math.max(PADDING_TOP + 7, toY(peakBar.value) - 3)}
-          >
-            {/* Not clamped to the axis. These bars carry two different
+            const y = toY(bar.value);
+            return (
+              <rect
+                fill={bar.partial ? 'none' : barColor}
+                height={Math.max(0, baselineY - y)}
+                key={`${bar.startAt}-${bar.endAt}`}
+                opacity={bar.partial ? 0.9 : 0.55}
+                rx="1"
+                stroke={bar.partial ? barColor : 'none'}
+                strokeDasharray={bar.partial ? '2 2' : undefined}
+                strokeWidth={bar.partial ? 1 : 0}
+                width={width}
+                x={x}
+                y={y}
+              />
+            );
+          })}
+
+          <g clipPath={`url(#${clipId})`}>
+            {linePaths.map((path) => (
+              <path
+                d={path}
+                fill="none"
+                key={path}
+                stroke={lineColor}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.4"
+              />
+            ))}
+          </g>
+
+          {peakBar && (
+            <text
+              fill="var(--text-muted)"
+              fontSize="9"
+              paintOrder="stroke"
+              stroke="var(--background)"
+              strokeWidth="2.5"
+              textAnchor="middle"
+              x={
+                (Math.max(PADDING_X, toX(peakBar.startAt)) +
+                  Math.min(WIDTH - PADDING_X, toX(peakBar.endAt))) /
+                2
+              }
+              y={Math.max(PADDING_TOP + 7, toY(peakBar.value) - 3)}
+            >
+              {/* Not clamped to the axis. These bars carry two different
                 quantities: a window peak, which is a share of a quota and so
                 never above 100, and a day's consumption, which sums the rises
                 of however many windows the day held and passes 100 whenever a
@@ -219,19 +234,25 @@ export default function UsageHistory({
                 because the axis does; the label is what says how far past it
                 went - and it is what made a poisoned series legible as 449%
                 rather than as one more full day. */}
-            {Math.round(peakBar.value)}%
-          </text>
-        )}
+              {Math.round(peakBar.value)}%
+            </text>
+          )}
 
-        <line
-          stroke="var(--border)"
-          strokeWidth="0.7"
-          x1={PADDING_X}
-          x2={WIDTH - PADDING_X}
-          y1={baselineY}
-          y2={baselineY}
-        />
-      </svg>
+          <line
+            stroke="var(--border)"
+            strokeWidth="0.7"
+            x1={PADDING_X}
+            x2={WIDTH - PADDING_X}
+            y1={baselineY}
+            y2={baselineY}
+          />
+        </svg>
+        {bars.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-text-muted">
+            No samples yet
+          </div>
+        )}
+      </div>
 
       <div className="flex justify-between text-[10px] tabular-nums text-text-muted">
         <span>{formatDay(startAt)}</span>

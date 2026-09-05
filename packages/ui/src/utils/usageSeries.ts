@@ -149,12 +149,20 @@ export function buildDailyUsage(
   });
 
   const bars: UsageBar[] = [];
+  // Same as the window chart: a day that ended before collection began holds no
+  // data because none was being kept, which is not the same as a day the cron
+  // missed. Drawn as missing it is indistinguishable, and while the history is
+  // young those days are most of the axis.
+  const collectionStartsAt = withinRange[0]?.recordedAt;
   for (
     let day = startOfLocalDay(range.startAt);
     day <= range.endAt;
     day = nextLocalDay(day)
   ) {
     const nextDay = nextLocalDay(day);
+    if (collectionStartsAt === undefined || nextDay <= collectionStartsAt) {
+      continue;
+    }
     bars.push({
       startAt: day,
       endAt: nextDay,
@@ -190,7 +198,13 @@ function missingSpans(
   range: { startAt: number; endAt: number }
 ) {
   const spans: { startAt: number; endAt: number }[] = [];
-  let cursor = range.startAt;
+  // Retention reaches back further than collection does, and the stretch before
+  // the first sample is not a stretch anything failed to record - nothing was
+  // running yet. Marking it as missing paints most of the axis while the
+  // history is young, and the mark stops meaning "the cron stopped here".
+  const firstSample = samples[0];
+  if (!firstSample) return spans;
+  let cursor = Math.max(range.startAt, firstSample.recordedAt);
   for (const sample of samples) {
     if (sample.recordedAt - cursor > MISSING_SAMPLES_SECONDS) {
       spans.push({ startAt: cursor, endAt: sample.recordedAt });
