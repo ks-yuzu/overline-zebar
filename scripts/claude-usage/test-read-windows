@@ -1,0 +1,318 @@
+#!/usr/bin/env perl
+
+# Checks how claude-usage-json decides which numbers on the /usage screen
+# belong to which window.
+#
+# The screen names its windows `Current session`, `Current week (all models)`
+# and, on a plan that caps one model separately, `Current week (<model>)`.
+# Getting the split wrong is invisible in the JSON - the value is still a
+# plausible percentage - and shows up only as a chip and a graph that have been
+# reporting one window's consumption under another window's name.
+#
+# The subroutines are read out of the helper rather than duplicated here: this
+# has to break when the helper changes, not track it. Run from anywhere:
+#
+#   perl scripts/claude-usage/test-read-windows
+
+use strict;
+use warnings;
+use File::Basename qw(dirname);
+
+my $helper = dirname(__FILE__) . '/claude-usage-json';
+open my $fh, '<', $helper or die "cannot read $helper: $!\n";
+my $source = do { local $/; <$fh> };
+close $fh;
+
+my ($subs) = $source =~ /^(sub normalize_screen\b.*?)^sub hour_24\b/ms;
+die "could not find the screen subroutines in $helper\n" unless $subs;
+eval "$subs 1" or die "could not load the screen subroutines: $@";
+
+# The capture is a terminal log, so the fixtures carry what a terminal log
+# carries: carriage returns, erase-line sequences, and the non-breaking spaces
+# the panel pads with.
+my $esc = "\e[2K";
+
+my @cases = (
+	{
+		name => 'plan with no per-model window',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'+50% weekly limits promo through Sep 13',
+			"What's contributing to your limits usage?",
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The one this window was added for. A single expression that scans
+		# from `Current week` to the next `% used` walks straight past the
+		# all-models figures into these, and publishes 68 as the weekly total.
+		name => 'per-model week does not take over the all-models week',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Fable)',
+			'68% 68% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => 68,
+		model_label => 'Fable',
+		labels => 'fable',
+	},
+	{
+		name => 'per-model heading wrapped onto its own line',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week',
+			'(Fable)',
+			'68% 68% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => 68,
+		model_label => 'Fable',
+		labels => 'fable',
+	},
+	{
+		# The wording before the per-model windows existed. It has to stay the
+		# all-models week, or every plan without one loses its weekly figure.
+		name => 'weekly heading with no parenthetical',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		name => 'headings drawn before their numbers arrive',
+		screen => join("\r\n",
+			'Current session',
+			'Current week (all models)',
+			$esc . 'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The capture ends mid-redraw far more often than not: the helper cuts
+		# the session off a fixed time after the panel first appears.
+		name => 'redraw starts again after a complete panel',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			$esc . 'Current session',
+			'Current week (all models)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# Observed on a real screen: the gauge had not caught up with the
+		# figure beside it. The word is what says which one is the reading.
+		name => 'gauge and figure disagree mid-update',
+		screen => join("\r\n",
+			'Current session',
+			'29% 28% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'32% 32% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 28,
+		week => 32,
+		model => undef,
+		labels => '',
+	},
+	{
+		name => 'two per-model windows, one of them Fable',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Opus)',
+			'40% 40% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Fable)',
+			'68% 68% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => 68,
+		model_label => 'Fable',
+		labels => 'fable, opus',
+	},
+	{
+		# Nothing on the screen says which one the widget is for, and writing
+		# either would put one model's consumption under the other's name.
+		name => 'two per-model windows, neither of them Fable',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Opus)',
+			'40% 40% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Sonnet)',
+			'20% 20% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => 'opus, sonnet',
+	},
+	{
+		# What the section boundaries are for. The per-model heading arrived
+		# before its numbers and the panel then started over, so the next
+		# figures on the screen belong to the redraw's session window. Read
+		# without a boundary they land under the per-model window's name.
+		name => 'half-drawn per-model window followed by a redraw',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Fable)',
+			$esc . 'Current session',
+			'55% 55% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 55,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		# Same boundary, first window on the screen: with none of its own
+		# numbers the session must come back empty, and the helper falls back
+		# to the last cache rather than publishing the week's figure as it.
+		name => 'session heading with no numbers of its own',
+		screen => join("\r\n",
+			'Current session',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => undef,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+	{
+		name => 'half-drawn per-model window leaves the other two alone',
+		screen => join("\r\n",
+			'Current session',
+			'23% 23% used',
+			'Resets 11:10am (Asia/Tokyo)',
+			'Current week (all models)',
+			'31% 31% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'Current week (Fable)',
+		),
+		session => 23,
+		week => 31,
+		model => undef,
+		labels => '',
+	},
+);
+
+sub percent_of {
+	my ($window) = @_;
+	return undef unless $window;
+	return $window->{reading}[0];
+}
+
+my $failures = 0;
+for my $case (@cases) {
+	my $windows = eval { read_windows(normalize_screen($case->{screen})) };
+	if ($@) {
+		printf "not ok - %s: died: %s", $case->{name}, $@;
+		$failures++;
+		next;
+	}
+
+	my @problems;
+	for my $field (qw(session week model)) {
+		my $key = $field eq 'model' ? 'model_week' : $field;
+		my $got = percent_of($windows->{$key});
+		my $want = $case->{$field};
+		next if !defined $got && !defined $want;
+		next if defined $got && defined $want && $got == $want;
+		push @problems, sprintf '%s=%s expected=%s',
+			$field,
+			defined $got ? $got : 'undef',
+			defined $want ? $want : 'undef';
+	}
+
+	my $got_label = $windows->{model_week} ? $windows->{model_week}{label} : undef;
+	my $want_label = $case->{model_label};
+	unless ((!defined $got_label && !defined $want_label)
+		|| (defined $got_label && defined $want_label && $got_label eq $want_label)) {
+		push @problems, sprintf 'label=%s expected=%s',
+			defined $got_label ? $got_label : 'undef',
+			defined $want_label ? $want_label : 'undef';
+	}
+
+	my $got_labels = join ', ', @{ $windows->{model_labels} };
+	push @problems, sprintf 'labels=[%s] expected=[%s]', $got_labels, $case->{labels}
+		if $got_labels ne $case->{labels};
+
+	$failures++ if @problems;
+	printf "%s - %s\n", @problems ? 'not ok' : 'ok', $case->{name};
+	printf "    %s\n", join '; ', @problems if @problems;
+}
+
+printf "\n%d of %d cases failed\n", $failures, scalar @cases if $failures;
+printf "\nall %d cases pass\n", scalar @cases unless $failures;
+exit($failures ? 1 : 0);

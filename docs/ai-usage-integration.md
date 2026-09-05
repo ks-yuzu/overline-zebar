@@ -291,6 +291,38 @@ reset時刻が取れないのは画面を描画途中で拾った時で、その
 求めるので、reset時刻の無いsampleは現在windowへ0%への落下として混ざり、その後の
 上昇で以前の分がもう一度計上されてしまう。
 
+**画面はwindowの見出しで区切って読む。** `/usage`は`Current session`、
+`Current week (all models)`、planによっては`Current week (<model>)`を並べる。
+各windowの数字は自分の見出しから次の見出しまでの範囲だけから読む。
+
+見出しごとに1つの正規表現で`.*?% used`まで走らせると、自分の節を越えて次の
+windowの数字に届く。週次の見出しが2つ並んだ時点で、all modelsの枠がmodel別の
+数字を読む。**長く正しかったfieldに誤った値が入る**ため、範囲を切る側に倒す。
+
+**model別の週次は名前ではなく形で拾う。** `(all models)`以外の括弧書きを持つ
+週次を該当とみなし、`label`をそのまま保存する。model名で判定すると、名前が
+変わった時に「そのwindowを持たないplan」と区別が付かなくなる。
+
+**該当が複数あって`Fable`が1つに定まらない時は、どれも記録しない。**画面には
+どちらをwidgetが指すのかを決める情報が無い。片方を記録すると、あるmodelの消費が
+別のmodelの名前の下に入る。**書かない方の失敗が軽い。**
+
+**helperが開く画面には、まだmodel別の週次が出ない。** 2026-09-06時点で、対話中の
+Claude Codeの`/usage`には`Current week (Fable)`が出る一方、helperが起動する
+session (screen-reader mode、新規session、API request無し) の同じ画面には出ない。
+screen-reader modeの有無、端末の大きさ (80x24 / 200x60)、選択model (Opus 5 /
+Fable 5.1)、待ち時間 (5〜90秒) を変えても再現した。**解析側は枠が出た時に拾える
+状態にしてあり、出ない間はfieldごと省く。**
+
+同じ値は`$HOME/.claude.json`の`cachedUsageUtilization.utilization.limits`にもあり、
+そちらには`kind: "weekly_scoped"`、`scope.model.display_name: "Fable"`として
+3つ目のwindowが入っている。取得元をそちらへ移すかは別途決める。画面から読むのを
+やめると、cronがClaude Codeを起動して更新を強制する今の仕組みも一緒に変わる。
+
+**model別の週次はsampleの記録条件にしない。** 見出しもreset表記も画面の中で最も
+新しい部分で、変わる可能性が高い。そこが読めないことでsample全体を落とすと、
+読めていた2つのwindowのgraphまで空になる。
+
 **reset時刻は「現在時刻に最も近い候補」として解釈する。** Claudeはsessionのreset
 を時刻だけ (`5:50am`)、weekのresetを月日だけ (`Sep 7, 9am`) で表示し、どちらも
 日付や年を持たない。候補 (前日・当日・翌日 / 前年・当年・翌年) のうちnowに最も
@@ -342,8 +374,17 @@ Claude UIが必要とする主なfield:
 - `last_known_age`（任意）
 - `current_session.used_percent`、`resets_at`
 - `current_week.used_percent`、`resets_at`
+- `current_week_model`（任意）
+  - `Current week (Fable)`のような、1つのmodelだけを対象とする週次window。
+    `label`にmodel名、残りは`current_week`と同じ形を持つ。
+  - **planによっては存在しない。無い時はfieldごと省く。** 週次の枠が1つしかない
+    planでこのfieldを空で置くと、widget側が「0%」と区別できない。
 - `history`
   - 5分ごとの5H・7D使用率と各reset日時を14日分保持する。
+  - `current_week_model`があるsampleは`week_model_used_percent`、
+    `week_model_resets_at`、`week_model_label`の3つを**揃えて**持つ。欠けた
+    sampleからはこの3つを落とす。使用率だけではwindowへ置けず、labelが無いと
+    別modelの週次と見分けられない。
   - Claude側がlast-known値を返した場合は新しい履歴点として追加しない。
 
 Codex UIが必要とする主なfield:
@@ -698,6 +739,7 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 perl scripts/claude-usage/test-normalize-reset
+perl scripts/claude-usage/test-read-windows
 node packages/ui/test-usage-series.mjs
 ```
 
@@ -708,6 +750,10 @@ node packages/ui/test-usage-series.mjs
 `test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
 subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
 落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
+
+`test-read-windows`は画面のどの数字がどのwindowのものかを検証する。ここを誤ると
+JSONは正しい形のまま値だけが入れ替わるため、出力を見ても気付けない。こちらも
+helperからsubroutineを抽出している。
 
 実機反映を伴うUI変更の完了条件は次のとおり。
 
