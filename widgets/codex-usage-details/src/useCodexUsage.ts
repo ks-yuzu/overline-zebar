@@ -16,8 +16,12 @@ export type CodexUsageHistorySample = {
 type CodexRateLimits = {
   limitId: string;
   limitName: string | null;
-  primary: CodexUsageWindow | null;
-  secondary: CodexUsageWindow | null;
+  // Optional as well as nullable: Codex omits the key rather than sending
+  // null, and the helper's jq validator treats the two alike. Declaring it
+  // non-optional would let `primary === null ? … : primary.usedPercent` past
+  // the compiler and throw on exactly the payload this accepts.
+  primary?: CodexUsageWindow | null;
+  secondary?: CodexUsageWindow | null;
   credits: {
     hasCredits: boolean;
     unlimited: boolean;
@@ -83,6 +87,10 @@ function parseCodexUsage(value: string): CodexUsageData {
     typeof parsed.generated_at !== 'string' ||
     !limits ||
     typeof limits !== 'object' ||
+    // Without this an array, whose keys are both absent, reads as two
+    // unreported windows and reaches the UI as "unavailable" rather than as
+    // the shape error it is.
+    Array.isArray(limits) ||
     !isReportedWindow(limits.primary) ||
     !isReportedWindow(limits.secondary)
   ) {

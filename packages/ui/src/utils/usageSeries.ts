@@ -177,6 +177,13 @@ const MISSING_SAMPLES_SECONDS = 15 * 60;
  * Spans of the range that hold no samples at all. Drawn apart from the windows
  * so that a stretch the cron missed does not read as a window left unused -
  * the one distinction this panel exists to make.
+ *
+ * A span may lie under a window bar, and is meant to: a bar covers its whole
+ * window, but one sample is enough to draw it, so the stretch the bar spans is
+ * not necessarily a stretch that was sampled. Clipping the span to the bar
+ * would erase an outage shorter than a window instead of shrinking it. The two
+ * marks say different things, and the span is drawn at a tenth of the bar's
+ * opacity so the overlap tints rather than hides.
  */
 function missingSpans(
   samples: UsageHistorySample[],
@@ -194,37 +201,6 @@ function missingSpans(
     spans.push({ startAt: cursor, endAt: range.endAt });
   }
   return spans;
-}
-
-/**
- * The parts of `span` no window bar covers. A window bar spans the whole window
- * even when retention or a sampling gap left samples for only part of it, so a
- * no-data span can otherwise be drawn underneath a bar and mark as missing a
- * stretch the bar is already accounting for.
- */
-function withoutCovered(
-  span: { startAt: number; endAt: number },
-  covered: { startAt: number; endAt: number }[]
-) {
-  let pieces = [span];
-  for (const block of covered) {
-    pieces = pieces.flatMap((piece) => {
-      if (block.endAt <= piece.startAt || block.startAt >= piece.endAt) {
-        return [piece];
-      }
-      return [
-        ...(piece.startAt < block.startAt
-          ? [{ startAt: piece.startAt, endAt: block.startAt }]
-          : []),
-        ...(piece.endAt > block.endAt
-          ? [{ startAt: block.endAt, endAt: piece.endAt }]
-          : []),
-      ];
-    });
-  }
-  return pieces.filter(
-    (piece) => piece.endAt - piece.startAt > MISSING_SAMPLES_SECONDS
-  );
 }
 
 /**
@@ -271,13 +247,11 @@ export function buildWindowPeaks(
 
   return [
     ...peaks,
-    ...missingSpans(withinRange, range)
-      .flatMap((span) => withoutCovered(span, peaks))
-      .map((span) => ({
-        ...span,
-        value: 0,
-        hasSamples: false,
-      })),
+    ...missingSpans(withinRange, range).map((span) => ({
+      ...span,
+      value: 0,
+      hasSamples: false,
+    })),
   ].sort((a, b) => a.startAt - b.startAt);
 }
 

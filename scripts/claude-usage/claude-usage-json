@@ -415,6 +415,13 @@ if (-s $cache_file) {
 		# time was caught mid-draw and its percentages cannot be trusted. Read
 		# on every write, so this also purges samples a helper without that
 		# rule left behind - they would otherwise poison the graphs for 14 days.
+		#
+		# Deliberately coarser than the widget, which drops a sample only from
+		# the period whose reset it lacks. What is in doubt here is the reading,
+		# not its placement: the one observed reported 0% for a week that was at
+		# 8% either side, and the other half of that same screen is no more
+		# trustworthy. The widget's per-period rule is for a cache this version
+		# has not rewritten yet, not a second opinion on which samples are good.
 		@history = grep {
 			ref($_) eq 'HASH'
 				&& looks_like_number($_->{recorded_at})
