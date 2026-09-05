@@ -243,13 +243,13 @@ export default function App() {
     data.current_session,
     SESSION_WINDOW_SECONDS,
     now,
-    hasJustReset(sessionSamples)
+    hasJustReset(sessionSamples, now / 1000)
   );
   const weekRange = getTrendRange(
     data.current_week,
     WEEK_WINDOW_SECONDS,
     now,
-    hasJustReset(weekSamples)
+    hasJustReset(weekSamples, now / 1000)
   );
   const sessionHistory: TrendPoint[] = selectCurrentWindow(sessionSamples, {
     endsAt: windowEndFor(data.current_session.resets_at),

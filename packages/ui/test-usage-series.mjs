@@ -39,7 +39,8 @@ const cases = [
           [10, 21, NOW + 300],
           [5, 22, NOW + 300],
           [0, 0, NOW + WINDOW],
-        ])
+        ]),
+        NOW
       ),
     expect: true,
   },
@@ -51,7 +52,8 @@ const cases = [
           [10, 0, NOW + WINDOW - 600],
           [5, 0, NOW + WINDOW - 300],
           [0, 0, NOW + WINDOW],
-        ])
+        ]),
+        NOW
       ),
     expect: false,
   },
@@ -65,7 +67,37 @@ const cases = [
         series([
           [30, 0, NOW + WINDOW - 1800],
           [0, 0, NOW + WINDOW],
-        ])
+        ]),
+        NOW
+      ),
+    expect: false,
+  },
+  {
+    // The helper records nothing while Claude shows last-known values, and
+    // cron stops with the machine, so a fall can straddle hours of silence.
+    // The window may have reset and then sat unused, sliding its reset again.
+    name: 'a fall read across a gap in sampling',
+    run: () =>
+      hasJustReset(
+        series([
+          [140, 45, NOW - 3600],
+          [0, 0, NOW + WINDOW],
+        ]),
+        NOW
+      ),
+    expect: false,
+  },
+  {
+    // The reading is the one after a reset, but it is an hour old: whatever it
+    // says about the window ahead, "just" is no longer true.
+    name: 'a post-reset reading that has since gone stale',
+    run: () =>
+      hasJustReset(
+        series([
+          [65, 45, NOW - 3600],
+          [60, 0, NOW + WINDOW],
+        ]),
+        NOW
       ),
     expect: false,
   },
@@ -76,7 +108,8 @@ const cases = [
         series([
           [5, 20, NOW + 3600],
           [0, 22, NOW + 3600],
-        ])
+        ]),
+        NOW
       ),
     expect: false,
   },
@@ -89,13 +122,14 @@ const cases = [
         series([
           [5, 22, NOW + 3600],
           [0, 0, NOW + 3600 + 60],
-        ])
+        ]),
+        NOW
       ),
     expect: false,
   },
   {
     name: 'a history too short to compare',
-    run: () => hasJustReset(series([[0, 0, NOW + WINDOW]])),
+    run: () => hasJustReset(series([[0, 0, NOW + WINDOW]]), NOW),
     expect: false,
   },
 

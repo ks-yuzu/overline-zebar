@@ -265,19 +265,32 @@ export function buildWindowPeaks(
  * sample fell to nothing and reports a different window than the one before
  * it, which only happens on the reading that follows a reset.
  *
- * It stays true for one sampling interval. After that the run is either
- * spending, which pins the window, or a flat line of zeros, which is the
- * unstarted case the sliding reset was meant for.
+ * Both readings have to be recent for that to hold. History is not continuous:
+ * the Claude helper records nothing while the screen shows last-known values,
+ * which can run for hours, and cron does not run while the machine sleeps. A
+ * fall read across a gap like that is not a reset just observed - the window
+ * may have reset and then sat unused, and its reported reset is sliding again.
+ * Anchoring to that would put the whole axis in the future, which is what the
+ * unstarted fallback exists to avoid. So both the fall and the reading itself
+ * must be inside the span a gap is still jitter.
  */
-export function hasJustReset(samples: UsageHistorySample[]): boolean {
-  const previous = samples.at(-2);
-  const latest = samples.at(-1);
+export function hasJustReset(
+  samples: UsageHistorySample[],
+  now: number
+): boolean {
+  // Sorted here rather than assumed: every other export in this file does the
+  // same, and reading the wrong two samples fails silently.
+  const sorted = samples.slice().sort((a, b) => a.recordedAt - b.recordedAt);
+  const previous = sorted.at(-2);
+  const latest = sorted.at(-1);
   if (!previous || !latest) return false;
 
   return (
     latest.value === 0 &&
     previous.value > 0 &&
-    !isSameWindow(previous.windowEndsAt, latest.windowEndsAt)
+    !isSameWindow(previous.windowEndsAt, latest.windowEndsAt) &&
+    latest.recordedAt - previous.recordedAt <= MISSING_SAMPLES_SECONDS &&
+    now - latest.recordedAt <= MISSING_SAMPLES_SECONDS
   );
 }
 
@@ -342,7 +355,10 @@ export function selectCurrentWindow(
   // - and using one loses the sample that opens the window. Providers derive
   // the end from a moment after the reading: one second was enough to put the
   // only sample a just-reset window had a second before its own axis began.
-  if (window.started) {
+  // `endsAt` is what the samples are matched against, and isSameWindow treats
+  // an undefined end as matching anything, so without it here every retained
+  // sample would be returned for a 5-hour axis.
+  if (window.started && window.endsAt !== undefined) {
     return sorted
       .filter(
         (sample) =>
