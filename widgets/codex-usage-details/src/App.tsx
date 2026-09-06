@@ -142,14 +142,19 @@ function HistoryCard({
     return (
       <Card className="shrink-0 p-2.5">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-text-muted">14D {label}</p>
-          <p className="text-[10px] text-text-muted">Per day</p>
+          <p className="text-xs font-medium text-text-muted">
+            [14D] {label} usage trend and daily usage
+          </p>
+          <p className="text-[10px] text-text-muted">
+            {samples.length} samples
+          </p>
         </div>
         <UsageHistory
           barLabel="daily"
+          barUnit="day"
           bars={daily.bars}
           endAt={historyRange.endAt}
-          label={`14D ${label}`}
+          label={label}
           lineLabel="cumulative"
           primarySeries="line"
           segments={daily.segments}
@@ -168,14 +173,17 @@ function HistoryCard({
   return (
     <Card className="shrink-0 p-2.5">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-text-muted">14D {label} peaks</p>
-        <p className="text-[10px] text-text-muted">Per window</p>
+        <p className="text-xs font-medium text-text-muted">
+          [14D] {label} usage peak per window
+        </p>
+        <p className="text-[10px] text-text-muted">{samples.length} samples</p>
       </div>
       <UsageHistory
         barLabel="window peak"
+        barUnit="window"
         bars={peaks}
         endAt={historyRange.endAt}
-        label={`14D ${label}`}
+        label={label}
         startAt={historyRange.startAt}
         viewWidth={viewWidth}
       />
@@ -364,9 +372,11 @@ export default function App() {
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-text-muted">
-                  {label} trend
+                  [{label}] usage trend
                 </p>
-                <p className="text-[10px] text-text-muted">Current window</p>
+                <p className="text-[10px] text-text-muted">
+                  {history.length} samples
+                </p>
               </div>
               <UsageTrend
                 endAt={range.endAt}
@@ -401,7 +411,6 @@ export default function App() {
 
       <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
-        <span>{data.history.length} retained samples · 14 days</span>
       </footer>
     </div>
   );

@@ -13,6 +13,8 @@
 //   node packages/ui/test-usage-series.mjs
 
 import {
+  buildDailyUsage,
+  buildWindowPeaks,
   hasJustReset,
   selectCurrentWindow,
   windowTrendRange,
@@ -256,6 +258,64 @@ const cases = [
         { endsAt: undefined, started: true, startAt: NOW, endAt: NOW + WINDOW }
       ).length,
     expect: 1,
+  },
+  {
+    // Retention reaches back 14 days; collection started later than that. The
+    // stretch before the first sample is not a stretch anything failed to
+    // record, and marking it as missing paints most of a young axis.
+    name: 'gaps: the stretch before the first sample is not missing data',
+    run: () => {
+      const start = NOW - 14 * 24 * 3600;
+      const samples = [];
+      // Two days of samples at the recent end, five minutes apart.
+      for (let t = NOW - 2 * 24 * 3600; t <= NOW; t += 300) {
+        samples.push({ recordedAt: t, value: 50, windowEndsAt: Math.ceil(t / WINDOW) * WINDOW });
+      }
+      const bars = buildWindowPeaks(samples, {
+        startAt: start,
+        endAt: NOW,
+        now: NOW,
+        windowSeconds: WINDOW,
+      });
+      return bars.filter((bar) => !bar.hasSamples).length;
+    },
+    expect: 0,
+  },
+  {
+    // A gap inside the collected stretch still is missing data.
+    name: 'gaps: a gap after collection began is still missing data',
+    run: () => {
+      const start = NOW - 14 * 24 * 3600;
+      const samples = [];
+      const holeStart = NOW - 24 * 3600;
+      for (let t = NOW - 2 * 24 * 3600; t <= NOW; t += 300) {
+        if (t >= holeStart && t < holeStart + 4 * 3600) continue;
+        samples.push({ recordedAt: t, value: 50, windowEndsAt: Math.ceil(t / WINDOW) * WINDOW });
+      }
+      const bars = buildWindowPeaks(samples, {
+        startAt: start,
+        endAt: NOW,
+        now: NOW,
+        windowSeconds: WINDOW,
+      });
+      return bars.filter((bar) => !bar.hasSamples).length;
+    },
+    expect: 1,
+  },
+  {
+    // The daily chart says the same thing through hasSamples rather than a
+    // span, so it needs the same rule or it paints the days before collection.
+    name: 'gaps: daily bars start where collection did',
+    run: () => {
+      const start = NOW - 14 * 24 * 3600;
+      const samples = [];
+      for (let t = NOW - 2 * 24 * 3600; t <= NOW; t += 3600) {
+        samples.push({ recordedAt: t, value: 50, windowEndsAt: NOW + WINDOW });
+      }
+      const { bars } = buildDailyUsage(samples, { startAt: start, endAt: NOW });
+      return bars.filter((bar) => !bar.hasSamples).length;
+    },
+    expect: 0,
   },
 ];
 
