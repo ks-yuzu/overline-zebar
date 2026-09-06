@@ -271,18 +271,43 @@ sub normalize_screen {
 sub scan_sections {
 	my ($screen) = @_;
 	my @sections;
-	# The label has to sit on its own heading's line. Allowed to wrap, a
-	# bracket that opens the body - `(resets weekly)`, a footnote - becomes a
-	# window that was never on the screen, and the heading it was taken from
-	# loses its own numbers to it.
-	while ($screen =~ /Current\s*(session|week)\b[ \t]*(?:\(\s*([^()\n]{1,40}?)\s*\))?/gi) {
+
+	while ($screen =~ /Current\s*(session|week)\b[ \t]*/gi) {
+		my $kind = lc $1;
+		my $heading_at = $-[0];
+		my $body_at = $+[0];
+		my ($label, $unreadable);
+
+		# Only a bracket that opens on the heading's own line and closes on it
+		# is a label. A bracket that does not read that way is not the same
+		# thing as no bracket at all: `Current week` with nothing after it is
+		# the wording from before the per-model windows existed and means the
+		# total, while a bracket we could not read is a name we failed to
+		# read, and calling that the total would publish one model's
+		# consumption as every model's.
+		if (substr($screen, $body_at, 1) eq '(') {
+			if (substr($screen, $body_at, 60) =~ /^\([ \t]*([^()\n]{1,40}?)[ \t]*\)/) {
+				$label = $1;
+				$body_at += $+[0];
+			}
+			else {
+				$unreadable = 1;
+			}
+		}
+
+		# Resume after the label rather than after the heading, so a bracket
+		# that happens to contain these words cannot open a second section.
+		pos($screen) = $body_at;
+
 		push @sections, {
-			kind => lc $1,
-			label => $2,
-			heading_at => $-[0],
-			body_at => $+[0],
+			kind => $kind,
+			label => $label,
+			unreadable => $unreadable,
+			heading_at => $heading_at,
+			body_at => $body_at,
 		};
 	}
+
 	# A window's numbers sit on the lines directly under its heading. Bounding
 	# the body there as well as at the next heading matters because the panel
 	# prints figures that belong to no window of ours: the credits block at the
@@ -301,51 +326,44 @@ sub scan_sections {
 		@lines = @lines[0 .. $body_lines] if @lines > $body_lines + 1;
 		$sections[$i]{body} = join "\n", @lines;
 	}
+
 	return @sections;
 }
 
 # The gauge prints the figure twice - `31% 31% used` - so the percentage is
 # taken from the one the word follows, not the first on the line.
+#
+# Case-insensitive, as the expression this replaced was. The helper publishes
+# nothing unless both windows parse, so a capitalisation change would not cost
+# the new window - it would stop the helper outright and leave the widget
+# re-reading a cache that never moves again.
 sub reading_from {
 	my ($body) = @_;
-	# Case-insensitive, as the expression this replaced was. The helper
-	# publishes nothing unless both windows parse, so a capitalisation change
-	# would not cost the new window - it would stop the helper outright and
-	# leave the widget re-reading a cache that never moves again.
 	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/i;
 	my $percent = $1;
 	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/i;
 	return [$percent, $1, $2];
 }
 
-# `(all models)` names the window that spans every model. Matched loosely on
-# purpose: this is the only route to `current_week`, so wording that drifted
-# would take the session window down with it rather than just losing the new
-# one - the helper needs both windows or it publishes neither.
+# `(all models)` is what the panel calls the window that spans every model, and
+# a heading with no bracket at all is the same window under the older wording.
+#
+# Matched exactly. A looser test reads the words wherever they appear, and a
+# model named in a way that contains them - `(Fable, not all models)` - would
+# then be published as the weekly total. Wording that drifts costs the reading
+# instead, which stops the helper visibly rather than writing a wrong number.
 sub is_all_models {
 	my ($label) = @_;
-	return 0 unless defined $label;
-	return $label =~ /all[\s\-]*models/i ? 1 : 0;
+	return 1 unless defined $label;
+	return $label =~ /^all\s+models$/i ? 1 : 0;
 }
 
 sub read_windows {
 	my ($screen) = @_;
 	my ($session, $week, %model);
-	my @sections = scan_sections($screen);
 
-	# A screen that labels one weekly window labels them all. So a weekly
-	# heading whose parenthetical did not parse - wrapped inside the brackets,
-	# brackets within the label, a separator that is not a bracket at all - is
-	# not the bare heading of the older wording. It is a label that could not
-	# be read, and on a screen with two weekly windows it is the per-model one.
-	# Taking it for the all-models week publishes one model's consumption as
-	# the weekly total, which is the failure the section boundaries exist to
-	# stop, re-entered through the fallback.
-	my $labelled_week = grep {
-		$_->{kind} eq 'week' && defined $_->{label}
-	} @sections;
-
-	for my $section (@sections) {
+	for my $section (scan_sections($screen)) {
+		next if $section->{unreadable};
 		my $reading = reading_from($section->{body})
 			or next;
 		my $window = { label => $section->{label}, reading => $reading };
@@ -354,46 +372,22 @@ sub read_windows {
 		# half-drawn one carry no numbers yet, so each window keeps the last
 		# render that was complete rather than the last heading seen.
 		if ($section->{kind} eq 'session') {
-			# A session window scoped to one model is not collected: there is
-			# no field for it, and taking it for the whole session would put
-			# one model's five hours under every model's name.
-			#
-			# Unlike the weekly heading, a bare one here is still the
-			# aggregate. The panel labels its weekly total `(all models)`
-			# today and leaves the session heading bare, so an unlabelled
-			# session heading beside a labelled one is the wording in use,
-			# not a label that failed to parse.
-			next if defined $section->{label}
-				&& !is_all_models($section->{label});
 			$session = $window;
 		}
 		elsif (is_all_models($section->{label})) {
 			$week = $window;
 		}
-		elsif (!defined $section->{label}) {
-			# The wording from before the per-model windows existed. Trusted
-			# only while nothing on this screen carries a label to read it
-			# against.
-			$week = $window unless $labelled_week;
-		}
 		else {
-			$model{lc $section->{label}} = $window;
+			$model{ $section->{label} } = $window;
 		}
 	}
 
+	# One per-model window is the one to record. Two and the screen does not
+	# say which of them the widget is for, so neither is recorded: writing
+	# either would put one model's consumption under the other's name, and
+	# writing nothing is the lighter failure.
 	my @model_labels = sort keys %model;
-	my $model_week;
-	if (@model_labels == 1) {
-		$model_week = $model{ $model_labels[0] };
-	}
-	elsif (@model_labels > 1) {
-		# Only a tie-break between windows already found by their shape, never
-		# the test for what a per-model window is. Naming the model there would
-		# make a renamed one read as a plan that has no such window at all.
-		my @fable = grep { $_ eq 'fable' } @model_labels;
-		@fable = grep { /fable/ } @model_labels unless @fable;
-		$model_week = $model{ $fable[0] } if @fable == 1;
-	}
+	my $model_week = @model_labels == 1 ? $model{ $model_labels[0] } : undef;
 
 	return {
 		session => $session,

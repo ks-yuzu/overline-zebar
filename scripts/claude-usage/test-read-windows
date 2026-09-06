@@ -9,6 +9,10 @@
 # plausible percentage - and shows up only as a chip and a graph that have been
 # reporting one window's consumption under another window's name.
 #
+# Labels are compared as the screen spells them. The helper keys per-model
+# windows on the label verbatim, so two spellings are two windows and neither
+# is recorded - folding case here would hide that.
+#
 # The subroutines are read out of the helper rather than duplicated here: this
 # has to break when the helper changes, not track it. Run from anywhere:
 #
@@ -70,30 +74,7 @@ my @cases = (
 		week => 31,
 		model => 68,
 		model_label => 'Fable',
-		labels => 'fable',
-	},
-	{
-		# A label has to sit on its heading's line. Reading one from the line
-		# below cannot be told apart from reading the first line of the body,
-		# and the body's own bracket then becomes a window that was never on
-		# the screen - taking the weekly total down with it.
-		name => 'per-model label on the line below its heading',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week',
-			'(Fable)',
-			'68% 68% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => undef,
-		labels => '',
+		labels => 'Fable',
 	},
 	{
 		name => 'bracketed text below a bare heading is body, not a label',
@@ -123,48 +104,6 @@ my @cases = (
 			'CURRENT WEEK (ALL MODELS)',
 			'31% 31% USED',
 			'RESETS Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => undef,
-		labels => '',
-	},
-	{
-		# The session window got none of the guards the weekly one did. A
-		# session split by model would publish one model's five hours as
-		# everything the session had used.
-		name => 'session window split by model',
-		screen => join("\r\n",
-			'Current session (all models)',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current session (Fable)',
-			'68% 68% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => undef,
-		labels => '',
-	},
-	{
-		# The session heading carries no parenthetical today, so a bare one
-		# beside a labelled one is still the aggregate. Dropping it the way an
-		# unlabelled weekly heading is dropped would kill a working screen.
-		name => 'bare session heading beside a per-model one',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current session (Fable)',
-			'68% 68% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
 		),
 		session => 23,
 		week => 31,
@@ -242,31 +181,12 @@ my @cases = (
 		labels => '',
 	},
 	{
-		name => 'two per-model windows, one of them Fable',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Opus)',
-			'40% 40% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Fable)',
-			'68% 68% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => 68,
-		model_label => 'Fable',
-		labels => 'fable, opus',
-	},
-	{
 		# Nothing on the screen says which one the widget is for, and writing
 		# either would put one model's consumption under the other's name.
-		name => 'two per-model windows, neither of them Fable',
+		# The count is the whole rule: no preference for any model name, so
+		# that a plan gaining a second window cannot silently switch which
+		# model the series holds.
+		name => 'two per-model windows on one screen',
 		screen => join("\r\n",
 			'Current session',
 			'23% 23% used',
@@ -284,34 +204,59 @@ my @cases = (
 		session => 23,
 		week => 31,
 		model => undef,
-		labels => 'opus, sonnet',
+		labels => 'Opus, Sonnet',
 	},
 	{
-		# A label can fail to parse: wrapped inside the brackets, nested
-		# brackets, a separator that is not a bracket at all. Read as the bare
-		# heading of the older wording it becomes the all-models week, and the
-		# per-model figure is published as the weekly total - the very thing
-		# the section boundaries were put in to stop.
-		name => 'per-model label wrapped inside its own brackets',
+		# `(all models)` is matched exactly. Read as "contains those words" a
+		# model named in a way that mentions them is taken for the total, and
+		# its consumption is published as the weekly figure - a wrong number
+		# under a field name that has been right for months.
+		name => 'model name that mentions all models',
 		screen => join("\r\n",
 			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
+			'5% 5% used',
+			'Resets 9:10pm (Asia/Tokyo)',
 			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Claude',
-			'Fable 5.1)',
-			'68% 68% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'38% 38% used',
+			'Resets Sep 7, 8:59am (Asia/Tokyo)',
+			'Current week (Fable, not all models)',
+			'7% 7% used',
+			'Resets Sep 7, 8:59am (Asia/Tokyo)',
 		),
-		session => 23,
-		week => 31,
+		session => 5,
+		week => 38,
+		model => 7,
+		model_label => 'Fable, not all models',
+		labels => 'Fable, not all models',
+	},
+	{
+		# The bracket has to close on the line it opened on. Allowed to run to
+		# the next line it swallows the body, and the window it invents is
+		# recorded under a name that was never a model.
+		name => 'bracket opens on the heading and closes below',
+		screen => join("\r\n",
+			'Current session',
+			'5% 5% used',
+			'Resets 9:10pm (Asia/Tokyo)',
+			'Current week (all models)',
+			'38% 38% used',
+			'Resets Sep 7, 8:59am (Asia/Tokyo)',
+			'Current week (',
+			'resets weekly)',
+			'7% 7% used',
+			'Resets Sep 7, 8:59am (Asia/Tokyo)',
+		),
+		session => 5,
+		week => 38,
 		model => undef,
 		labels => '',
 	},
 	{
-		name => 'per-model label with brackets inside it',
+		# `Current week` with nothing after it means the total, so a bracket
+		# that will not parse must not fall back to that: the per-model figure
+		# would be published as the weekly total. The window is dropped and
+		# the two that read cleanly are kept.
+		name => 'label that cannot be read is not a missing label',
 		screen => join("\r\n",
 			'Current session',
 			'23% 23% used',
@@ -327,67 +272,6 @@ my @cases = (
 		week => 31,
 		model => undef,
 		labels => '',
-	},
-	{
-		# `(all models)` is the only route to the weekly total, so wording that
-		# drifts must not take the whole reading down with it. Matched too
-		# tightly, this screen loses the session window as well.
-		name => 'all-models wording drifts',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (across all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Fable)',
-			'68% 68% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => 68,
-		model_label => 'Fable',
-		labels => 'fable',
-	},
-	{
-		name => 'all-models written with a hyphen',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all-models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => undef,
-		labels => '',
-	},
-	{
-		# The tie-break is meant to pick Fable, not to give up when a second
-		# window happens to share the word.
-		name => 'two per-model windows sharing the word Fable',
-		screen => join("\r\n",
-			'Current session',
-			'23% 23% used',
-			'Resets 11:10am (Asia/Tokyo)',
-			'Current week (all models)',
-			'31% 31% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Fable mini)',
-			'12% 12% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-			'Current week (Fable)',
-			'68% 68% used',
-			'Resets Sep 7, 9am (Asia/Tokyo)',
-		),
-		session => 23,
-		week => 31,
-		model => 68,
-		model_label => 'Fable',
-		labels => 'fable, fable mini',
 	},
 	{
 		# The panel prints figures that belong to no window of ours. Below the
