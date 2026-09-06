@@ -323,6 +323,60 @@ reset時刻が取れないのは画面を描画途中で拾った時で、その
 求めるので、reset時刻の無いsampleは現在windowへ0%への落下として混ざり、その後の
 上昇で以前の分がもう一度計上されてしまう。
 
+**画面が描き終わるまで読み続ける。固定時間の待機にしない。** `/usage`は2度に分けて
+描画され、**model別のwindowは2度目に来る。**expectの`after`はptyを読まず、`log_file`は
+読んだ分しか記録しないため、待機中に描かれたものは捕捉に一切入らない。待機を5秒から
+90秒へ延ばしても変わらなかった。長い待機は「読まない時間が長い」だけである。
+
+画面が静かになったら止め、上限で打ち切る。上限は、収まらない画面がcronの`timeout 60s`に
+達して読み取りごと失われるのを防ぐためにある。実測で13〜14秒だった。
+
+**画面はwindowの見出しで区切って読む。** `/usage`は`Current session`、
+`Current week (all models)`、planによっては`Current week (<model>)`を並べる。各windowの
+数字は自分の見出しから次の見出しまで、かつ**見出し直下4行まで**から読む。
+
+見出しごとに1つの正規表現で`.*?% used`まで走らせると自分の節を越え、週次の見出しが
+2つ並んだ時点でall modelsの枠がmodel別の数字を読む。行数の制限も要る。画面には
+こちらのwindowに属さない数字があり、下部のcredits枠は自前の`100% 100% used`と
+`Resets Oct 1`を持ち、部分再描画は見出しの無い数字を残す。数字が来る前に描かれた
+見出しがそこまで届くと、**形の揃った、もっともらしい、誤ったwindowが公開される。**
+
+### 見出しの括弧書きをどう読むか
+
+括弧の中身は、集計枠の目印か、model名か、そのどちらでもない何かでありうる。
+**画面はどれなのかを言わない。**規則を足して3種類目を捌こうとすると、1つ足すたびに
+別の入力が壊れる (実際にレビュー3巡で同じ場所が回帰した)。そのため**規則を最小に保ち、
+迷う入力では書かずに止まる**方針を採る。判定は上から順に次のとおり。
+
+| 条件 | 扱い |
+| --- | --- |
+| 見出し直後に`(`があり、同じ行で閉じない | **読めない見出しとして捨てる** |
+| `kind`が`session` | sessionのwindow。括弧の中身は見ない |
+| 括弧が無い | all modelsの週次 (per-model window以前の表記) |
+| 中身が`all models`と**完全一致** | all modelsの週次 |
+| それ以外 | model別の週次。labelは画面の表記のまま持つ |
+
+そのうえで、**model別の週次が2つ以上あればどれも記録しない。**どちらをwidgetが
+指すのかを決める情報が画面に無く、片方を書くとあるmodelの消費が別のmodelの名前の
+下に入る。model名による優先付けは持たない。持つと、planがwindowを1つ増やした時に
+系列の中身が黙って入れ替わる。
+
+それぞれの理由は次のとおり。
+
+- **読めない括弧を「括弧が無い」と同じにしない。** 括弧が無い見出しは合計枠を指すが、
+  読めなかった括弧は**読み損ねたmodel名**である。合計枠として扱うと、あるmodelの
+  消費が週次の合計として公開される
+- **`all models`は完全一致で見る。** 包含で見ると`(Fable, not all models)`のような
+  model名を合計枠と判定してしまう。表記が変われば読み取りごと落ちるが、それは
+  値を書かずに止まる失敗で、`generated_at`が動かなくなるためwidgetから見える
+- **sessionでは括弧を見ない。** 今日のsessionの見出しは括弧を持たない。括弧を
+  model名と決めつけると、`(5h)`のような注記が付いただけでsessionを見失い、
+  週次まで含めて何も公開できなくなる
+
+**model別の週次はsampleの記録条件にしない。** 見出しもreset表記も画面の中で最も
+新しい部分で、変わる可能性が高い。そこが読めないことでsample全体を落とすと、
+読めていた2つのwindowのgraphまで空になる。
+
 **reset時刻は「現在時刻に最も近い候補」として解釈する。** Claudeはsessionのreset
 を時刻だけ (`5:50am`)、weekのresetを月日だけ (`Sep 7, 9am`) で表示し、どちらも
 日付や年を持たない。候補 (前日・当日・翌日 / 前年・当年・翌年) のうちnowに最も
@@ -374,8 +428,21 @@ Claude UIが必要とする主なfield:
 - `last_known_age`（任意）
 - `current_session.used_percent`、`resets_at`
 - `current_week.used_percent`、`resets_at`
+- `current_week_model`（任意）
+  - `Current week (Fable)`のような、1つのmodelだけを対象とする週次window。
+    `label`にmodel名、残りは`current_week`と同じ形を持つ。
+  - **planによっては存在しない。無い時はfieldごと省く。** 週次の枠が1つしかない
+    planでこのfieldを空で置くと、widget側が「0%」と区別できない。
 - `history`
   - 5分ごとの5H・7D使用率と各reset日時を14日分保持する。
+  - `current_week_model`があるsampleは`week_model_used_percent`、
+    `week_model_resets_at`、`week_model_label`の3つを**揃えて**持つ。欠けた
+    sampleからはこの3つを落とす。使用率だけではwindowへ置けず、labelが無いと
+    別modelの週次と見分けられない。
+  - **historyは1本の系列にlabelの異なるsampleが混ざりうる。** helperはlabelが
+    変わってもそこで系列を切らない。14日分の有効なデータを改名だけで捨てないため
+    である。**描画側がlabelで区切る。**混ざったまま1本の線として描くと、別々の
+    windowの消費が連続した推移に見える。
   - Claude側がlast-known値を返した場合は新しい履歴点として追加しない。
 
 Codex UIが必要とする主なfield:
@@ -730,6 +797,7 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 perl scripts/claude-usage/test-normalize-reset
+perl scripts/claude-usage/test-read-windows
 node packages/ui/test-usage-series.mjs
 ```
 
@@ -740,6 +808,10 @@ node packages/ui/test-usage-series.mjs
 `test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
 subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
 落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
+
+`test-read-windows`は画面のどの数字がどのwindowのものかを検証する。ここを誤ると
+JSONは正しい形のまま値だけが入れ替わるため、出力を見ても気付けない。こちらも
+helperからsubroutineを抽出している。
 
 実機反映を伴うUI変更の完了条件は次のとおり。
 

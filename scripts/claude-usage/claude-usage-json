@@ -14,6 +14,19 @@ if [[ ! "$cache_ttl_seconds" =~ ^[1-9][0-9]*$ ]]; then
 	exit 64
 fi
 
+# How long the /usage panel may keep drawing before the reading is taken. The
+# panel renders twice and the second pass carries the per-model windows, so the
+# capture has to stay open past the first one. The cap keeps a panel that never
+# settles from running into the timeout cron wraps the helper in.
+settle_quiet_seconds="${CLAUDE_USAGE_SETTLE_QUIET:-4}"
+settle_cap_seconds="${CLAUDE_USAGE_SETTLE_CAP:-25}"
+for setting in settle_quiet_seconds settle_cap_seconds; do
+	if [[ ! "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s must be a positive integer\n' "$setting" >&2
+		exit 64
+	fi
+done
+
 session_id="${CLAUDE_USAGE_SESSION_ID:-ca1de000-0000-4000-8000-000000000001}"
 if [[ ! "$session_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
 	printf 'CLAUDE_USAGE_SESSION_ID must be a valid UUID\n' >&2
@@ -120,11 +133,14 @@ if ! cd -- "$claude_work_dir"; then
 	exit 73
 fi
 
-if ! expect -f - "$capture_file" "$timeout_seconds" "$claude_bin" "$session_id" <<'EXPECT'
+if ! expect -f - "$capture_file" "$timeout_seconds" "$claude_bin" "$session_id" \
+	"$settle_quiet_seconds" "$settle_cap_seconds" <<'EXPECT'
 set capture_file [lindex $argv 0]
 set timeout [lindex $argv 1]
 set claude_bin [lindex $argv 2]
 set session_id [lindex $argv 3]
+set settle_quiet_seconds [lindex $argv 4]
+set settle_cap_seconds [lindex $argv 5]
 
 log_user 0
 log_file -noappend -a $capture_file
@@ -175,9 +191,27 @@ expect {
 	}
 }
 
-# Give the usage request a moment to refresh. If it cannot refresh, Claude Code
-# leaves the last-known values on screen; the parser reports that state in JSON.
-after 5000
+# Read while the panel finishes drawing, rather than pausing for a fixed time.
+# `after` does not read the pty, and `log_file` records only what expect reads,
+# so everything drawn during such a pause never reaches the capture. The panel
+# renders in two passes and the windows Claude scopes to one model arrive in
+# the second, which is why they were missing from every capture while an
+# interactive session showed them. Lengthening the pause did not help - a
+# longer pause is simply a longer stretch of not reading.
+#
+# Stops after the screen has been quiet for a moment, and gives up at the cap
+# so that a panel which never settles still yields the reading it has. If it
+# cannot refresh, Claude Code leaves the last-known values on screen; the
+# parser reports that state in JSON.
+set settle_deadline [expr {[clock seconds] + $settle_cap_seconds}]
+set timeout $settle_quiet_seconds
+expect {
+	-re {.+} {
+		if {[clock seconds] < $settle_deadline} { exp_continue }
+	}
+	timeout {}
+	eof {}
+}
 send -- "\033"
 after 100
 send -- "\003"
@@ -208,35 +242,159 @@ my ($capture_file, $cache_file, $samples_file) = @ARGV;
 open my $capture, '<:raw', $capture_file
 	or die "cannot read capture file: $!\n";
 local $/;
-my $text = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
+my $raw_screen = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
 close $capture;
 
 # Remove OSC, CSI, and remaining short escape sequences emitted by the TUI.
-$text =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
-$text =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
-$text =~ s/\e.//gs;
-$text =~ tr/\x{00a0}/ /;
-$text =~ s/\r/\n/g;
-$text =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
-$text =~ s/[ \t]+/ /g;
-$text =~ s/\n+/\n/g;
-
-sub extract_usage {
-	my ($heading) = @_;
-	my @matches;
-	while (
-		$text =~ /$heading\b.*?(\d+(?:\.\d+)?)%\s*used.*?Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/gsi
-	) {
-		push @matches, [$1, $2, $3];
-	}
-	return $matches[-1];
+sub normalize_screen {
+	my ($screen) = @_;
+	$screen =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
+	$screen =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
+	$screen =~ s/\e.//gs;
+	$screen =~ tr/\x{00a0}/ /;
+	$screen =~ s/\r/\n/g;
+	$screen =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
+	$screen =~ s/[ \t]+/ /g;
+	$screen =~ s/\n+/\n/g;
+	return $screen;
 }
 
-my $session = extract_usage(qr/Current\s*session/i);
-my $week = extract_usage(qr/Current\s*week(?:\s*\(all\s*models\))?/i);
+# The panel gives each window a heading of its own: `Current session`, then
+# `Current week (all models)`, and on a plan that caps one model separately a
+# further `Current week (<model>)`. Cut the screen at those headings so a
+# window's numbers are read only from its own stretch.
+#
+# A single expression per window cannot do this. `Current week` followed by
+# `.*?% used` scans past the end of its own section, so the moment a second
+# weekly heading appears the all-models window reads the per-model figures -
+# a wrong value written under a name that has been right for months.
+sub scan_sections {
+	my ($screen) = @_;
+	my @sections;
 
-if (!$session || !$week) {
-	die "could not parse Current session and Current week from Claude /usage\n";
+	while ($screen =~ /Current\s*(session|week)\b[ \t]*/gi) {
+		my $kind = lc $1;
+		my $heading_at = $-[0];
+		my $body_at = $+[0];
+		my ($label, $unreadable);
+
+		# Only a bracket that opens on the heading's own line and closes on it
+		# is a label. A bracket that does not read that way is not the same
+		# thing as no bracket at all: `Current week` with nothing after it is
+		# the wording from before the per-model windows existed and means the
+		# total, while a bracket we could not read is a name we failed to
+		# read, and calling that the total would publish one model's
+		# consumption as every model's.
+		if (substr($screen, $body_at, 1) eq '(') {
+			if (substr($screen, $body_at, 60) =~ /^\([ \t]*([^()\n]{1,40}?)[ \t]*\)/) {
+				$label = $1;
+				$body_at += $+[0];
+			}
+			else {
+				$unreadable = 1;
+			}
+		}
+
+		# Resume after the label rather than after the heading, so a bracket
+		# that happens to contain these words cannot open a second section.
+		pos($screen) = $body_at;
+
+		push @sections, {
+			kind => $kind,
+			label => $label,
+			unreadable => $unreadable,
+			heading_at => $heading_at,
+			body_at => $body_at,
+		};
+	}
+
+	# A window's numbers sit on the lines directly under its heading. Bounding
+	# the body there as well as at the next heading matters because the panel
+	# prints figures that belong to no window of ours: the credits block at the
+	# foot carries its own `100% 100% used` and `Resets Oct 1`, and a partial
+	# redraw leaves numbers behind with no heading of their own. A heading
+	# drawn before its numbers would otherwise reach them and publish a
+	# complete, plausible, wrong window.
+	my $body_lines = 4;
+	for my $i (0 .. $#sections) {
+		my $body_end = $i < $#sections ? $sections[$i + 1]{heading_at} : length $screen;
+		my $body = substr $screen, $sections[$i]{body_at},
+			$body_end - $sections[$i]{body_at};
+		# The body opens with the newline that ends the heading's own line, so
+		# the first field of the split is empty and does not count as a line.
+		my @lines = split /\n/, $body, -1;
+		@lines = @lines[0 .. $body_lines] if @lines > $body_lines + 1;
+		$sections[$i]{body} = join "\n", @lines;
+	}
+
+	return @sections;
+}
+
+# The gauge prints the figure twice - `31% 31% used` - so the percentage is
+# taken from the one the word follows, not the first on the line.
+#
+# Case-insensitive, as the expression this replaced was. The helper publishes
+# nothing unless both windows parse, so a capitalisation change would not cost
+# the new window - it would stop the helper outright and leave the widget
+# re-reading a cache that never moves again.
+sub reading_from {
+	my ($body) = @_;
+	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/i;
+	my $percent = $1;
+	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/i;
+	return [$percent, $1, $2];
+}
+
+# `(all models)` is what the panel calls the window that spans every model, and
+# a heading with no bracket at all is the same window under the older wording.
+#
+# Matched exactly. A looser test reads the words wherever they appear, and a
+# model named in a way that contains them - `(Fable, not all models)` - would
+# then be published as the weekly total. Wording that drifts costs the reading
+# instead, which stops the helper visibly rather than writing a wrong number.
+sub is_all_models {
+	my ($label) = @_;
+	return 1 unless defined $label;
+	return $label =~ /^all\s+models$/i ? 1 : 0;
+}
+
+sub read_windows {
+	my ($screen) = @_;
+	my ($session, $week, %model);
+
+	for my $section (scan_sections($screen)) {
+		next if $section->{unreadable};
+		my $reading = reading_from($section->{body})
+			or next;
+		my $window = { label => $section->{label}, reading => $reading };
+
+		# The capture holds every redraw of the panel, and the headings of a
+		# half-drawn one carry no numbers yet, so each window keeps the last
+		# render that was complete rather than the last heading seen.
+		if ($section->{kind} eq 'session') {
+			$session = $window;
+		}
+		elsif (is_all_models($section->{label})) {
+			$week = $window;
+		}
+		else {
+			$model{ $section->{label} } = $window;
+		}
+	}
+
+	# One per-model window is the one to record. Two and the screen does not
+	# say which of them the widget is for, so neither is recorded: writing
+	# either would put one model's consumption under the other's name, and
+	# writing nothing is the lighter failure.
+	my @model_labels = sort keys %model;
+	my $model_week = @model_labels == 1 ? $model{ $model_labels[0] } : undef;
+
+	return {
+		session => $session,
+		week => $week,
+		model_week => $model_week,
+		model_labels => \@model_labels,
+	};
 }
 
 sub hour_24 {
@@ -389,14 +547,51 @@ sub archive_sample {
 	return;
 }
 
+my $text = normalize_screen($raw_screen);
+my $windows = read_windows($text);
+my $session = $windows->{session};
+my $week = $windows->{week};
+my $model_week = $windows->{model_week};
+
+if (!$session || !$week) {
+	# Name what was found. A weekly heading whose label went unrecognised is
+	# read as a per-model window, and then the message alone would send the
+	# reader looking for a window that was on the screen all along.
+	die sprintf
+		"could not parse Current session and Current week from Claude /usage"
+			. " (session %s, all-models week %s, per-model weekly labels: %s)\n",
+		$session ? 'found' : 'missing',
+		$week ? 'found' : 'missing',
+		@{ $windows->{model_labels} }
+			? join(', ', @{ $windows->{model_labels} })
+			: 'none';
+}
+
+# Two of them and no way to tell which the widget should draw. Recording either
+# would put one model's consumption under the other's name for as long as the
+# screen stays that way, so the window is left out and the other two go on.
+if (!$model_week && @{ $windows->{model_labels} } > 1) {
+	printf {*STDERR} "claude usage: %d per-model weekly windows on screen (%s); none recorded\n",
+		scalar @{ $windows->{model_labels} },
+		join ', ', @{ $windows->{model_labels} };
+}
+
 my $compact_text = $text;
 $compact_text =~ s/\s+//g;
 my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
 my $refresh_status = defined $age ? 'last_known' : 'not_reported';
 my $generated_epoch = time;
 my $generated_at = iso_local($generated_epoch);
-my $session_usage = usage_object($session, 'session');
-my $week_usage = usage_object($week, 'week');
+my $session_usage = usage_object($session->{reading}, 'session');
+my $week_usage = usage_object($week->{reading}, 'week');
+
+# A per-model week is a week: same length, so the same rule decides which
+# occurrence of the reset label is meant.
+my $model_week_usage;
+if ($model_week) {
+	$model_week_usage = usage_object($model_week->{reading}, 'week');
+	$model_week_usage->{label} = $model_week->{label};
+}
 
 my @history;
 if (-s $cache_file) {
@@ -431,6 +626,21 @@ if (-s $cache_file) {
 				&& defined $_->{session_resets_at}
 				&& defined $_->{week_resets_at}
 		} @{$previous->{history}};
+
+		# The per-model window is carried as a complete triple or not at all. A
+		# percentage with no reset cannot be placed in a window, and one with no
+		# label cannot be told apart from the next model's, so a sample that has
+		# part of the triple loses that part and keeps the two windows that were
+		# always there. Applied on every write, so a cache an earlier helper left
+		# half-written is cleaned rather than drawn for the next 14 days.
+		for my $sample (@history) {
+			next if looks_like_number($sample->{week_model_used_percent})
+				&& defined $sample->{week_model_resets_at}
+				&& defined $sample->{week_model_label};
+			delete @{$sample}{
+				qw(week_model_used_percent week_model_resets_at week_model_label)
+			};
+		}
 	}
 }
 
@@ -441,6 +651,13 @@ if (-s $cache_file) {
 # that must not enter the history the graphs are derived from.
 my $reset_times_parsed = defined $session_usage->{resets_at}
 	&& defined $week_usage->{resets_at};
+
+if ($refresh_status ne 'last_known'
+	&& $model_week_usage
+	&& !defined $model_week_usage->{resets_at}) {
+	printf {*STDERR}
+		"claude usage: per-model weekly reset time did not parse; that window not recorded\n";
+}
 
 if ($refresh_status ne 'last_known' && !$reset_times_parsed) {
 	# Left silent this would stop history collection for good if the wording or
@@ -460,6 +677,16 @@ if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 		if defined $session_usage->{resets_at};
 	$sample{week_resets_at} = $week_usage->{resets_at}
 		if defined $week_usage->{resets_at};
+
+	# The per-model window rides along; it does not gate the sample the way the
+	# other two do. Its heading and its reset wording are the newest part of the
+	# screen and the likeliest to change, and letting a change there stop the
+	# sample would empty the graphs for the two windows that still parsed.
+	if ($model_week_usage && defined $model_week_usage->{resets_at}) {
+		$sample{week_model_used_percent} = 0 + $model_week_usage->{used_percent};
+		$sample{week_model_resets_at} = $model_week_usage->{resets_at};
+		$sample{week_model_label} = $model_week_usage->{label};
+	}
 
 	if (@history && $generated_epoch - $history[-1]->{recorded_at} < 60) {
 		$history[-1] = \%sample;
@@ -481,6 +708,7 @@ my %output = (
 	current_week => $week_usage,
 	history => \@history,
 );
+$output{current_week_model} = $model_week_usage if $model_week_usage;
 $output{last_known_age} = $age if defined $age;
 
 # Not pretty-printed: the widget re-reads this file every 60s, and indentation
