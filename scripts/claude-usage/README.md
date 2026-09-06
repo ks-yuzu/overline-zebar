@@ -112,4 +112,12 @@ Environment variables provide optional overrides:
 - `CLAUDE_USAGE_CLAUDE_BIN`
 - `CLAUDE_USAGE_SESSION_ID`
 - `CLAUDE_USAGE_WORK_DIR` (default: `$HOME/.cache/claude-usage-json/workdir`)
+- `CLAUDE_USAGE_SETTLE_QUIET` (default: `4` seconds of a still screen)
+- `CLAUDE_USAGE_SETTLE_CAP` (default: `25` seconds)
 - `CLAUDE_USAGE_CAPTURE_PATH` (debug capture; may contain terminal output)
+
+The panel draws in two passes and the windows Claude scopes to one model arrive
+in the second, so the helper reads until the screen has been still for
+`CLAUDE_USAGE_SETTLE_QUIET`, and gives up at `CLAUDE_USAGE_SETTLE_CAP` with
+whatever it has. Waiting without reading does not work: `expect` logs only what
+it reads, so a pause is a stretch of screen that never reaches the capture.

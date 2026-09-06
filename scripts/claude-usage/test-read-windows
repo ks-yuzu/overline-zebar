@@ -390,6 +390,59 @@ my @cases = (
 		labels => 'fable, fable mini',
 	},
 	{
+		# The panel prints figures that belong to no window of ours. Below the
+		# windows sits a credits block with its own `100% 100% used` and a
+		# reset of its own, so a heading drawn before its numbers must not
+		# reach down to them: they parse cleanly and would be published as a
+		# complete window at 100%.
+		name => 'credits block below a heading drawn without numbers',
+		screen => join("\r\n",
+			'Current session',
+			'5% 5% used',
+			'Resets 9:10pm (Asia/Tokyo)',
+			'Current week (all models)',
+			'37% 37% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'+50% weekly limits promo through Sep 13',
+			'Current week (Fable)',
+			"What's contributing to your limits usage?",
+			'Approximate, based on local sessions on this machine',
+			'Scanning local sessions...',
+			'Usage credits',
+			'100% 100% used',
+			'$0.00 / $0.00 spent - Resets Oct 1 (Asia/Tokyo)',
+		),
+		session => 5,
+		week => 37,
+		model => undef,
+		labels => '',
+	},
+	{
+		# The same reach, one window earlier: a partial redraw leaves numbers
+		# with no heading of their own further down the capture.
+		name => 'orphan numbers further down the capture',
+		screen => join("\r\n",
+			'Current session',
+			'5% 5% used',
+			'Resets 9:10pm (Asia/Tokyo)',
+			'Current week (all models)',
+			'37% 37% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+			'+50% weekly limits promo through Sep 13',
+			'Current week (Fable)',
+			"What's contributing to your limits usage?",
+			'Approximate, based on local sessions on this machine',
+			'Scanning local sessions...',
+			'Esc to cancel',
+			'99% 99% used',
+			'Resets Sep 7, 9am (Asia/Tokyo)',
+		),
+		session => 5,
+		week => 37,
+		model => undef,
+		labels => '',
+	},
+	{
 		# What the section boundaries are for. The per-model heading arrived
 		# before its numbers and the panel then started over, so the next
 		# figures on the screen belong to the redraw's session window. Read
