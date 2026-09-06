@@ -91,7 +91,7 @@ export default function CodexUsage() {
           width: 920,
           // Keep in sync with the codex-usage-details preset in zpack.json:
           // the size passed here overrides it.
-          height: 580,
+          height: 630,
         });
         await zebar.startWidget('codex-usage-details', placement, {});
       }}

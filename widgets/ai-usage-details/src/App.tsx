@@ -320,8 +320,12 @@ export default function App() {
       <section className="grid shrink-0 grid-cols-2 gap-2">
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">5H trend</p>
-            <p className="text-[10px] text-text-muted">Current session</p>
+            <p className="text-xs font-medium text-text-muted">
+              [5H] usage trend
+            </p>
+            <p className="text-[10px] text-text-muted">
+              {sessionHistory.length} samples
+            </p>
           </div>
           <UsageTrend
             endAt={sessionRange.endAt}
@@ -329,13 +333,16 @@ export default function App() {
             paceGuide={sessionRange.started}
             points={sessionHistory}
             startAt={sessionRange.startAt}
-            viewWidth={420}
           />
         </Card>
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">7D trend</p>
-            <p className="text-[10px] text-text-muted">Current week</p>
+            <p className="text-xs font-medium text-text-muted">
+              [7D] usage trend
+            </p>
+            <p className="text-[10px] text-text-muted">
+              {weekHistory.length} samples
+            </p>
           </div>
           <UsageTrend
             endAt={weekRange.endAt}
@@ -343,7 +350,6 @@ export default function App() {
             paceGuide={weekRange.started}
             points={weekHistory}
             startAt={weekRange.startAt}
-            viewWidth={420}
           />
         </Card>
       </section>
@@ -351,27 +357,37 @@ export default function App() {
       <section className="grid shrink-0 grid-cols-2 gap-2">
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">14D 5H peaks</p>
-            <p className="text-[10px] text-text-muted">Per window</p>
+            <p className="text-xs font-medium text-text-muted">
+              [14D] 5H usage peak per window
+            </p>
+            <p className="text-[10px] text-text-muted">
+              {sessionSamples.length} samples
+            </p>
           </div>
           <UsageHistory
             barLabel="window peak"
+            barUnit="window"
             bars={sessionPeaks}
             endAt={historyRange.endAt}
-            label="14D 5H"
+            label="5H"
             startAt={historyRange.startAt}
           />
         </Card>
         <Card className="shrink-0 p-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-text-muted">14D weekly</p>
-            <p className="text-[10px] text-text-muted">Per day</p>
+            <p className="text-xs font-medium text-text-muted">
+              [14D] 7D usage trend and daily usage
+            </p>
+            <p className="text-[10px] text-text-muted">
+              {weekSamples.length} samples
+            </p>
           </div>
           <UsageHistory
             barLabel="daily"
+            barUnit="day"
             bars={dailyUsage.bars}
             endAt={historyRange.endAt}
-            label="14D weekly"
+            label="7D"
             lineLabel="cumulative"
             primarySeries="line"
             segments={dailyUsage.segments}
@@ -382,7 +398,6 @@ export default function App() {
 
       <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
         <span>Updated {formatUpdatedAt(data.generated_at)}</span>
-        <span>{data.history.length} retained samples · 14 days</span>
       </footer>
     </div>
   );
