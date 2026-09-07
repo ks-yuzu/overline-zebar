@@ -94,18 +94,58 @@ the JSON looking correct, so the cases live in their own script:
 perl scripts/claude-usage/test-read-windows
 ```
 
+The endpoint needs no classifying, but a window read from the wrong entry is
+still a plausible percentage under a field name, and a reset read without its
+offset lands hours away while the JSON still looks right:
+
+```sh
+perl scripts/claude-usage/test-read-api
+```
+
 The per-model window reaches the JSON as the optional `current_week_model`, with
-the model name in its `label`. Plans without one have no such field. To see what
-the helper actually read, point `CLAUDE_USAGE_CAPTURE_PATH` at a file and run
-`--force`; the capture holds the raw terminal output of the panel.
+the model name in its `label`. Plans without one have no such field. To see the panel as the
+helper sees it, run it with the panel pinned - in `auto` the endpoint answers,
+the panel never opens and no capture is written:
+
+```sh
+CLAUDE_USAGE_SOURCE=screen CLAUDE_USAGE_CAPTURE_PATH=/tmp/usage.txt \
+  claude-usage-json --force
+```
+
+## Where the reading comes from
+
+The helper asks `https://api.anthropic.com/api/oauth/usage` first, with the
+OAuth access token from `$HOME/.claude/.credentials.json`. That answer names
+each window (`kind`) and the model a scoped one belongs to
+(`scope.model.display_name`), and gives the reset as an instant, so none of the
+panel's headings have to be classified and no reset has to be dated.
+
+Claude Code's `/usage` panel is the way back. It is opened only when opening it
+would help: a refused token (the panel renews it), or an answer that is not the
+reading (the endpoint has moved). A rate-limited or unreachable endpoint serves
+the last cache instead - the panel's own refresh calls the same endpoint, so
+escalating there would spend fourteen seconds adding to the traffic being
+refused.
+
+Since the endpoint answers on almost every run, the panel is read on almost
+none, and a path nothing exercises is broken by the time it is needed. Run it
+on purpose from time to time:
+
+```sh
+CLAUDE_USAGE_SOURCE=screen claude-usage-json --force
+```
 
 ## Helper options
 
-- `--force`: refresh the cache by opening Claude Code `/usage`.
+- `--force`: refresh the cache, whatever its age.
 - `--cached-only`: print the existing cache without opening Claude Code.
 
 Environment variables provide optional overrides:
 
+- `CLAUDE_USAGE_SOURCE` (`auto` or `screen`; default `auto`)
+- `CLAUDE_USAGE_API_URL` (point it at a path that does not answer to exercise
+  the way back)
+- `CLAUDE_USAGE_API_TIMEOUT` (default: `15` seconds)
 - `CLAUDE_USAGE_TIMEOUT` (default: `45` seconds)
 - `CLAUDE_USAGE_CACHE_TTL` (default: `300` seconds)
 - `CLAUDE_USAGE_CACHE_DIR`

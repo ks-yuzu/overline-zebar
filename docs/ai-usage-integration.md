@@ -16,7 +16,8 @@
 
 ```text
 cron（5分ごと）
-  ├─ claude-usage-json --force ─→ Claude /usage ─→ JSON cache
+  ├─ claude-usage-json --force ─→ usage endpoint ─→ JSON cache
+  │                            └→ (失敗時) Claude /usage ─┘
   └─ codex-usage-json --force  ─→ account/rateLimits/read ─→ JSON cache
 
 Zebar（1分ごと・モニターごと）
@@ -33,6 +34,76 @@ live取得とwidget表示を分離する理由は次のとおりです。
 各ヘルパーは一時ファイルへJSONを書き、検証後にcacheへ移動する。`flock`で
 同時更新も防ぐ。live取得に失敗し、既存cacheがある場合は最後のcacheを返す。
 このとき`generated_at`は更新されないため、widget側で停止を検出できる。
+
+## Claude usageの取得元
+
+`https://api.anthropic.com/api/oauth/usage` を第一の取得元とする。認証は
+`$HOME/.claude/.credentials.json` の OAuth access token、`anthropic-beta:
+oauth-2025-04-20` ヘッダが要る。**画面解析は戻り道として残す。**
+
+| | 画面解析 | endpoint |
+| --- | --- | --- |
+| 所要 | 14秒 | 0.4秒 |
+| 起動するもの | Claude Code一式 | HTTPS 1本 |
+| 必要な外部command | expect, perl, flock | curl, perl |
+| windowの判別 | 見出しの括弧書きを分類する | `kind` field |
+| reset | 表記から日付を推定する | ISO 8601の瞬間 |
+
+endpointは`kind`で枠を、`scope.model.display_name`でmodel名を明示するため、
+**画面解析で必要だった括弧書きの分類がまるごと不要になる。**resetも瞬間で来る
+ので、`5:50am`からどの日かを推定する処理も要らない。
+
+### 失敗したときに何をするか
+
+**endpointの答え方で分ける。panelを開くことが助けになる場合だけ開く。**
+
+| 結果 | 扱い |
+| --- | --- |
+| 200かつwindowが揃う | それを使う |
+| 401 / 403 | tokenが切れている。panelを開いて更新し、**その時だけ**再取得する |
+| 404など、windowを含まない200 | endpointが変わった。panelの読み取りへ落とす |
+| 429 / 5xx / 到達しない | **panelを開かない。**最後のcacheを返す |
+
+**再取得するのは401/403の後だけ。** panelを開くとtokenが更新されるので、答えが
+変わりうる。`changed`の後に訊き直しても同じ答えが返るだけで、拒否されている相手への
+requestが1つ増える。
+
+**429でpanelを開いてはいけない。** endpointはburstを拒否する (実測: 2分間に
+8回で以降429、回復まで181秒)。panel自身のrefreshも同じendpointを叩くため、
+開けば14秒かけて拒否されている通信を増やすだけになる。cacheを返し、鮮度表示に
+任せる。**cronの5分間隔はこの制限の内側にある。**
+
+**tokenの更新とpanelの読み取りは同じ1回で済ませる。** helperが起動するsessionは
+自分からrequestを出さない (画面上も`0 input, 0 output`) ため、**起動しただけでは
+tokenは更新されない。**`/usage`を開くと認証付きrequestが飛ぶので、そこで更新が
+起きる。つまり「更新のための起動」と「画面を読むための起動」は同じ操作であり、
+分けると起動が2回になる。
+
+### 戻り道が守る範囲
+
+**2つの経路は同じ認証情報を使う。** refresh tokenまで切れていればClaude Codeは
+対話的な再ログインを求めるので、画面解析も同じく失敗する。画面解析が助けになるのは
+**認証は生きていてendpointが変わった/落ちた**場合だけである。
+
+**`timezone`は当てにならない前提で使う。** helperはhostから分かる名前をそのまま
+載せるが、hostが正当に持つ形すべてを`Intl`が受けるわけではない (`JST`・`EST`は
+通り、`CEST`・POSIX形式の`JST-9`や`:Asia/Tokyo`・`posix/Asia/Tokyo`は落ちる)。
+**判定はwidget側で行い、使えない名前は捨てて閲覧者のzoneへ退避する** (`usableTimeZone`)。
+生産側で形ごとに規則を足すと、新しい形が出るたびに抜ける。`resets_at`は絶対時刻
+なので、どちらのzoneで描いても指す瞬間は変わらない。
+
+**2つの経路が付ける`label`は一致している必要がある。** 画面は見出しの括弧書きを、
+endpointは`scope.model.display_name`をそのまま使う。widget側はhistoryを`label`で
+区切るため、**綴りが違えば切り替えた時点でmodel別のgraphが空になり、14日かけて
+埋まり直す。**2026-09-07時点では両方とも`Fable`で一致することを実測で確認した。
+model名が増えた時はここを確かめる。
+
+**`CLAUDE_USAGE_SOURCE=screen`で経路を固定できる。** endpointが答えるようになると
+画面解析はほぼ実行されず、通らない経路は必要になった時には壊れている。手動確認で
+定期的に引くこと。
+
+**tokenはheaderのfileから渡す。**command lineに置くと同じホストの全processから
+見える。captureにもlogにも出さない。
 
 ## ファイル配置
 
@@ -853,6 +924,7 @@ bash -n scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 perl scripts/claude-usage/test-normalize-reset
 perl scripts/claude-usage/test-read-windows
+perl scripts/claude-usage/test-read-api
 node packages/ui/test-usage-series.mjs
 ```
 
@@ -863,6 +935,9 @@ node packages/ui/test-usage-series.mjs
 `test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
 subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
 落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
+
+`test-read-api`はendpointのどのentryがどのwindowになるかと、resetの瞬間の
+読み取りを検証する。offsetを落とすと数時間ずれた時刻になるが、JSONは正しく見える。
 
 `test-read-windows`は画面のどの数字がどのwindowのものかを検証する。ここを誤ると
 JSONは正しい形のまま値だけが入れ替わるため、出力を見ても気付けない。こちらも
