@@ -27,6 +27,25 @@ for setting in settle_quiet_seconds settle_cap_seconds; do
 	fi
 done
 
+# `auto` asks the endpoint first and keeps the panel as the way back; `screen`
+# pins the panel, so it can be run on purpose. See docs/ai-usage-integration.md.
+source_mode="${CLAUDE_USAGE_SOURCE:-auto}"
+case "$source_mode" in
+	auto | screen) ;;
+	*)
+		printf 'CLAUDE_USAGE_SOURCE must be auto or screen\n' >&2
+		exit 64
+		;;
+esac
+
+api_url="${CLAUDE_USAGE_API_URL:-https://api.anthropic.com/api/oauth/usage}"
+api_timeout_seconds="${CLAUDE_USAGE_API_TIMEOUT:-15}"
+if [[ ! "$api_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CLAUDE_USAGE_API_TIMEOUT must be a positive integer\n' >&2
+	exit 64
+fi
+credentials_file="$HOME/.claude/.credentials.json"
+
 session_id="${CLAUDE_USAGE_SESSION_ID:-ca1de000-0000-4000-8000-000000000001}"
 if [[ ! "$session_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
 	printf 'CLAUDE_USAGE_SESSION_ID must be a valid UUID\n' >&2
@@ -79,6 +98,95 @@ if [[ "$force_refresh" == false ]] && cache_is_fresh; then
 	exit 0
 fi
 
+# Sets `api_outcome` to why it failed - `ok`, `auth`, `changed`, `wait` - which
+# decides whether opening the panel is worth doing. Reasoning and the
+# measurements behind `wait`: docs/ai-usage-integration.md 「失敗したときに何をするか」.
+api_outcome=""
+fetch_from_api() {
+	local destination="$1" token status
+	api_outcome=wait
+	# Not `wait`: a missing binary does not come back on its own, and `wait`
+	# is the one outcome that keeps the panel shut. Classified as `wait` this
+	# would serve an ageing cache on every run for good, silently.
+	if ! command -v curl >/dev/null 2>&1; then
+		printf 'claude usage: curl not found; reading the panel instead\n' >&2
+		api_outcome=changed
+		return 1
+	fi
+
+	# perl rather than jq: one less dependency to be missing on a cron run.
+	# One message for both failures; perl's own names the credentials file.
+	token="$(perl -MJSON::PP -0777 -ne '
+		my $parsed = eval { JSON::PP->new->decode($_) } or exit 1;
+		my $token = eval { $parsed->{claudeAiOauth}{accessToken} };
+		exit 1 unless defined $token && length $token;
+		print $token;
+	' -- "$credentials_file" 2>/dev/null)" || token=''
+	if [[ -z "$token" ]]; then
+		printf 'claude usage: no usable token in the credentials file\n' >&2
+		api_outcome=auth
+		return 1
+	fi
+
+	# The token goes in on stdin: a command line is readable by every process
+	# on the host, and a file outlives a run cron kills by timeout. curl's
+	# stderr goes to ours, and carries no credential.
+	if ! status="$(printf 'Authorization: Bearer %s\n' "$token" \
+		| curl -sS -o "$destination" -w '%{http_code}' \
+			--max-time "$api_timeout_seconds" \
+			-H @- \
+			-H 'anthropic-beta: oauth-2025-04-20' \
+			-- "$api_url")"; then
+		return 1
+	fi
+
+	if [[ "$status" != 200 ]]; then
+		# The status, never the body: a refusal can quote what it was sent.
+		printf 'claude usage: usage endpoint returned HTTP %s\n' "$status" >&2
+		case "$status" in
+			401 | 403) api_outcome=auth ;;
+			429 | 5??) api_outcome=wait ;;
+			*) api_outcome=changed ;;
+		esac
+		return 1
+	fi
+
+	# A 200 without the two windows the reader needs is the endpoint having
+	# moved, not a reading. Asserts what the reader needs, not just the names:
+	# anything looser ends the run as a parse failure instead of `changed`.
+	if ! perl -MJSON::PP -MScalar::Util=looks_like_number \
+		-MTime::Local=timegm -0777 -ne '
+		my $parsed = eval { JSON::PP->new->decode($_) } or exit 1;
+		my $limits = $parsed->{limits};
+		exit 1 unless ref $limits eq q(ARRAY);
+		my %usable;
+		for my $limit (@$limits) {
+			next unless ref $limit eq q(HASH);
+			next unless looks_like_number($limit->{percent});
+			# What parse_iso8601 takes, and only that - the shape alone
+			# lets `2026-13-45` through, so the date goes to the same
+			# timegm. test-read-api holds the two side by side.
+			my @date = ($limit->{resets_at} // q())
+				=~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?
+					(?:Z|[+-]\d{2}:?\d{2})$/x
+				or next;
+			next unless defined eval {
+				timegm($date[5], $date[4], $date[3],
+					$date[2], $date[1] - 1, $date[0]);
+			};
+			$usable{ $limit->{kind} // q() } = 1;
+		}
+		exit 1 unless $usable{session} && $usable{weekly_all};
+		exit 0;
+	' -- "$destination" 2>/dev/null; then
+		printf 'claude usage: usage endpoint answered without the windows\n' >&2
+		api_outcome=changed
+		return 1
+	fi
+
+	api_outcome=ok
+}
+
 for command_name in expect perl flock; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		printf 'required command not found: %s\n' "$command_name" >&2
@@ -100,6 +208,30 @@ if [[ "$force_refresh" == false ]] && cache_is_fresh; then
 	exit 0
 fi
 
+capture_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage.XXXXXX")"
+api_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage-api.XXXXXX")"
+result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
+trap 'rm -f -- "$capture_file" "$api_file" "$result_file"' EXIT
+
+reading_mode=""
+reading_file=""
+
+if [[ "$source_mode" != screen ]] && fetch_from_api "$api_file"; then
+	reading_mode=api
+	reading_file="$api_file"
+fi
+
+# Opening the panel is also what renews an expired token, so the way back and
+# the refresh are one act. `wait` is the only outcome that keeps it shut.
+open_panel=false
+if [[ "$source_mode" == screen ]]; then
+	open_panel=true
+elif [[ -z "$reading_mode" && "$api_outcome" != wait ]]; then
+	open_panel=true
+fi
+
+if [[ "$open_panel" == true ]]; then
+
 default_claude_bin="$HOME/bin/claude"
 if [[ ! -x "$default_claude_bin" ]]; then
 	default_claude_bin="$(command -v claude || true)"
@@ -113,10 +245,6 @@ if [[ -z "$claude_bin" || ! -x "$claude_bin" ]]; then
 	fi
 	exit 69
 fi
-
-capture_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage.XXXXXX")"
-result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
-trap 'rm -f -- "$capture_file" "$result_file"' EXIT
 
 # Claude Code asks whether the directory it starts in is trusted, and waits for
 # an answer before showing its prompt. Use a dedicated empty directory owned by
@@ -222,6 +350,29 @@ log_file
 EXPECT
 
 then
+	printf 'failed to open Claude usage panel\n' >&2
+else
+	if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
+		install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH" \
+			|| printf 'claude usage: could not save the capture to %s\n' \
+				"$CLAUDE_USAGE_CAPTURE_PATH" >&2
+	fi
+
+	# Only worth asking again if the panel changed the answer, which it does
+	# by renewing the token. After `changed` the endpoint would say the same
+	# thing twice, and the second ask is one more request it is refusing.
+	if [[ "$api_outcome" == auth ]] && fetch_from_api "$api_file"; then
+		reading_mode=api
+		reading_file="$api_file"
+	else
+		reading_mode=screen
+		reading_file="$capture_file"
+	fi
+fi
+
+fi
+
+if [[ -z "$reading_mode" ]]; then
 	printf 'failed to refresh Claude usage; using cached data when available\n' >&2
 	if [[ -s "$cache_file" ]]; then
 		cat -- "$cache_file"
@@ -230,20 +381,20 @@ then
 	exit 70
 fi
 
-if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
-	install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH"
-fi
-
-if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal - "$capture_file" "$cache_file" "$samples_file" >"$result_file" <<'PERL'
+if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal,timegm - "$reading_mode" "$reading_file" "$cache_file" "$samples_file" >"$result_file" <<'PERL'
 use strict;
 use warnings;
 
-my ($capture_file, $cache_file, $samples_file) = @ARGV;
-open my $capture, '<:raw', $capture_file
-	or die "cannot read capture file: $!\n";
+# `screen` reads Claude Code's /usage panel, `api` reads the usage endpoint.
+# Only the reading differs: the history, the sample rules and the JSON contract
+# below are shared, because that is where the rules live that a second copy
+# would drift away from.
+my ($mode, $input_file, $cache_file, $samples_file) = @ARGV;
+open my $input, '<:raw', $input_file
+	or die "cannot read $mode input: $!\n";
 local $/;
-my $raw_screen = decode('UTF-8', <$capture> // '', Encode::FB_DEFAULT);
-close $capture;
+my $raw_input = decode('UTF-8', <$input> // '', Encode::FB_DEFAULT);
+close $input;
 
 # Remove OSC, CSI, and remaining short escape sequences emitted by the TUI.
 sub normalize_screen {
@@ -411,6 +562,63 @@ sub iso_local {
 	return $value;
 }
 
+# The endpoint gives an instant, with an offset and fractional seconds. Read as
+# an instant, so none of the guessing the panel's labels need applies here.
+sub parse_iso8601 {
+	my ($value) = @_;
+	return undef unless defined $value;
+	my ($y, $mo, $d, $h, $mi, $sec, $zone) = $value =~ m{
+		^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?
+		(Z|[+-]\d{2}:?\d{2})$
+	}x or return undef;
+	my $epoch = eval { timegm($sec, $mi, $h, $d, $mo - 1, $y) };
+	return undef unless defined $epoch;
+	return $epoch if $zone eq 'Z';
+	my ($sign, $zh, $zm) = $zone =~ /^([+-])(\d{2}):?(\d{2})$/ or return undef;
+	my $offset = ($zh * 3600 + $zm * 60) * ($sign eq '-' ? -1 : 1);
+	return $epoch - $offset;
+}
+
+# The name the panel prints beside a reset. Derived here because the endpoint
+# reports the instant only, and the widget still shows this when it has no
+# instant to count down to.
+sub local_timezone {
+	return $ENV{TZ} if defined $ENV{TZ} && length $ENV{TZ};
+	if (open my $zone, '<', '/etc/timezone') {
+		my $name = <$zone>;
+		close $zone;
+		if (defined $name) {
+			$name =~ s/\s+$//;
+			return $name if length $name;
+		}
+	}
+	my $link = readlink '/etc/localtime';
+	return $1 if defined $link && $link =~ m{zoneinfo/(.+)$};
+
+	# The abbreviation, not `UTC`. The instants beside it come from
+	# `localtime`, so `UTC` would be a name the widget accepts and renders in,
+	# showing a 09:00 reset as 00:00. An abbreviation is either accepted and
+	# right, or refused - and a refused one leaves the widget on the viewer's
+	# own zone, which is the zone these instants are already in.
+	return strftime('%Z', localtime(time));
+}
+
+# `resets_at_display` is what the widgets fall back to when there is no
+# `resets_at` to count down to, and this path always has one. So it carries the
+# instant rather than a rendering of it: spelling it the way the panel spells
+# it produced a string no viewer would ever see.
+sub api_usage_object {
+	my ($window) = @_;
+	my $epoch = $window->{resets_at_epoch};
+	my $moment = iso_local($epoch);
+	return {
+		used_percent => 0 + $window->{used_percent},
+		resets_at => $moment,
+		resets_at_display => $moment,
+		timezone => local_timezone(),
+	};
+}
+
 # timelocal croaks on a date that does not exist - Feb 29 of a non-leap year,
 # reachable because the neighbouring years are candidates too - and that would
 # take the whole reading down, so an impossible date becomes a dropped
@@ -547,19 +755,81 @@ sub archive_sample {
 	return;
 }
 
-my $text = normalize_screen($raw_screen);
-my $windows = read_windows($text);
-my $session = $windows->{session};
-my $week = $windows->{week};
-my $model_week = $windows->{model_week};
+# The endpoint names each window rather than printing a heading for it, so
+# there is nothing to classify: `kind` says which window, and `scope.model`
+# names the model a scoped one belongs to. The reset arrives as an instant, so
+# none of the guessing about which occurrence of `5:50am` is meant applies.
+sub read_api_windows {
+	my ($payload) = @_;
+	# No guard on the shape: the payload only reaches here after the precheck
+	# decoded these same bytes and found the limits array. A payload that got
+	# past both and still has no windows falls out as `session`/`week`
+	# undefined, which the caller already reports.
+	my $decoded = eval { JSON::PP->new->decode($payload) };
+	my $limits = ref $decoded eq 'HASH' ? $decoded->{limits} : undef;
+	$limits = [] unless ref $limits eq 'ARRAY';
+
+	my %found;
+	my @scoped;
+	for my $limit (@$limits) {
+		next unless ref $limit eq 'HASH';
+		next unless looks_like_number($limit->{percent});
+		next unless defined $limit->{resets_at};
+		my $window = {
+			used_percent => 0 + $limit->{percent},
+			resets_at_epoch => parse_iso8601($limit->{resets_at}),
+		};
+		next unless defined $window->{resets_at_epoch};
+
+		if (($limit->{kind} // '') eq 'session') {
+			$found{session} = $window;
+		}
+		elsif (($limit->{kind} // '') eq 'weekly_all') {
+			$found{week} = $window;
+		}
+		elsif (($limit->{kind} // '') eq 'weekly_scoped') {
+			my $label = eval { $limit->{scope}{model}{display_name} };
+			next unless defined $label && length $label;
+			$window->{label} = $label;
+			push @scoped, $window;
+		}
+	}
+
+	# The same rule the screen reading uses: two scoped windows and nothing
+	# says which the widget is for, so neither is recorded.
+	$found{model_labels} = [map { $_->{label} } @scoped];
+	$found{week_model} = @scoped == 1 ? $scoped[0] : undef;
+	return \%found;
+}
+
+my ($text, $windows, $session, $week, $model_week, $api);
+if ($mode eq 'screen') {
+	$text = normalize_screen($raw_input);
+	$windows = read_windows($text);
+	$session = $windows->{session};
+	$week = $windows->{week};
+	$model_week = $windows->{model_week};
+}
+else {
+	$text = '';
+	$api = read_api_windows($raw_input);
+	$windows = { model_labels => $api->{model_labels} };
+	$session = $api->{session};
+	$week = $api->{week};
+	$model_week = $api->{week_model};
+}
 
 if (!$session || !$week) {
 	# Name what was found. A weekly heading whose label went unrecognised is
 	# read as a per-model window, and then the message alone would send the
 	# reader looking for a window that was on the screen all along.
+	# Names the source it actually read. Saying `/usage` when the reading came
+	# from the endpoint sends whoever finds this in the cron log to a screen
+	# that was never involved.
 	die sprintf
-		"could not parse Current session and Current week from Claude /usage"
+		"could not read the session and all-models weekly windows from %s"
 			. " (session %s, all-models week %s, per-model weekly labels: %s)\n",
+		$mode eq 'screen' ? 'the Claude /usage panel' : 'the usage endpoint',
 		$session ? 'found' : 'missing',
 		$week ? 'found' : 'missing',
 		@{ $windows->{model_labels} }
@@ -576,21 +846,32 @@ if (!$model_week && @{ $windows->{model_labels} } > 1) {
 		join ', ', @{ $windows->{model_labels} };
 }
 
+# Only the panel reports a stale reading of its own; the endpoint answers with
+# what it has or fails outright.
 my $compact_text = $text;
 $compact_text =~ s/\s+//g;
 my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
 my $refresh_status = defined $age ? 'last_known' : 'not_reported';
 my $generated_epoch = time;
 my $generated_at = iso_local($generated_epoch);
-my $session_usage = usage_object($session->{reading}, 'session');
-my $week_usage = usage_object($week->{reading}, 'week');
-
 # A per-model week is a week: same length, so the same rule decides which
-# occurrence of the reset label is meant.
-my $model_week_usage;
-if ($model_week) {
-	$model_week_usage = usage_object($model_week->{reading}, 'week');
-	$model_week_usage->{label} = $model_week->{label};
+# occurrence of a screen-read reset label is meant.
+my ($session_usage, $week_usage, $model_week_usage);
+if ($mode eq 'screen') {
+	$session_usage = usage_object($session->{reading}, 'session');
+	$week_usage = usage_object($week->{reading}, 'week');
+	if ($model_week) {
+		$model_week_usage = usage_object($model_week->{reading}, 'week');
+		$model_week_usage->{label} = $model_week->{label};
+	}
+}
+else {
+	$session_usage = api_usage_object($session);
+	$week_usage = api_usage_object($week);
+	if ($model_week) {
+		$model_week_usage = api_usage_object($model_week);
+		$model_week_usage->{label} = $model_week->{label};
+	}
 }
 
 my @history;
@@ -701,7 +982,7 @@ if ($refresh_status ne 'last_known' && $reset_times_parsed) {
 }
 
 my %output = (
-	source => 'claude /usage',
+	source => $mode eq 'screen' ? 'claude /usage' : 'claude usage api',
 	generated_at => $generated_at,
 	refresh_status => $refresh_status,
 	current_session => $session_usage,
