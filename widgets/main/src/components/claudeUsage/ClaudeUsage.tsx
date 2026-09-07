@@ -1,5 +1,5 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip, clampPercentage } from '@overline-zebar/ui';
+import { Chip, clampPercentage, usableTimeZone } from '@overline-zebar/ui';
 import { Bot } from 'lucide-react';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
@@ -28,7 +28,7 @@ function formatReset(period: ClaudeUsagePeriod, includeDate = false) {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-    timeZone: period.timezone,
+    timeZone: usableTimeZone(period.timezone),
   }).format(date);
 }
 

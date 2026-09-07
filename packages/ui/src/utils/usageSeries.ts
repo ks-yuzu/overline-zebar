@@ -48,6 +48,19 @@ function nextLocalDay(dayStart: number) {
  */
 const WINDOW_END_TOLERANCE_SECONDS = 5 * 60;
 
+/**
+ * Keeps the samples whose scope matches. The helper does not cut a scoped
+ * series when its name changes, so the cut is made here; without it two quotas
+ * read as one continuous line. See docs/ai-usage-integration.md.
+ */
+export function selectScopedSamples<T>(
+  samples: T[],
+  scopeOf: (sample: T) => string | undefined,
+  scope: string | undefined
+): T[] {
+  return samples.filter((sample) => scopeOf(sample) === scope);
+}
+
 export function isSameWindow(a: number | undefined, b: number | undefined) {
   if (a === undefined || b === undefined) return true;
   return Math.abs(a - b) <= WINDOW_END_TOLERANCE_SECONDS;

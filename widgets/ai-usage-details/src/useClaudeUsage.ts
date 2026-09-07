@@ -9,12 +9,20 @@ export type ClaudeUsagePeriod = {
   timezone: string;
 };
 
+/** A weekly window Claude scopes to one model. `label` names that model. */
+export type ClaudeUsageModelPeriod = ClaudeUsagePeriod & {
+  label: string;
+};
+
 export type ClaudeUsageHistorySample = {
   recorded_at: number;
   session_used_percent: number;
   week_used_percent: number;
   session_resets_at?: string;
   week_resets_at?: string;
+  week_model_used_percent?: number;
+  week_model_resets_at?: string;
+  week_model_label?: string;
 };
 
 export type ClaudeUsageData = {
@@ -24,6 +32,8 @@ export type ClaudeUsageData = {
   last_known_age?: string;
   current_session: ClaudeUsagePeriod;
   current_week: ClaudeUsagePeriod;
+  /** Absent on a plan with no per-model weekly quota. */
+  current_week_model?: ClaudeUsageModelPeriod;
   history: ClaudeUsageHistorySample[];
 };
 
@@ -37,6 +47,16 @@ function isUsagePeriod(value: unknown): value is ClaudeUsagePeriod {
     typeof period.timezone === 'string' &&
     (period.resets_at === undefined || typeof period.resets_at === 'string')
   );
+}
+
+/**
+ * A name is required and a reset is not: the series is plotted by time, and
+ * the name is what tells this window's history from the next model's.
+ */
+function isModelPeriod(value: unknown): value is ClaudeUsageModelPeriod {
+  if (!isUsagePeriod(value)) return false;
+  const period = value as Partial<ClaudeUsageModelPeriod>;
+  return typeof period.label === 'string' && period.label.length > 0;
 }
 
 function isHistorySample(value: unknown): value is ClaudeUsageHistorySample {
@@ -53,6 +73,24 @@ function isHistorySample(value: unknown): value is ClaudeUsageHistorySample {
       typeof sample.session_resets_at === 'string') &&
     (sample.week_resets_at === undefined ||
       typeof sample.week_resets_at === 'string')
+  );
+}
+
+/** The per-model window is carried as a complete triple or not at all. */
+export type ClaudeUsageModelSample = ClaudeUsageHistorySample & {
+  week_model_used_percent: number;
+  week_model_resets_at: string;
+  week_model_label: string;
+};
+
+export function hasModelWindow(
+  sample: ClaudeUsageHistorySample
+): sample is ClaudeUsageModelSample {
+  return (
+    typeof sample.week_model_used_percent === 'number' &&
+    Number.isFinite(sample.week_model_used_percent) &&
+    typeof sample.week_model_resets_at === 'string' &&
+    typeof sample.week_model_label === 'string'
   );
 }
 
@@ -75,6 +113,9 @@ function parseClaudeUsage(value: string): ClaudeUsageData {
     last_known_age: parsed.last_known_age,
     current_session: parsed.current_session,
     current_week: parsed.current_week,
+    current_week_model: isModelPeriod(parsed.current_week_model)
+      ? parsed.current_week_model
+      : undefined,
     history: Array.isArray(parsed.history)
       ? parsed.history.filter(isHistorySample)
       : [],

@@ -82,6 +82,8 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - 集計単位を示す語 (見出しの`per window` / `per day`、凡例) は両providerで同じ語に
     する。providerごとの呼び分け (Claudeは5Hを"session"と呼ぶ) を持ち込むと、
     同じ集計を別物として読ませてしまう。呼び名は上段のcardに残る。
+    **quotaを指す語はこの規則の外。**Claudeの7D列だけが週次を2つ持つため、
+    そこでは`all models`とmodel名で呼び分ける (下記)。
   - **1日以上のwindow**は日次の消費量と累積。windowごとにすると14日で
     数本しか出ない。分母はその列のwindow自身のquotaで、横断的な基準は要らない。
 - **windowのrangeは利用開始時点で確定する。** 使っていない間、報告される
@@ -114,8 +116,19 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - 揺れへの耐性は許容差が担う。以前は「値が下がった」で代用していたが、Claudeが
     週次のresetを1分ずれて報告したsample1件でwindowが3つに割れ、1日に約49%の
     幻の消費が出た経緯がある。
-- graphの系列色は、progress barと同じ`--success`を使う。
-  **1つのgraphで緑にするのは主系列だけとし**、副系列は`--primary`に落とす。
+- **graphの系列色はテーマではなくパレットから採る** (`packages/ui/src/utils/seriesColors.ts`)。
+  Grafanaのclassicパレット (v12.0.2) をそのまま持つ。
+  - 系列0 `#7EB26D` — そのgraphが主題とする量。
+  - 系列1 `#EAB839` (semi-dark-yellow) — **model別の週次。**同じ軸に載る別のquota。
+  - 系列16 `#B7DBAB` — 主題と同じ量を2つ目の形で線で見せる時。
+  - **棒はパレットから採らず、従来のテーマ色 (`--success` / `--primary`) のまま。**
+    同じ値でも棒は線よりinkが多く主張が強い。日次の棒はその上の線を読むための
+    文脈であって、cardが主題とする読み取りではない。
+  - **テーマトークンを系列色に使わない。**`--success`や`--warning`は状態を表す語で、
+    `--warning`はcardの閾値色 (70-85%) と`FreshnessIndicator`も使う。系列色に流用すると
+    **同じ画面で3つの意味を持ち、**graphの凡例が教える対応とcard上の数字の色が
+    食い違う。系列は状態ではないので、別の出所から採る。
+  - card内のprogress barと数字は引き続き閾値色を使う。こちらは状態である。
   両方を同じ強さで塗ると、どちらを読めばよいかが伝わらない。
   - 14D weeklyの主系列はcumulative。日次の棒は副系列とする。
   - 単一系列のgraph (5H/7D trend、14D 5H peaks) はその系列が主系列。
@@ -171,10 +184,15 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     まとめると、trendも累積である以上、両者を分ける語にならない。
   - 見出しの右にはsample数だけを置く。集計単位 (`per window` / `per day`) は見出しが
     持ち、範囲は角括弧が持つ。
-- **panel下部の中央は、両段とも凡例にする。** 2段目は系列が1つで見分ける相手が
-  いないが、同じ位置に同じ種類のものが入ることが、列として読める条件である。
-  3段目右は`daily`と`cumulative`で増分と累積を対比させる。2段目の線は対比する相手が
-  いないため`usage`とし、揃えない。
+- **panel下部の中央は、両段とも凡例にする。** 同じ位置に同じ種類のものが入ることが、
+  列として読める条件である。
+  - 5Hの段は系列が1つなので`usage`。
+  - **7Dの段は週次のquotaが2つ並ぶため、`all models`とmodel名で呼び分ける。**
+    集計の仕方 (増分か累積か) より、**どちらのquotaか**が読み分けるべき軸になる。
+    3段目右も同じ理由で`daily`と`all models`とし、model名を足す。
+  - **この呼び分けはClaudeの7D列だけに適用する。**Codex側は週次が1つなので
+    `cumulative`のままである。集計単位を示す語を両providerで揃える規則 (上記) は
+    集計の呼び名についてのもので、**どのquotaかを指す語はその外側にある。**
 - **2つのgraphは縦の幾何を共有する** (`packages/ui/src/utils/chartGeometry.ts`)。
   同じ列に縦に並ぶため、同じ100%が同じ高さで描かれないと傾きや高さを比べられない。
   panelの高さ、plot上下の余白、左右のinset、既定のviewBox幅を共有する。高さだけ
@@ -227,6 +245,43 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - `UsageHistory`のバーの横位置は、sampleの`windowEndsAt`から引く。これはwindowの
   同一性そのものでもある。以前は丸めた識別子を別に持っていたが、それを時刻として
   読み戻せずバーの位置がずれたため、許容差付きの比較へ一本化した。
+
+model別の週次 (`current_week_model`) の表示:
+
+- **列を増やさず、7Dの列の3段すべてに重ねる。** all modelsとmodel別は**同じ軸**を
+  共有する。resetも期間も同一で、利用者が知りたいのは片方をもう片方に対して読むこと
+  である。列に分けると、軸の違い (5Hと7D) より系列の違いが目立ってしまう。
+  - 1段目は現在値を右肩にmodel名付きで小さく併記する。
+  - 2段目はwindow内の推移に線を重ねる。
+  - 3段目は累積の線を重ねる。棒 (日次) はall modelsのまま。
+- **model別の系列は`--warning` (黄) で描く。**all modelsは`--success`のまま。
+  色で系列を分ける。凡例の語は主系列を`all models`、副系列をmodel名とする
+  (`cumulative`から改めた。2つの週次が並ぶ以上、集計の仕方より**どちらのquotaか**が
+  読み分けるべき軸になる)。Codex側は系列が1つなので`cumulative`のままである。
+- **model別の系列はwindowの同一性を問わず、時刻で絞って描く。**all modelsのwindowの
+  軸に入るsampleをそのまま並べる。windowの識別 (`selectCurrentWindow`) は使わない。
+  - 2つの週次はこれまでの全読み取りでresetが一致している (差0秒)。一致している限り、
+    前windowのsampleは軸の外に落ちるため、時刻で絞るだけで現windowになる。
+  - **一致を検査して分岐させる形は採らない。**ずれた時にどちらの`started`を採るか、
+    どちらのrangeで絞るか、clipが何を隠すかという派生規則を次々に生み、
+    レビュー3巡で同じ箇所が3度回帰した。**観測されていない状態のための機構**だった。
+  - ずれた場合は前windowの読み取りが左端に少し混じる。前windowと現windowの区別は
+    この面では重要でないと判断している。
+- **model別の週次はresetが無くても数字も系列も出す。**時刻で絞る以上、window終端は
+  要らない。`label`は必須で、これが無いと履歴を別modelと区別できず、凡例に出す名前も
+  無い。
+- **`UsageTrend`の面塗りは持たない。** 1つの系列の下を塗ると、軸を共有する系列が
+  現れた瞬間に積み上げに見える。**ここは足し合わさらない。**2つの上限それぞれに
+  対する割合であり、合計に意味が無い。**Claude・Codexとも積み上げではないため、
+  providerを問わず塗らない。**系列が1つの段 (5H、Codexの各window) も揃える。
+
+- **2つを1つの数字にまとめない。** all modelsは全modelの消費、model別はそのmodelだけの
+  消費である。model別の上限に当たっても止まるのはそのmodelだけで、他は動く。
+  大きい方を代表として出すと、数字の意味が状況で変わる。
+- **枠が無い時はfieldごと省かれる。0%と区別する。** 現在値は併記そのものを出さず、
+  線も描かない。planに枠が無いのは「使っていない」ことではない。
+- **historyはlabelで区切る。** helperはlabelが変わっても系列を切らない (改名だけで
+  14日分を捨てる方が損失が大きい)。区切りは`selectScopedSamples`が行う。
 
 リセット表示:
 

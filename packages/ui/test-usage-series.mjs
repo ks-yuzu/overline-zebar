@@ -17,8 +17,10 @@ import {
   buildWindowPeaks,
   hasJustReset,
   selectCurrentWindow,
+  selectScopedSamples,
   windowTrendRange,
 } from './dist/utils/usageSeries.js';
+import { usableTimeZone } from './dist/utils/timeZone.js';
 
 const WINDOW = 5 * 3600;
 const NOW = 1_600_000_000;
@@ -269,7 +271,11 @@ const cases = [
       const samples = [];
       // Two days of samples at the recent end, five minutes apart.
       for (let t = NOW - 2 * 24 * 3600; t <= NOW; t += 300) {
-        samples.push({ recordedAt: t, value: 50, windowEndsAt: Math.ceil(t / WINDOW) * WINDOW });
+        samples.push({
+          recordedAt: t,
+          value: 50,
+          windowEndsAt: Math.ceil(t / WINDOW) * WINDOW,
+        });
       }
       const bars = buildWindowPeaks(samples, {
         startAt: start,
@@ -290,7 +296,11 @@ const cases = [
       const holeStart = NOW - 24 * 3600;
       for (let t = NOW - 2 * 24 * 3600; t <= NOW; t += 300) {
         if (t >= holeStart && t < holeStart + 4 * 3600) continue;
-        samples.push({ recordedAt: t, value: 50, windowEndsAt: Math.ceil(t / WINDOW) * WINDOW });
+        samples.push({
+          recordedAt: t,
+          value: 50,
+          windowEndsAt: Math.ceil(t / WINDOW) * WINDOW,
+        });
       }
       const bars = buildWindowPeaks(samples, {
         startAt: start,
@@ -317,11 +327,79 @@ const cases = [
     },
     expect: 0,
   },
+  {
+    // The only place the series is cut on a rename; without it two quotas
+    // read as one climbing line.
+    name: "scoped series: another model's samples are left out",
+    run: () =>
+      selectScopedSamples(
+        [
+          { recordedAt: 1, week_model_label: 'Fable' },
+          { recordedAt: 2, week_model_label: 'Fable 5.1' },
+          { recordedAt: 3, week_model_label: 'Fable' },
+        ],
+        (sample) => sample.week_model_label,
+        'Fable'
+      ).map((sample) => sample.recordedAt),
+    expect: [1, 3],
+  },
+  {
+    // The shape of the failure, not a list of bad names: handing an
+    // unusable one on throws inside render and blanks the panel.
+    name: 'time zone: a name Intl refuses is dropped, not passed on',
+    run: () => [
+      usableTimeZone('Asia/Tokyo'),
+      usableTimeZone('Not/AZone') ?? '(local)',
+    ],
+    expect: ['Asia/Tokyo', '(local)'],
+  },
+  {
+    // `started` chooses between matching on the window's end and taking a
+    // run by time. The wrong one reads a spent window with the other's rule.
+    name: 'window selection: started reads by window end, unstarted by time',
+    run: () => {
+      const mine = NOW + 3 * 24 * 3600;
+      const other = NOW + 9 * 24 * 3600;
+      // The other window's reading is below the two that follow it, so the
+      // unstarted branch finds no fall to trim at and keeps all three.
+      const samples = [
+        { recordedAt: NOW - 2 * 3600, value: 2, windowEndsAt: other },
+        { recordedAt: NOW - 3600, value: 4, windowEndsAt: mine },
+        { recordedAt: NOW, value: 5, windowEndsAt: mine },
+      ];
+      const range = { startAt: NOW - 7 * 24 * 3600, endAt: NOW };
+      return [
+        selectCurrentWindow(samples, {
+          ...range,
+          endsAt: mine,
+          started: true,
+        }).map((point) => point.value),
+        selectCurrentWindow(samples, {
+          ...range,
+          endsAt: mine,
+          started: false,
+        }).map((point) => point.value),
+      ];
+    },
+    expect: [
+      [4, 5],
+      [2, 4, 5],
+    ],
+  },
 ];
 
 let failures = 0;
 for (const testCase of cases) {
-  const got = testCase.run();
+  // A throw used to take the whole run down, unreported.
+  let got;
+  try {
+    got = testCase.run();
+  } catch (error) {
+    console.log(`not ok - ${testCase.name}`);
+    console.log(`    threw    ${error}`);
+    failures += 1;
+    continue;
+  }
   const ok = JSON.stringify(got) === JSON.stringify(testCase.expect);
   if (!ok) failures += 1;
   console.log(`${ok ? 'ok' : 'not ok'} - ${testCase.name}`);

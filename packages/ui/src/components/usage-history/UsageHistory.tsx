@@ -6,6 +6,11 @@ import {
   CHART_PADDING_X as PADDING_X,
   CHART_PLOT_HEIGHT,
 } from '../../utils/chartGeometry';
+import {
+  SERIES_PRIMARY,
+  SERIES_PRIMARY_MUTED,
+  SERIES_SECONDARY,
+} from '../../utils/seriesColors';
 import type { UsageBar } from '../../utils/usageSeries';
 
 export type UsageHistorySegment = {
@@ -36,6 +41,9 @@ type Props = {
    */
   viewWidth?: number;
   segments?: UsageHistorySegment[];
+  /** A second line, for a quantity measured the same way as `segments`. */
+  secondarySegments?: UsageHistorySegment[];
+  secondaryLineLabel?: string;
   startAt: number;
 };
 
@@ -67,15 +75,20 @@ export default function UsageHistory({
   label,
   lineLabel,
   primarySeries = 'bars',
+  secondaryLineLabel,
+  secondarySegments = [],
   segments = [],
   startAt,
   viewWidth = DEFAULT_WIDTH,
 }: Props) {
   const WIDTH = viewWidth;
+  /* Lines come from the palette, bars keep the theme's own colours: a bar has
+     more ink than a line at the same value, and the daily bars are context for
+     the line above them rather than the reading the card is about. */
   const barColor =
     primarySeries === 'bars' ? 'var(--success)' : 'var(--primary)';
   const lineColor =
-    primarySeries === 'line' ? 'var(--success)' : 'var(--primary-border)';
+    primarySeries === 'line' ? SERIES_PRIMARY : SERIES_PRIMARY_MUTED;
   const clipId = `usage-history-${useId().replaceAll(':', '')}`;
   const chartHeight = CHART_PLOT_HEIGHT;
   const chartWidth = WIDTH - PADDING_X * 2;
@@ -88,16 +101,20 @@ export default function UsageHistory({
     PADDING_TOP +
     ((100 - Math.min(100, Math.max(0, value))) / 100) * chartHeight;
 
-  const linePaths = segments
-    .map((segment) =>
-      downsample(segment)
-        .map(
-          (point, index) =>
-            `${index === 0 ? 'M' : 'L'} ${toX(point.recordedAt)} ${toY(point.value)}`
-        )
-        .join(' ')
-    )
-    .filter((path) => path.includes('L'));
+  const pathsOf = (input: UsageHistorySegment[]) =>
+    input
+      .map((segment) =>
+        downsample(segment)
+          .map(
+            (point, index) =>
+              `${index === 0 ? 'M' : 'L'} ${toX(point.recordedAt)} ${toY(point.value)}`
+          )
+          .join(' ')
+      )
+      .filter((path) => path.includes('L'));
+
+  const linePaths = pathsOf(segments);
+  const secondaryLinePaths = pathsOf(secondarySegments);
 
   const sampledBars = bars.filter((bar) => bar.hasSamples && !bar.partial);
   const peak = Math.max(0, ...sampledBars.map((bar) => bar.value));
@@ -113,6 +130,11 @@ export default function UsageHistory({
             (endAt - startAt) / 86_400
           )} days, one bar per ${barUnit}${
             lineLabel ? `, with the ${lineLabel} usage as a line` : ''
+          }${
+            /* Its own gate, the same one the legend uses. */
+            secondaryLineLabel && secondaryLinePaths.length > 0
+              ? `, and the ${secondaryLineLabel} usage as a second line`
+              : ''
           }`}
           className="w-full"
           style={{ height: HEIGHT }}
@@ -209,6 +231,18 @@ export default function UsageHistory({
                 strokeWidth="1.4"
               />
             ))}
+            {/* Over the primary and thinner, as in the trend chart above. */}
+            {secondaryLinePaths.map((path) => (
+              <path
+                d={path}
+                fill="none"
+                key={path}
+                stroke={SERIES_SECONDARY}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.1"
+              />
+            ))}
           </g>
 
           {peakBar && (
@@ -247,7 +281,7 @@ export default function UsageHistory({
             y2={baselineY}
           />
         </svg>
-        {bars.length === 0 && (
+        {bars.length === 0 && secondaryLinePaths.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-text-muted">
             No samples yet
           </div>
@@ -271,6 +305,15 @@ export default function UsageHistory({
                 style={{ backgroundColor: lineColor }}
               />
               {lineLabel}
+            </span>
+          )}
+          {secondaryLineLabel && secondaryLinePaths.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span
+                className="h-px w-2.5"
+                style={{ backgroundColor: SERIES_SECONDARY }}
+              />
+              {secondaryLineLabel}
             </span>
           )}
         </span>
