@@ -15,9 +15,18 @@ export {
   buildDailyUsage,
   buildWindowPeaks,
   hasJustReset,
+  isSameWindow,
   selectCurrentWindow,
+  selectScopedSamples,
   windowTrendRange,
 } from './utils/usageSeries';
+export { usableTimeZone } from './utils/timeZone';
+export {
+  SERIES_PALETTE,
+  SERIES_PRIMARY,
+  SERIES_PRIMARY_MUTED,
+  SERIES_SECONDARY,
+} from './utils/seriesColors';
 export type {
   DailyUsage,
   UsageBar,

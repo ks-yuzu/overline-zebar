@@ -9,6 +9,8 @@ import {
   buildWindowPeaks,
   hasJustReset,
   selectCurrentWindow,
+  selectScopedSamples,
+  usableTimeZone,
   windowTrendRange,
   clampPercentage,
   getThresholdColor,
@@ -17,9 +19,10 @@ import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
 import { Bot, Clock3, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
-import { useClaudeUsage } from './useClaudeUsage';
+import { hasModelWindow, useClaudeUsage } from './useClaudeUsage';
 import type {
   ClaudeUsageHistorySample,
+  ClaudeUsageModelPeriod,
   ClaudeUsagePeriod,
 } from './useClaudeUsage';
 
@@ -51,7 +54,7 @@ function formatResetDate(period: ClaudeUsagePeriod) {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-    timeZone: period.timezone,
+    timeZone: usableTimeZone(period.timezone),
   }).format(resetTime);
 }
 
@@ -100,10 +103,10 @@ function windowEndFor(resetsAt: string | undefined) {
  * cache outlives any one version of it - this is what a cache written before
  * that rule looks like - so the chart drops them rather than trusting the file.
  */
-function selectPeriodSamples(
-  history: ClaudeUsageHistorySample[],
-  valueOf: (sample: ClaudeUsageHistorySample) => number,
-  resetOf: (sample: ClaudeUsageHistorySample) => string | undefined
+function selectPeriodSamples<Sample extends ClaudeUsageHistorySample>(
+  history: Sample[],
+  valueOf: (sample: Sample) => number,
+  resetOf: (sample: Sample) => string | undefined
 ): UsageHistorySample[] {
   return history
     .slice()
@@ -142,15 +145,58 @@ function selectWeekSamples(
   );
 }
 
+/**
+ * Only the samples whose label matches the window on show. A model renamed for
+ * good takes its history with it; see docs/ai-usage-integration.md.
+ */
+function selectWeekModelSamples(
+  history: ClaudeUsageHistorySample[],
+  label: string | undefined
+): UsageHistorySample[] {
+  return selectPeriodSamples(
+    selectScopedSamples(
+      history.filter(hasModelWindow),
+      (sample) => sample.week_model_label,
+      label
+    ),
+    (sample) => sample.week_model_used_percent,
+    (sample) => sample.week_model_resets_at
+  );
+}
+
+/** A weekly quota scoped to one model, shown beside the one for every model. */
+function ScopedUsage({
+  period,
+  thresholds,
+}: {
+  period: ClaudeUsageModelPeriod;
+  thresholds: Threshold[];
+}) {
+  const usage = Math.round(clampPercentage(period.used_percent));
+  return (
+    <div className="text-right">
+      <p className="text-[10px] font-medium text-text-muted">{period.label}</p>
+      <p
+        className="text-base font-semibold tabular-nums"
+        style={{ color: `var(${getThresholdColor(usage, thresholds)})` }}
+      >
+        {usage}%
+      </p>
+    </div>
+  );
+}
+
 function UsageCard({
   label,
   period,
   reset,
+  scoped,
   thresholds,
 }: {
   label: string;
   period: ClaudeUsagePeriod;
   reset: string;
+  scoped?: ClaudeUsageModelPeriod;
   thresholds: Threshold[];
 }) {
   const usage = Math.round(clampPercentage(period.used_percent));
@@ -170,9 +216,13 @@ function UsageCard({
             {usage}%
           </p>
         </div>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
-          used
-        </span>
+        {scoped ? (
+          <ScopedUsage period={scoped} thresholds={thresholds} />
+        ) : (
+          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
+            used
+          </span>
+        )}
       </div>
       <Progress
         aria-label={`${label} usage`}
@@ -239,6 +289,11 @@ export default function App() {
           : 'Fresh';
   const sessionSamples = selectSessionSamples(data.history);
   const weekSamples = selectWeekSamples(data.history);
+  const weekModel = data.current_week_model;
+  const weekModelSamples = selectWeekModelSamples(
+    data.history,
+    weekModel?.label
+  );
   const sessionRange = getTrendRange(
     data.current_session,
     SESSION_WINDOW_SECONDS,
@@ -263,11 +318,23 @@ export default function App() {
     startAt: weekRange.startAt,
     started: weekRange.started,
   });
+  /* Plotted on the all-models window's axis by time, with no window identity
+     of its own. See docs/ai-usage-integration.md. */
+  const weekModelHistory: TrendPoint[] = weekModelSamples
+    .filter(
+      (sample) =>
+        sample.recordedAt >= weekRange.startAt &&
+        sample.recordedAt <= weekRange.endAt
+    )
+    .map(({ recordedAt, value }) => ({ recordedAt, value }));
   const historyRange = {
     startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
     endAt: now / 1000,
   };
   const dailyUsage = buildDailyUsage(weekSamples, historyRange);
+  const dailyModelUsage = weekModel
+    ? buildDailyUsage(weekModelSamples, historyRange)
+    : undefined;
   const sessionPeaks = buildWindowPeaks(sessionSamples, {
     ...historyRange,
     now: now / 1000,
@@ -313,6 +380,7 @@ export default function App() {
           label="7D week"
           period={data.current_week}
           reset={`Resets ${formatResetDate(data.current_week)}`}
+          scoped={weekModel}
           thresholds={systemStatThresholds}
         />
       </section>
@@ -349,6 +417,9 @@ export default function App() {
             label="7D"
             paceGuide={weekRange.started}
             points={weekHistory}
+            pointsLabel="all models"
+            secondaryLabel={weekModel?.label}
+            secondaryPoints={weekModelHistory}
             startAt={weekRange.startAt}
           />
         </Card>
@@ -388,8 +459,10 @@ export default function App() {
             bars={dailyUsage.bars}
             endAt={historyRange.endAt}
             label="7D"
-            lineLabel="cumulative"
+            lineLabel="all models"
             primarySeries="line"
+            secondaryLineLabel={weekModel?.label}
+            secondarySegments={dailyModelUsage?.segments}
             segments={dailyUsage.segments}
             startAt={historyRange.startAt}
           />
