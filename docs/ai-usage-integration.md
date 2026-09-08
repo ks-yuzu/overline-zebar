@@ -72,7 +72,6 @@ collector fileとPrometheusの閲覧権限はアカウント情報として扱�
 読めない場合は、部分的で意味が変わるlabel setを出さず、4つとも省略する。
 これはhelperが出す`used_percent`、`reset_timestamp_seconds`、
 `generated_timestamp_seconds`、`refresh_last_known`の全sampleに適用する。
-node_exporter自身が追加する`node_textfile_mtime_seconds`のlabelは変更しない。
 
 `https://api.anthropic.com/api/oauth/usage` を第一の取得元とする。認証は
 `$HOME/.claude/.credentials.json` の OAuth access token、`anthropic-beta:
