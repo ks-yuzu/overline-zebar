@@ -15,6 +15,52 @@ history points.
 See [`docs/ai-usage-integration.md`](../../docs/ai-usage-integration.md) for the
 shared architecture, UI behavior, stale detection, and operations runbook.
 
+## Compact Python helper
+
+`claude-usage-json-new` is a smaller Python 3 implementation of the same JSON
+contract. It replaces the Bash orchestration, embedded Perl parser, `curl`, and
+`flock` with the Python standard library. `expect` remains necessary only when
+the helper has to fall back to Claude Code's `/usage` screen.
+
+Install it alongside the existing helper while evaluating it:
+
+```sh
+install -Dm755 scripts/claude-usage/claude-usage-json-new \
+  "$HOME/bin/claude-usage-json-new"
+```
+
+Its state is deliberately isolated under
+`$HOME/.cache/claude-usage-json-new/`; it never reuses or overwrites the
+existing helper's `usage.json`. A successful JSON response from the endpoint
+is also retained byte-for-byte as `api-response.json`. Both files are replaced
+atomically and use mode `0600`.
+
+Set `CLAUDE_USAGE_TEXTFILE_PATH` to emit node_exporter's textfile collector
+format after a successful refresh:
+
+```sh
+CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usage.prom \
+  claude-usage-json-new --force
+```
+
+The parent directory must already exist. The file exposes usage and reset
+gauges plus `claude_usage_generated_timestamp_seconds` and
+`claude_usage_refresh_last_known`. A failed refresh does not rewrite it, so
+neither the reading timestamp nor node_exporter's `node_textfile_mtime_seconds`
+is made artificially fresh. For example, an alert can test:
+
+```promql
+absent(claude_usage_generated_timestamp_seconds)
+or time() - claude_usage_generated_timestamp_seconds > 600
+or claude_usage_refresh_last_known == 1
+```
+
+Run its self-contained regression suite with:
+
+```sh
+python3 scripts/claude-usage/test-claude-usage-json-new
+```
+
 ## WSL setup
 
 Install `expect`, Perl, and `flock`, then install the helper:
