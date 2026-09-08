@@ -36,6 +36,26 @@ def reading(session=7, week=44, models=()):
 
 
 class ApiTests(unittest.TestCase):
+    def test_account_labels_require_the_complete_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "claude.json"
+            path.write_text(json.dumps({
+                "oauthAccount": {
+                    "organizationUuid": "organization",
+                    "accountUuid": "account",
+                    "emailAddress": "user@example.test",
+                },
+                "userID": "user",
+            }))
+            self.assertEqual(usage.account_labels(path), {
+                "organization_id": "organization",
+                "user_account_uuid": "account",
+                "user_email": "user@example.test",
+                "user_id": "user",
+            })
+            path.write_text(json.dumps({"oauthAccount": {}, "userID": "user"}))
+            self.assertEqual(usage.account_labels(path), {})
+
     def test_redirects_are_not_followed_with_the_oauth_header(self):
         handler = usage.NoRedirect()
         request = usage.urllib.request.Request(
@@ -176,6 +196,14 @@ class EndToEndTests(unittest.TestCase):
         credentials = root / ".claude/.credentials.json"
         credentials.parent.mkdir()
         credentials.write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret"}}))
+        (root / ".claude.json").write_text(json.dumps({
+            "oauthAccount": {
+                "organizationUuid": "organization",
+                "accountUuid": "account",
+                "emailAddress": "user@example.test",
+            },
+            "userID": "user",
+        }))
 
     def test_separate_cache_raw_api_and_prometheus_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -197,9 +225,11 @@ class EndToEndTests(unittest.TestCase):
             output = json.loads(result.stdout)
             self.assertEqual(output["current_week_model"]["used_percent"], 12)
             metrics = textfile.read_text()
-            self.assertIn("claude_usage_generated_timestamp_seconds", metrics)
-            self.assertIn('window="weekly_scoped",model="Fable\\"\\\\\\n"', metrics)
-            self.assertIn("claude_usage_refresh_last_known 0", metrics)
+            identity = 'organization_id="organization",user_account_uuid="account",user_email="user@example.test",user_id="user"'
+            samples = [line for line in metrics.splitlines() if line and not line.startswith("#")]
+            self.assertEqual(len(samples), 8)
+            self.assertTrue(all(identity in line for line in samples))
+            self.assertIn(f'window="weekly_scoped",{identity},model="Fable\\"\\\\\\n"', metrics)
             self.assertEqual(textfile.stat().st_mode & 0o777, 0o644)
 
     def test_failed_refresh_does_not_freshen_cache_or_metrics(self):
@@ -254,7 +284,7 @@ class EndToEndTests(unittest.TestCase):
         ]))
         with tempfile.TemporaryDirectory() as directory:
             output = usage.build_output("screen", windows, text, {}, Path(directory) / "samples", now)
-        metrics = usage.prometheus_text(output).decode()
+        metrics = usage.prometheus_text(output, {}).decode()
         self.assertIn("claude_usage_generated_timestamp_seconds 1788883323", metrics)
         self.assertIn("claude_usage_refresh_last_known 1", metrics)
 

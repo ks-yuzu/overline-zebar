@@ -311,7 +311,23 @@ def atomic_write(path, data, mode):
         Path(temporary_name).unlink(missing_ok=True)
 
 
-def prometheus_text(output):
+def account_labels(path=None):
+    try:
+        account_file = path or Path.home() / ".claude.json"
+        data = json.loads(account_file.read_text())
+        account = data["oauthAccount"]
+        labels = {
+            "organization_id": account["organizationUuid"],
+            "user_account_uuid": account["accountUuid"],
+            "user_email": account["emailAddress"],
+            "user_id": data["userID"],
+        }
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return {}
+    return labels if all(isinstance(value, str) and value for value in labels.values()) else {}
+
+
+def prometheus_text(output, identity):
     def labels(**values):
         escaped = []
         for key, value in values.items():
@@ -319,6 +335,7 @@ def prometheus_text(output):
             escaped.append(f'{key}="{value}"')
         return "{" + ",".join(escaped) + "}"
 
+    identity_labels = labels(**identity) if identity else ""
     rows = [
         "# HELP claude_usage_used_percent Percentage of a Claude usage window consumed.",
         "# TYPE claude_usage_used_percent gauge",
@@ -326,10 +343,10 @@ def prometheus_text(output):
         "# TYPE claude_usage_reset_timestamp_seconds gauge",
         "# HELP claude_usage_generated_timestamp_seconds Unix timestamp of the usage reading.",
         "# TYPE claude_usage_generated_timestamp_seconds gauge",
-        f"claude_usage_generated_timestamp_seconds {parse_iso8601(output['generated_at']).timestamp():.0f}",
+        f"claude_usage_generated_timestamp_seconds{identity_labels} {parse_iso8601(output['generated_at']).timestamp():.0f}",
         "# HELP claude_usage_refresh_last_known Whether Claude reported a last-known rather than live reading.",
         "# TYPE claude_usage_refresh_last_known gauge",
-        f"claude_usage_refresh_last_known {int(output['refresh_status'] == 'last_known')}",
+        f"claude_usage_refresh_last_known{identity_labels} {int(output['refresh_status'] == 'last_known')}",
     ]
     for key, window, extra in (
         ("current_session", "session", {}),
@@ -339,7 +356,7 @@ def prometheus_text(output):
         usage = output.get(key)
         if not usage:
             continue
-        metric_labels = labels(window=window, **extra) if extra else labels(window=window)
+        metric_labels = labels(window=window, **identity, **extra)
         rows.append(f"claude_usage_used_percent{metric_labels} {usage['used_percent']:.15g}")
         reset = parse_iso8601(usage.get("resets_at"))
         if reset:
@@ -571,7 +588,7 @@ def main(argv):
         textfile = os.environ.get("CLAUDE_USAGE_TEXTFILE_PATH")
         if textfile:
             try:
-                atomic_write(textfile, prometheus_text(output), 0o644)
+                atomic_write(textfile, prometheus_text(output, account_labels()), 0o644)
             except OSError as error:
                 print(f"claude usage: cannot write textfile collector output: {error}", file=sys.stderr)
         sys.stdout.buffer.write(data)

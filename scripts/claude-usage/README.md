@@ -55,6 +55,15 @@ or time() - claude_usage_generated_timestamp_seconds > 600
 or claude_usage_refresh_last_known == 1
 ```
 
+Every emitted series is labelled with `organization_id`,
+`user_account_uuid`, `user_email`, and `user_id`, sourced from
+`$HOME/.claude.json`. The collector output therefore contains account
+identifiers and an email address; restrict its filesystem and Prometheus access
+accordingly. If the complete identity is unavailable, the helper omits all four
+labels rather than publishing a partial identity. This covers every metric the
+helper emits, including the generated-timestamp and stale-state gauges; it does
+not alter node_exporter's own `node_textfile_mtime_seconds` metric.
+
 Run its self-contained regression suite with:
 
 ```sh
