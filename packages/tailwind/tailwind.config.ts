@@ -30,6 +30,8 @@ const config: Omit<Config, 'content'> = {
       },
       fontFamily: {
         mono: ['Geist Mono', 'monospace'],
+        // Nerd Fonts glyphs. Installed on the system, not bundled.
+        icon: ['Cojica', 'monospace'],
       },
       fontSize: {
         xs: '10px',
