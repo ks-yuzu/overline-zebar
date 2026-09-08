@@ -275,7 +275,7 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
 - Claude詳細は3段構成とし、**全段で左を5H、右を7Dに固定する。**
   現在値、window内の推移、14日の推移が同じ列に並び、列が期間を表す。
-  - この配置のため幅は920px、高さは630pxとする。
+  - この配置のため幅は920px、高さは650pxとする (Claudeの詳細view)。
   - 3段目は保持履歴14日分を横軸とし、左に5H window単位、右に日単位の推移を置く。
     日や5H windowをまたぐ傾向は、window内のgraphからは読めない。
 - 右列 (7D) の14日graph:
@@ -317,12 +317,45 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   同一性そのものでもある。以前は丸めた識別子を別に持っていたが、それを時刻として
   読み戻せずバーの位置がずれたため、許容差付きの比較へ一本化した。
 
-model別の週次 (`current_week_model`) の表示:
+model別の週次 (`current_week_model`) のmain barでの表示:
+
+- **3つ目のringとして出す。**背景の`ProjectionFill`へは畳まない。あの1本は
+  sessionとweekの予測の悪い方で、**同じ消費を別の窓で見た量どうし**なので畳んでよい。
+  Fableは別の量なので、畳むと数字の意味が状況で変わる。
+- **週次の2つは隣に置き、resetを1つ共有する。**両者のresetは同一である。間にreset
+  文字列を挟むと並びが分断され、しかもその文字列はFable側でも同じ値になる重複である。
+- **区切りの縦線はwindowの境目に置く。windowを共有するものは線の同じ側にまとめる。**
+  Claudeなら`5H │ 7D Fable`、Codexなら`5H │ 7D`。**両providerで同じ規則**である。
+  - 7DとFableの間には置かない。両者は同じwindowで、後ろのresetを共有している。
+    そこへ線を置くと、共有resetがFableだけのものに見える。
+  - クォータの違い (all models / model別) はlabelが持ち、線は持たない。
+  - windowが1つしかない時は線も出さない。
+- **ringのlabelを系列色で着色しない。**chip上は閾値色が働き、`--warning`が黄色である。
+  labelを黄色にすると警告と競合する。graphとの対応はpanelを開いた時の凡例が担う。
+- Fableのresetは出さない。7Dと同一なので直前の値の繰り返しになる。
+
+model別の週次 (`current_week_model`) の詳細viewでの表示:
 
 - **列を増やさず、7Dの列の3段すべてに重ねる。** all modelsとmodel別は**同じ軸**を
   共有する。resetも期間も同一で、利用者が知りたいのは片方をもう片方に対して読むこと
   である。列に分けると、軸の違い (5Hと7D) より系列の違いが目立ってしまう。
-  - 1段目は現在値を右肩にmodel名付きで小さく併記する。
+  - **1段目は右列を2段組みにし、model別に自分の数値と自分のbarを持たせる。**
+    1本のbarで2つの数値を代表させると、より切迫している方にbarが無い状態が起こる。
+    `used`ピルは両cardに残す (片方だけ消えると2枚並びで非対称になる)。
+    `Resets`の行は`mt-auto`で下端へ寄せ、5H側の空きは下に出す。
+    **panelの高さは1つの定数 (650px) とし、枠の有無で変えない。**2段目のぶんだけ
+    1段目が高くなる (実測: 1段目が108 → 142px、内容が607 → 641px)。
+    - **枠の有無で高さを変えてはいけない。**高さはbar側のqueryのsnapshotから決まる一方、
+      2段目を描くかはpanel自身の別のqueryが決める。**別プロセスの2つの判断**なので
+      食い違いを直せない。panelは60秒ごとに取り直すため、開いている間に枠が現れても
+      windowの大きさは変えられない。
+    - 枠が無いplanではfooterの下に約40pxの空きが出る。各sectionは`shrink-0`で
+      伸びないため余りは下端へ落ちる。**この空きは高さを1つに保つ対価である。**
+    - `zpack.json`のpresetも同じ650にする。**低い値でも切り詰めではなくscrollになる**
+      (panel rootは`overflow-y-auto`)。揃えるのはscroll barを出さないためである。
+    - 下端の位置に注意する。presetの`offsetY`は40pxなので、高さ690では下端が730pxに
+      なり、**720pのディスプレイでは画面外**へ出る。rootは`h-screen`で
+      `resizable: false`なので、はみ出した帯は辿れない。
   - 2段目はwindow内の推移に線を重ねる。
   - 3段目は累積の線を重ねる。棒 (日次) はall modelsのまま。
 - **model別の系列は`--warning` (黄) で描く。**all modelsは`--success`のまま。

@@ -2,6 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { CLAUDE_USAGE_COMMAND } from './config';
 import { fetchUsageJson } from '../aiUsage/usageCommand';
 
+/** A weekly window Claude scopes to one model. `label` names that model. */
+type ClaudeUsageModelPeriod = ClaudeUsagePeriod & {
+  label: string;
+};
+
 export type ClaudeUsagePeriod = {
   used_percent: number;
   resets_at?: string;
@@ -16,7 +21,16 @@ export type ClaudeUsageData = {
   last_known_age?: string;
   current_session: ClaudeUsagePeriod;
   current_week: ClaudeUsagePeriod;
+  /** Absent on a plan with no per-model weekly quota. */
+  current_week_model?: ClaudeUsageModelPeriod;
 };
+
+/** A name is required; without one there is nothing to put on the ring. */
+function isModelPeriod(value: unknown): value is ClaudeUsageModelPeriod {
+  if (!isUsagePeriod(value)) return false;
+  const period = value as Partial<ClaudeUsageModelPeriod>;
+  return typeof period.label === 'string' && period.label.length > 0;
+}
 
 function isUsagePeriod(value: unknown): value is ClaudeUsagePeriod {
   if (!value || typeof value !== 'object') return false;
@@ -40,7 +54,12 @@ function parseClaudeUsage(value: string): ClaudeUsageData {
     throw new Error('Claude usage command returned an unexpected JSON shape.');
   }
 
-  return parsed as ClaudeUsageData;
+  return {
+    ...(parsed as ClaudeUsageData),
+    current_week_model: isModelPeriod(parsed.current_week_model)
+      ? parsed.current_week_model
+      : undefined,
+  };
 }
 
 async function fetchClaudeUsage(): Promise<ClaudeUsageData> {

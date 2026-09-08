@@ -164,28 +164,6 @@ function selectWeekModelSamples(
   );
 }
 
-/** A weekly quota scoped to one model, shown beside the one for every model. */
-function ScopedUsage({
-  period,
-  thresholds,
-}: {
-  period: ClaudeUsageModelPeriod;
-  thresholds: Threshold[];
-}) {
-  const usage = Math.round(clampPercentage(period.used_percent));
-  return (
-    <div className="text-right">
-      <p className="text-[10px] font-medium text-text-muted">{period.label}</p>
-      <p
-        className="text-base font-semibold tabular-nums"
-        style={{ color: `var(${getThresholdColor(usage, thresholds)})` }}
-      >
-        {usage}%
-      </p>
-    </div>
-  );
-}
-
 function UsageCard({
   label,
   period,
@@ -204,6 +182,10 @@ function UsageCard({
   const textColor = `var(${thresholdColor})`;
   const indicatorColor =
     thresholdColor === '--text' ? 'var(--success)' : textColor;
+  const scopedUsage = scoped
+    ? Math.round(clampPercentage(scoped.used_percent))
+    : 0;
+  const scopedColor = getThresholdColor(scopedUsage, thresholds);
   return (
     <Card className="gap-2 bg-background-deeper/60 p-3">
       <div className="flex items-start justify-between">
@@ -216,20 +198,43 @@ function UsageCard({
             {usage}%
           </p>
         </div>
-        {scoped ? (
-          <ScopedUsage period={scoped} thresholds={thresholds} />
-        ) : (
-          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
-            used
-          </span>
-        )}
+        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
+          used
+        </span>
       </div>
       <Progress
         aria-label={`${label} usage`}
         indicatorColor={indicatorColor}
         value={usage}
       />
-      <div className="flex items-center gap-1.5 text-xs text-text-muted">
+      {scoped && (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-baseline justify-between">
+            <p
+              className="min-w-0 truncate text-[10px] font-medium text-text-muted"
+              title={scoped.label}
+            >
+              {scoped.label}
+            </p>
+            <p
+              className="text-base font-semibold tabular-nums"
+              style={{ color: `var(${scopedColor})` }}
+            >
+              {scopedUsage}%
+            </p>
+          </div>
+          <Progress
+            aria-label={`${scoped.label} weekly usage`}
+            indicatorColor={
+              scopedColor === '--text'
+                ? 'var(--success)'
+                : `var(${scopedColor})`
+            }
+            value={scopedUsage}
+          />
+        </div>
+      )}
+      <div className="mt-auto flex items-center gap-1.5 text-xs text-text-muted">
         <Clock3 className="h-3 w-3" />
         <span>{reset}</span>
       </div>
