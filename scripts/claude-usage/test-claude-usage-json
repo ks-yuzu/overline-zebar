@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo
 
 
 HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "claude-usage-json-new"
-loader = importlib.machinery.SourceFileLoader("claude_usage_json_new", str(SCRIPT))
+SCRIPT = HERE / "claude-usage-json"
+loader = importlib.machinery.SourceFileLoader("claude_usage_json", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 usage = importlib.util.module_from_spec(spec)
 loader.exec_module(usage)
@@ -182,11 +182,11 @@ class ResetTests(unittest.TestCase):
 
 
 class EndToEndTests(unittest.TestCase):
-    def run_script(self, home, url, textfile=None):
+    def run_script(self, home, url, textfile=None, cache_dir=None):
         env = os.environ.copy() | {
             "HOME": str(home),
             "CLAUDE_USAGE_API_URL": url,
-            "CLAUDE_USAGE_CACHE_DIR": str(home / ".cache/claude-usage-json-new"),
+            "CLAUDE_USAGE_CACHE_DIR": str(cache_dir or home / ".cache/claude-usage-json"),
         }
         if textfile:
             env["CLAUDE_USAGE_TEXTFILE_PATH"] = str(textfile)
@@ -205,7 +205,7 @@ class EndToEndTests(unittest.TestCase):
             "userID": "user",
         }))
 
-    def test_separate_cache_raw_api_and_prometheus_output(self):
+    def test_cache_dir_override_keeps_standard_cache_and_emits_collector_output(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             self.prepare_home(home)
@@ -217,9 +217,9 @@ class EndToEndTests(unittest.TestCase):
             body = json.dumps(reading(models=[("Fable\"\\\n", 12)]), separators=(",", ":")).encode()
             endpoint = home / "endpoint.json"
             endpoint.write_bytes(body)
-            result = self.run_script(home, endpoint.as_uri(), textfile)
+            cache_dir = home / ".cache/claude-usage-json-dev"
+            result = self.run_script(home, endpoint.as_uri(), textfile, cache_dir)
             self.assertEqual(result.returncode, 0, result.stderr)
-            cache_dir = home / ".cache/claude-usage-json-new"
             self.assertEqual((cache_dir / "api-response.json").read_bytes(), body)
             self.assertEqual(old.read_text(), "do not touch\n")
             output = json.loads(result.stdout)
@@ -236,7 +236,7 @@ class EndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             self.prepare_home(home)
-            cache = home / ".cache/claude-usage-json-new/usage.json"
+            cache = home / ".cache/claude-usage-json/usage.json"
             cache.parent.mkdir(parents=True)
             cache.write_text('{"generated_at":"old"}\n')
             textfile = home / "collector/claude.prom"
@@ -260,6 +260,17 @@ class EndToEndTests(unittest.TestCase):
             result = subprocess.run([SCRIPT, "--cached-only"], env=env, text=True, capture_output=True)
             self.assertEqual((result.returncode, result.stdout), (0, "cached\n"))
             self.assertEqual(set(cache.parent.iterdir()), {cache})
+
+    def test_cached_only_uses_the_standard_cache_without_an_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_text("cached\n")
+            env = os.environ.copy() | {"HOME": str(home)}
+            env.pop("CLAUDE_USAGE_CACHE_DIR", None)
+            result = subprocess.run([SCRIPT, "--cached-only"], env=env, text=True, capture_output=True)
+            self.assertEqual((result.returncode, result.stdout), (0, "cached\n"))
 
     def test_empty_cache_override_uses_default_instead_of_current_directory(self):
         with tempfile.TemporaryDirectory() as directory:

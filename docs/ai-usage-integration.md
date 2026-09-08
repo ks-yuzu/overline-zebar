@@ -31,20 +31,22 @@ live取得とwidget表示を分離する理由は次のとおりです。
 - widgetはモニターごとに起動するため、直接取得するとプロセスが重複する。
 - `--cached-only` のWindows→WSL読み出しは実測で約0.4秒だった。
 
-各ヘルパーは一時ファイルへJSONを書き、検証後にcacheへ移動する。`flock`で
-同時更新も防ぐ。live取得に失敗し、既存cacheがある場合は最後のcacheを返す。
+各ヘルパーは一時ファイルへJSONを書き、検証後にcacheへ移動する。lockで同時更新も
+防ぐ。live取得に失敗し、既存cacheがある場合は最後のcacheを返す。
 このとき`generated_at`は更新されないため、widget側で停止を検出できる。
 
 ## Claude usageの取得元
 
-### 新helperの並行評価
+### Python helper
 
-`scripts/claude-usage/claude-usage-json-new` は、既存helperの契約をPython 3
-標準libraryへ移した並行評価用の実装である。既定の出力先は
-`$HOME/.cache/claude-usage-json-new/usage.json` であり、既存の
-`$HOME/.cache/claude-usage-json/usage.json` を読まず、上書きもしない。
+`scripts/claude-usage/claude-usage-json` は、既存のJSON契約をPython 3標準library
+で実装する。既定の出力先は `$HOME/.cache/claude-usage-json/usage.json` である。
 endpointから受け取った有効なJSON応答は同じdirectoryの
 `api-response.json` に原文のbyte列で保存する。
+
+開発時など通常のcacheを分離したい場合は、`CLAUDE_USAGE_CACHE_DIR` に別directoryを
+指定する。この指定だけでJSON cache、raw response、history、lockと、既定の作業directory
+が分離される。
 
 `CLAUDE_USAGE_TEXTFILE_PATH` を指定すると、成功したreadingから
 node_exporter textfile collector用のfileも原子的に生成する。stale判定は静的な
@@ -52,16 +54,14 @@ node_exporter textfile collector用のfileも原子的に生成する。stale判
 
 - `claude_usage_generated_timestamp_seconds`: readingが生成された時刻。
 - `claude_usage_refresh_last_known`: Claude自身がlast-knownと報告したか。
-- node_exporterの`node_textfile_mtime_seconds`: collector fileが最後に置換された時刻。
 
 更新失敗時はcollector fileを置換しない。したがって
-`time() - claude_usage_generated_timestamp_seconds` とfileのmtimeは古いまま残り、
-取得停止を新しい値で覆い隠さない。出力先の親directoryは事前に作成し、例えば
-次のように実行する。
+`time() - claude_usage_generated_timestamp_seconds` は古いreadingを保ち、取得停止を
+新しい値で覆い隠さない。出力先の親directoryは事前に作成し、例えば次のように実行する。
 
 ```sh
 CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usage.prom \
-  "$HOME/bin/claude-usage-json-new" --force
+  "$HOME/bin/claude-usage-json" --force
 ```
 
 出力する全metricには、`$HOME/.claude.json`の
@@ -81,7 +81,7 @@ oauth-2025-04-20` ヘッダが要る。**画面解析は戻り道として残す
 | --- | --- | --- |
 | 所要 | 14秒 | 0.4秒 |
 | 起動するもの | Claude Code一式 | HTTPS 1本 |
-| 必要な外部command | expect, perl, flock | curl, perl |
+| 必要な外部command | expect | なし |
 | windowの判別 | 見出しの括弧書きを分類する | `kind` field |
 | reset | 表記から日付を推定する | ISO 8601の瞬間 |
 
@@ -1002,11 +1002,9 @@ corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
-bash -n scripts/claude-usage/claude-usage-json
+python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
-perl scripts/claude-usage/test-normalize-reset
-perl scripts/claude-usage/test-read-windows
-perl scripts/claude-usage/test-read-api
+python3 scripts/claude-usage/test-claude-usage-json
 node packages/ui/test-usage-series.mjs
 ```
 
@@ -1014,16 +1012,8 @@ node packages/ui/test-usage-series.mjs
 先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が出るため目視で
 気付きにくい。
 
-`test-normalize-reset`はreset時刻の解釈をhelperから読み出して検証する。helper側の
-subroutineを複製せず抽出しているため、名前や構造を変えると「見つからない」で
-落ちる。落ちた時は、testが古いのではなくhelperの変更が意図どおりかを先に見る。
-
-`test-read-api`はendpointのどのentryがどのwindowになるかと、resetの瞬間の
-読み取りを検証する。offsetを落とすと数時間ずれた時刻になるが、JSONは正しく見える。
-
-`test-read-windows`は画面のどの数字がどのwindowのものかを検証する。ここを誤ると
-JSONは正しい形のまま値だけが入れ替わるため、出力を見ても気付けない。こちらも
-helperからsubroutineを抽出している。
+`test-claude-usage-json`はAPIと画面のwindow対応、reset時刻、cache、raw response、
+collector出力、stale readingを同じ実装moduleに対して検証する。
 
 実機反映を伴うUI変更の完了条件は次のとおり。
 
