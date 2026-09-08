@@ -37,6 +37,33 @@ live取得とwidget表示を分離する理由は次のとおりです。
 
 ## Claude usageの取得元
 
+### 新helperの並行評価
+
+`scripts/claude-usage/claude-usage-json-new` は、既存helperの契約をPython 3
+標準libraryへ移した並行評価用の実装である。既定の出力先は
+`$HOME/.cache/claude-usage-json-new/usage.json` であり、既存の
+`$HOME/.cache/claude-usage-json/usage.json` を読まず、上書きもしない。
+endpointから受け取った有効なJSON応答は同じdirectoryの
+`api-response.json` に原文のbyte列で保存する。
+
+`CLAUDE_USAGE_TEXTFILE_PATH` を指定すると、成功したreadingから
+node_exporter textfile collector用のfileも原子的に生成する。stale判定は静的な
+真偽値に固定せず、次を組み合わせる。
+
+- `claude_usage_generated_timestamp_seconds`: readingが生成された時刻。
+- `claude_usage_refresh_last_known`: Claude自身がlast-knownと報告したか。
+- node_exporterの`node_textfile_mtime_seconds`: collector fileが最後に置換された時刻。
+
+更新失敗時はcollector fileを置換しない。したがって
+`time() - claude_usage_generated_timestamp_seconds` とfileのmtimeは古いまま残り、
+取得停止を新しい値で覆い隠さない。出力先の親directoryは事前に作成し、例えば
+次のように実行する。
+
+```sh
+CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usage.prom \
+  "$HOME/bin/claude-usage-json-new" --force
+```
+
 `https://api.anthropic.com/api/oauth/usage` を第一の取得元とする。認証は
 `$HOME/.claude/.credentials.json` の OAuth access token、`anthropic-beta:
 oauth-2025-04-20` ヘッダが要る。**画面解析は戻り道として残す。**
