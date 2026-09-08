@@ -64,6 +64,16 @@ CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usag
   "$HOME/bin/claude-usage-json-new" --force
 ```
 
+出力する全metricには、`$HOME/.claude.json`の
+`.oauthAccount.organizationUuid`、`.oauthAccount.accountUuid`、
+`.oauthAccount.emailAddress`、`.userID`からそれぞれ`organization_id`、
+`user_account_uuid`、`user_email`、`user_id`を付ける。email addressを含むため、
+collector fileとPrometheusの閲覧権限はアカウント情報として扱う。4値のどれかが
+読めない場合は、部分的で意味が変わるlabel setを出さず、4つとも省略する。
+これはhelperが出す`used_percent`、`reset_timestamp_seconds`、
+`generated_timestamp_seconds`、`refresh_last_known`の全sampleに適用する。
+node_exporter自身が追加する`node_textfile_mtime_seconds`のlabelは変更しない。
+
 `https://api.anthropic.com/api/oauth/usage` を第一の取得元とする。認証は
 `$HOME/.claude/.credentials.json` の OAuth access token、`anthropic-beta:
 oauth-2025-04-20` ヘッダが要る。**画面解析は戻り道として残す。**
