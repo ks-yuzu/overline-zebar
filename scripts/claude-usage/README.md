@@ -61,8 +61,7 @@ Every emitted series is labelled with `organization_id`,
 identifiers and an email address; restrict its filesystem and Prometheus access
 accordingly. If the complete identity is unavailable, the helper omits all four
 labels rather than publishing a partial identity. This covers every metric the
-helper emits, including the generated-timestamp and stale-state gauges; it does
-not alter node_exporter's own `node_textfile_mtime_seconds` metric.
+helper emits, including the generated-timestamp and stale-state gauges.
 
 Run its self-contained regression suite with:
 
