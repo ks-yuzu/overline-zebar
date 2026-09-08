@@ -73,6 +73,7 @@ export default function ClaudeUsage() {
     clampPercentage(data.current_session.used_percent)
   );
   const weekUsage = Math.round(clampPercentage(data.current_week.used_percent));
+  const weekModel = data.current_week_model;
   const weekResetsAt = data.current_week.resets_at
     ? new Date(data.current_week.resets_at).getTime()
     : NaN;
@@ -96,9 +97,21 @@ export default function ClaudeUsage() {
     <Chip
       ref={chipRef}
       aria-label={
-        projected === null
-          ? 'Open Claude usage details'
-          : `Open Claude usage details. Projected ${Math.round(projected)}% by reset`
+        /* The rings inside are not announced - an explicit label on a button
+           replaces them - so the scoped quota has to be named here. Its own
+           projection is deliberately absent from `projected`, which folds two
+           views of one quantity. */
+        [
+          'Open Claude usage details.',
+          projected === null
+            ? null
+            : `Projected ${Math.round(projected)}% by reset.`,
+          weekModel
+            ? `${weekModel.label} weekly at ${Math.round(clampPercentage(weekModel.used_percent))}%.`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' ')
       }
       as="button"
       className="relative isolate flex items-center gap-2.5 h-full overflow-hidden px-3"
@@ -107,7 +120,7 @@ export default function ClaudeUsage() {
           width: 920,
           // Keep in sync with the ai-usage-details preset in zpack.json: the
           // size passed here overrides it.
-          height: 630,
+          height: 650,
         });
         await zebar.startWidget('ai-usage-details', placement, {});
       }}
@@ -121,12 +134,30 @@ export default function ClaudeUsage() {
         threshold={systemStatThresholds}
       />
       <p className="text-text-muted tabular-nums">{sessionReset}</p>
+      <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
       <Stat
         Icon={<p className="font-medium text-icon">7D</p>}
         stat={`${weekUsage}%`}
         type={useInlineStats ? 'inline' : 'ring'}
         threshold={systemStatThresholds}
       />
+      {weekModel && (
+        <Stat
+          Icon={
+            /* Bounded: the bar's centre is an absolute layer under this group.
+               `title` keeps the whole name reachable. */
+            <p
+              className="max-w-[10ch] truncate font-medium text-icon"
+              title={weekModel.label}
+            >
+              {weekModel.label}
+            </p>
+          }
+          stat={`${Math.round(clampPercentage(weekModel.used_percent))}%`}
+          type={useInlineStats ? 'inline' : 'ring'}
+          threshold={systemStatThresholds}
+        />
+      )}
       <p className="text-text-muted tabular-nums">{weekReset}</p>
       <FreshnessIndicator freshness={freshness} />
     </Chip>

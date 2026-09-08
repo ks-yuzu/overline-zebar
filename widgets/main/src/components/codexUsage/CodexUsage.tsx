@@ -1,7 +1,7 @@
 import { useWidgetSetting } from '@overline-zebar/config';
 import { Chip, clampPercentage } from '@overline-zebar/ui';
 import { Code2 } from 'lucide-react';
-import { useRef } from 'react';
+import { Fragment, useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
 import { worstProjection } from '../../utils/projectWindowUsage';
@@ -98,25 +98,29 @@ export default function CodexUsage() {
     >
       <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
       <Code2 aria-label="Codex usage" className="h-3.5 w-3.5 text-icon" />
-      {windows.map((window) => (
-        <div
-          className="flex items-center gap-2.5"
-          key={`${window.windowDurationMins}-${window.resetsAt}`}
-        >
-          <Stat
-            Icon={
-              <p className="font-medium text-icon">
-                {formatWindowDuration(window.windowDurationMins)}
-              </p>
-            }
-            stat={`${Math.round(clampPercentage(window.usedPercent))}%`}
-            type={useInlineStats ? 'inline' : 'ring'}
-            threshold={systemStatThresholds}
-          />
-          <p className="text-text-muted tabular-nums">
-            {formatReset(window, now)}
-          </p>
-        </div>
+      {windows.map((window, index) => (
+        <Fragment key={`${index}-${window.windowDurationMins}`}>
+          {/* A direct child of the chip, as on the Claude one: inside the
+              group its two sides would take different gaps. */}
+          {index > 0 && (
+            <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
+          )}
+          <div className="flex items-center gap-2.5">
+            <Stat
+              Icon={
+                <p className="font-medium text-icon">
+                  {formatWindowDuration(window.windowDurationMins)}
+                </p>
+              }
+              stat={`${Math.round(clampPercentage(window.usedPercent))}%`}
+              type={useInlineStats ? 'inline' : 'ring'}
+              threshold={systemStatThresholds}
+            />
+            <p className="text-text-muted tabular-nums">
+              {formatReset(window, now)}
+            </p>
+          </div>
+        </Fragment>
       ))}
       <FreshnessIndicator freshness={freshness} />
     </Chip>
