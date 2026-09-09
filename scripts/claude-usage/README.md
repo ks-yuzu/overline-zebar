@@ -16,9 +16,9 @@ shared architecture, UI behavior, stale detection, and operations runbook.
 
 ## Python helper
 
-`claude-usage-json` is a compact Python 3 implementation of the JSON contract.
-It uses the standard library for HTTP, parsing, caching, and locking. `expect`
-is necessary only for the fallback to Claude Code's `/usage` screen.
+`claude-usage-json` is a compact Python 3.9+ implementation of the JSON
+contract. It uses the standard library for HTTP, parsing, caching, and locking.
+`expect` is necessary only for the fallback to Claude Code's `/usage` screen.
 
 ```sh
 install -Dm755 scripts/claude-usage/claude-usage-json \
@@ -67,7 +67,7 @@ python3 scripts/claude-usage/test-claude-usage-json
 
 ## WSL setup
 
-Install Python 3 and `expect`, then install the helper:
+Install Python 3.9+ and `expect`, then install the helper:
 
 ```sh
 install -Dm755 scripts/claude-usage/claude-usage-json \

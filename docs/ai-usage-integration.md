@@ -39,7 +39,7 @@ live取得とwidget表示を分離する理由は次のとおりです。
 
 ### Python helper
 
-`scripts/claude-usage/claude-usage-json` は、既存のJSON契約をPython 3標準library
+`scripts/claude-usage/claude-usage-json` は、既存のJSON契約をPython 3.9以上の標準library
 で実装する。既定の出力先は `$HOME/.cache/claude-usage-json/usage.json` である。
 endpointから受け取った有効なJSON応答は同じdirectoryの
 `api-response.json` に原文のbyte列で保存する。
