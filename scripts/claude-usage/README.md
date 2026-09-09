@@ -1,12 +1,11 @@
 # Claude usage integration
 
 This optional integration displays the current Claude session and weekly usage
-in the main Zebar widget. An authenticated Claude Code process refreshes a JSON
-cache in WSL, while Zebar only reads the cached value.
+in the main Zebar widget. The helper refreshes a JSON cache in WSL through the
+usage endpoint, while Zebar only reads the cached value.
 
-The helper starts Claude Code in screen-reader mode and waits for its input
-prompt before opening `/usage`. This avoids depending on optional welcome text
-that can change between Claude Code UI versions.
+When the endpoint cannot provide a usable reading, the helper falls back to
+Claude Code's screen-reader mode and opens `/usage`.
 
 Each successful live refresh also stores a usage sample in the cache. Samples
 are retained for 14 days; source-reported last-known values are not added as new
@@ -15,9 +14,60 @@ history points.
 See [`docs/ai-usage-integration.md`](../../docs/ai-usage-integration.md) for the
 shared architecture, UI behavior, stale detection, and operations runbook.
 
+## Python helper
+
+`claude-usage-json` is a compact Python 3.9+ implementation of the JSON
+contract. It uses the standard library for HTTP, parsing, caching, and locking.
+`expect` is necessary only for the fallback to Claude Code's `/usage` screen.
+
+```sh
+install -Dm755 scripts/claude-usage/claude-usage-json \
+  "$HOME/bin/claude-usage-json"
+```
+
+State is stored in `$HOME/.cache/claude-usage-json/`. A successful JSON
+response from the endpoint is also retained byte-for-byte as
+`api-response.json`. Both files are replaced atomically and use mode `0600`.
+For development, set `CLAUDE_USAGE_CACHE_DIR` to a separate directory; this
+keeps the normal cache untouched.
+
+Set `CLAUDE_USAGE_TEXTFILE_PATH` to emit node_exporter's textfile collector
+format after a successful refresh:
+
+```sh
+CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usage.prom \
+  claude-usage-json --force
+```
+
+The parent directory must already exist. The file exposes usage and reset
+gauges plus `claude_usage_generated_timestamp_seconds` and
+`claude_usage_refresh_last_known`. A failed refresh does not rewrite it, so
+the reading timestamp is not made artificially fresh. For example, an alert
+can test:
+
+```promql
+absent(claude_usage_generated_timestamp_seconds)
+or time() - claude_usage_generated_timestamp_seconds > 600
+or claude_usage_refresh_last_known == 1
+```
+
+Every emitted series is labelled with `organization_id`,
+`user_account_uuid`, `user_email`, and `user_id`, sourced from
+`$HOME/.claude.json`. The collector output therefore contains account
+identifiers and an email address; restrict its filesystem and Prometheus access
+accordingly. If the complete identity is unavailable, the helper omits all four
+labels rather than publishing a partial identity. This covers every metric the
+helper emits, including the generated-timestamp and stale-state gauges.
+
+Run its self-contained regression suite with:
+
+```sh
+python3 scripts/claude-usage/test-claude-usage-json
+```
+
 ## WSL setup
 
-Install `expect`, Perl, and `flock`, then install the helper:
+Install Python 3.9+ and `expect`, then install the helper:
 
 ```sh
 install -Dm755 scripts/claude-usage/claude-usage-json \
@@ -74,32 +124,11 @@ pnpm --filter @overline-zebar/main build
 
 ## Tests
 
-Claude reports the session reset as a bare time of day (`5:50am`) and the week
-reset as a month and day (`Sep 7, 9am`), so the helper has to work out which
-occurrence is meant. It takes the one nearest to now. The cases live in a
-script that reads those subroutines out of the helper:
+`test-claude-usage-json` covers API and screen parsing, reset normalization,
+cache behavior, raw-response caching, collector output, and stale readings:
 
 ```sh
-perl scripts/claude-usage/test-normalize-reset
-```
-
-The panel lists one window per heading: `Current session`, `Current week (all
-models)`, and on a plan that caps one model separately a further `Current week
-(<model>)`. Each window's numbers are read from its own heading up to the next
-one, and a per-model window is recognised by its shape rather than by the model
-it names. Reading that split wrong swaps two plausible percentages and leaves
-the JSON looking correct, so the cases live in their own script:
-
-```sh
-perl scripts/claude-usage/test-read-windows
-```
-
-The endpoint needs no classifying, but a window read from the wrong entry is
-still a plausible percentage under a field name, and a reset read without its
-offset lands hours away while the JSON still looks right:
-
-```sh
-perl scripts/claude-usage/test-read-api
+python3 scripts/claude-usage/test-claude-usage-json
 ```
 
 The per-model window reaches the JSON as the optional `current_week_model`, with

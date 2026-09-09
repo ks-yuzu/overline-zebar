@@ -1,344 +1,58 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 
-set -euo pipefail
+import datetime as dt
+import fcntl
+import http.client
+import json
+import math
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-timeout_seconds="${CLAUDE_USAGE_TIMEOUT:-45}"
-if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
-	printf 'CLAUDE_USAGE_TIMEOUT must be a positive integer\n' >&2
-	exit 64
-fi
 
-cache_ttl_seconds="${CLAUDE_USAGE_CACHE_TTL:-300}"
-if [[ ! "$cache_ttl_seconds" =~ ^[1-9][0-9]*$ ]]; then
-	printf 'CLAUDE_USAGE_CACHE_TTL must be a positive integer\n' >&2
-	exit 64
-fi
-
-# How long the /usage panel may keep drawing before the reading is taken. The
-# panel renders twice and the second pass carries the per-model windows, so the
-# capture has to stay open past the first one. The cap keeps a panel that never
-# settles from running into the timeout cron wraps the helper in.
-settle_quiet_seconds="${CLAUDE_USAGE_SETTLE_QUIET:-4}"
-settle_cap_seconds="${CLAUDE_USAGE_SETTLE_CAP:-25}"
-for setting in settle_quiet_seconds settle_cap_seconds; do
-	if [[ ! "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
-		printf '%s must be a positive integer\n' "$setting" >&2
-		exit 64
-	fi
-done
-
-# `auto` asks the endpoint first and keeps the panel as the way back; `screen`
-# pins the panel, so it can be run on purpose. See docs/ai-usage-integration.md.
-source_mode="${CLAUDE_USAGE_SOURCE:-auto}"
-case "$source_mode" in
-	auto | screen) ;;
-	*)
-		printf 'CLAUDE_USAGE_SOURCE must be auto or screen\n' >&2
-		exit 64
-		;;
-esac
-
-api_url="${CLAUDE_USAGE_API_URL:-https://api.anthropic.com/api/oauth/usage}"
-api_timeout_seconds="${CLAUDE_USAGE_API_TIMEOUT:-15}"
-if [[ ! "$api_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
-	printf 'CLAUDE_USAGE_API_TIMEOUT must be a positive integer\n' >&2
-	exit 64
-fi
-credentials_file="$HOME/.claude/.credentials.json"
-
-session_id="${CLAUDE_USAGE_SESSION_ID:-ca1de000-0000-4000-8000-000000000001}"
-if [[ ! "$session_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-	printf 'CLAUDE_USAGE_SESSION_ID must be a valid UUID\n' >&2
-	exit 64
-fi
-
-force_refresh=false
-cached_only=false
-case "${1:-}" in
-	'') ;;
-	--force) force_refresh=true ;;
-	--cached-only) cached_only=true ;;
-	*)
-		printf 'usage: %s [--force|--cached-only]\n' "$0" >&2
-		exit 64
-		;;
-esac
-
-cache_dir="${CLAUDE_USAGE_CACHE_DIR:-$HOME/.cache/claude-usage-json}"
-cache_file="$cache_dir/usage.json"
-# Append-only archive of raw samples. The cache prunes to 14 days on every
-# write, so without this the older history is gone for good and no later
-# rollup can be computed for it. The widget never reads this file.
-samples_file="$cache_dir/samples.ndjson"
-lock_file="$cache_dir/update.lock"
-mkdir -p -- "$cache_dir"
-chmod 700 -- "$cache_dir"
-
-export CLAUDE_CODE_SKIP_PROMPT_HISTORY=1
-
-if [[ "$cached_only" == true ]]; then
-	if [[ ! -s "$cache_file" ]]; then
-		printf 'Claude usage cache is not available yet\n' >&2
-		exit 66
-	fi
-	cat -- "$cache_file"
-	exit 0
-fi
-
-cache_is_fresh() {
-	[[ -s "$cache_file" ]] || return 1
-	local modified_at now
-	modified_at="$(stat -c %Y -- "$cache_file")" || return 1
-	now="$(date +%s)"
-	((now - modified_at < cache_ttl_seconds))
-}
-
-if [[ "$force_refresh" == false ]] && cache_is_fresh; then
-	cat -- "$cache_file"
-	exit 0
-fi
-
-# Sets `api_outcome` to why it failed - `ok`, `auth`, `changed`, `wait` - which
-# decides whether opening the panel is worth doing. Reasoning and the
-# measurements behind `wait`: docs/ai-usage-integration.md 「失敗したときに何をするか」.
-api_outcome=""
-fetch_from_api() {
-	local destination="$1" token status
-	api_outcome=wait
-	# Not `wait`: a missing binary does not come back on its own, and `wait`
-	# is the one outcome that keeps the panel shut. Classified as `wait` this
-	# would serve an ageing cache on every run for good, silently.
-	if ! command -v curl >/dev/null 2>&1; then
-		printf 'claude usage: curl not found; reading the panel instead\n' >&2
-		api_outcome=changed
-		return 1
-	fi
-
-	# perl rather than jq: one less dependency to be missing on a cron run.
-	# One message for both failures; perl's own names the credentials file.
-	token="$(perl -MJSON::PP -0777 -ne '
-		my $parsed = eval { JSON::PP->new->decode($_) } or exit 1;
-		my $token = eval { $parsed->{claudeAiOauth}{accessToken} };
-		exit 1 unless defined $token && length $token;
-		print $token;
-	' -- "$credentials_file" 2>/dev/null)" || token=''
-	if [[ -z "$token" ]]; then
-		printf 'claude usage: no usable token in the credentials file\n' >&2
-		api_outcome=auth
-		return 1
-	fi
-
-	# The token goes in on stdin: a command line is readable by every process
-	# on the host, and a file outlives a run cron kills by timeout. curl's
-	# stderr goes to ours, and carries no credential.
-	if ! status="$(printf 'Authorization: Bearer %s\n' "$token" \
-		| curl -sS -o "$destination" -w '%{http_code}' \
-			--max-time "$api_timeout_seconds" \
-			-H @- \
-			-H 'anthropic-beta: oauth-2025-04-20' \
-			-- "$api_url")"; then
-		return 1
-	fi
-
-	if [[ "$status" != 200 ]]; then
-		# The status, never the body: a refusal can quote what it was sent.
-		printf 'claude usage: usage endpoint returned HTTP %s\n' "$status" >&2
-		case "$status" in
-			401 | 403) api_outcome=auth ;;
-			429 | 5??) api_outcome=wait ;;
-			*) api_outcome=changed ;;
-		esac
-		return 1
-	fi
-
-	# A 200 without the two windows the reader needs is the endpoint having
-	# moved, not a reading. Asserts what the reader needs, not just the names:
-	# anything looser ends the run as a parse failure instead of `changed`.
-	if ! perl -MJSON::PP -MScalar::Util=looks_like_number \
-		-MTime::Local=timegm -0777 -ne '
-		my $parsed = eval { JSON::PP->new->decode($_) } or exit 1;
-		my $limits = $parsed->{limits};
-		exit 1 unless ref $limits eq q(ARRAY);
-		my %usable;
-		for my $limit (@$limits) {
-			next unless ref $limit eq q(HASH);
-			next unless looks_like_number($limit->{percent});
-			# What parse_iso8601 takes, and only that - the shape alone
-			# lets `2026-13-45` through, so the date goes to the same
-			# timegm. test-read-api holds the two side by side.
-			my @date = ($limit->{resets_at} // q())
-				=~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?
-					(?:Z|[+-]\d{2}:?\d{2})$/x
-				or next;
-			next unless defined eval {
-				timegm($date[5], $date[4], $date[3],
-					$date[2], $date[1] - 1, $date[0]);
-			};
-			$usable{ $limit->{kind} // q() } = 1;
-		}
-		exit 1 unless $usable{session} && $usable{weekly_all};
-		exit 0;
-	' -- "$destination" 2>/dev/null; then
-		printf 'claude usage: usage endpoint answered without the windows\n' >&2
-		api_outcome=changed
-		return 1
-	fi
-
-	api_outcome=ok
-}
-
-for command_name in expect perl flock; do
-	if ! command -v "$command_name" >/dev/null 2>&1; then
-		printf 'required command not found: %s\n' "$command_name" >&2
-		if [[ -s "$cache_file" ]]; then
-			cat -- "$cache_file"
-			exit 0
-		fi
-		exit 69
-	fi
-done
-
-# The main Zebar widget runs once per monitor. Serialize cache refreshes so only
-# one of those processes opens Claude's interactive /usage screen.
-exec 9>"$lock_file"
-flock 9
-
-if [[ "$force_refresh" == false ]] && cache_is_fresh; then
-	cat -- "$cache_file"
-	exit 0
-fi
-
-capture_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage.XXXXXX")"
-api_file="$(mktemp "${TMPDIR:-/tmp}/claude-usage-api.XXXXXX")"
-result_file="$(mktemp "$cache_dir/usage.json.XXXXXX")"
-trap 'rm -f -- "$capture_file" "$api_file" "$result_file"' EXIT
-
-reading_mode=""
-reading_file=""
-
-if [[ "$source_mode" != screen ]] && fetch_from_api "$api_file"; then
-	reading_mode=api
-	reading_file="$api_file"
-fi
-
-# Opening the panel is also what renews an expired token, so the way back and
-# the refresh are one act. `wait` is the only outcome that keeps it shut.
-open_panel=false
-if [[ "$source_mode" == screen ]]; then
-	open_panel=true
-elif [[ -z "$reading_mode" && "$api_outcome" != wait ]]; then
-	open_panel=true
-fi
-
-if [[ "$open_panel" == true ]]; then
-
-default_claude_bin="$HOME/bin/claude"
-if [[ ! -x "$default_claude_bin" ]]; then
-	default_claude_bin="$(command -v claude || true)"
-fi
-claude_bin="${CLAUDE_USAGE_CLAUDE_BIN:-$default_claude_bin}"
-if [[ -z "$claude_bin" || ! -x "$claude_bin" ]]; then
-	printf 'Claude executable not found; set CLAUDE_USAGE_CLAUDE_BIN\n' >&2
-	if [[ -s "$cache_file" ]]; then
-		cat -- "$cache_file"
-		exit 0
-	fi
-	exit 69
-fi
-
-# Claude Code asks whether the directory it starts in is trusted, and waits for
-# an answer before showing its prompt. Use a dedicated empty directory owned by
-# the helper rather than a shared one such as /tmp, so that answering the dialog
-# once covers nothing but this directory.
-claude_work_dir="${CLAUDE_USAGE_WORK_DIR:-$cache_dir/workdir}"
-if ! mkdir -p -- "$claude_work_dir"; then
-	printf 'cannot create Claude usage working directory: %s\n' "$claude_work_dir" >&2
-	exit 73
-fi
-chmod 700 -- "$claude_work_dir"
-if ! cd -- "$claude_work_dir"; then
-	printf 'cannot enter Claude usage working directory: %s\n' "$claude_work_dir" >&2
-	exit 73
-fi
-
-if ! expect -f - "$capture_file" "$timeout_seconds" "$claude_bin" "$session_id" \
-	"$settle_quiet_seconds" "$settle_cap_seconds" <<'EXPECT'
-set capture_file [lindex $argv 0]
+EXPECT = r'''
+set capture [lindex $argv 0]
 set timeout [lindex $argv 1]
-set claude_bin [lindex $argv 2]
-set session_id [lindex $argv 3]
-set settle_quiet_seconds [lindex $argv 4]
-set settle_cap_seconds [lindex $argv 5]
-
+set claude [lindex $argv 2]
+set session [lindex $argv 3]
+set quiet [lindex $argv 4]
+set cap [lindex $argv 5]
 log_user 0
-log_file -noappend -a $capture_file
-spawn -noecho $claude_bin --ax-screen-reader --session-id $session_id --name zebar-usage-monitor
-
+log_file -noappend -a $capture
+spawn -noecho $claude --ax-screen-reader --session-id $session --name zebar-usage-monitor
 expect {
-	-re {(^|\r?\n)\$} {}
-	timeout {
-		puts stderr "timed out waiting for Claude Code input prompt"
-		exit 2
-	}
-	eof {
-		puts stderr "Claude Code exited before displaying its prompt"
-		exit 2
-	}
+  -re {(^|\r?\n)\$} {}
+  timeout { puts stderr "timed out waiting for Claude Code input prompt"; exit 2 }
+  eof { puts stderr "Claude Code exited before displaying its prompt"; exit 2 }
 }
-
 after 500
 send -- "/usage\r"
 expect {
-	"Show plan usage" {
-		after 200
-		send -- "\r"
-	}
-	-re {Current.{0,24}session} {
-		# Some Claude Code versions execute /usage immediately instead of
-		# stopping on the slash-command suggestion.
-	}
-	timeout {
-		puts stderr "timed out opening /usage"
-		exit 2
-	}
-	eof {
-		puts stderr "Claude Code exited while opening /usage"
-		exit 2
-	}
+  "Show plan usage" { after 200; send -- "\r" }
+  -re {Current.{0,24}session} {}
+  timeout { puts stderr "timed out opening /usage"; exit 2 }
+  eof { puts stderr "Claude Code exited while opening /usage"; exit 2 }
 }
-
 expect {
-	-re {Current.{0,24}week} {}
-	timeout {
-		puts stderr "timed out waiting for /usage data"
-		exit 2
-	}
-	eof {
-		puts stderr "Claude Code exited before /usage data was displayed"
-		exit 2
-	}
+  -re {Current.{0,24}week} {}
+  timeout { puts stderr "timed out waiting for /usage data"; exit 2 }
+  eof { puts stderr "Claude Code exited before /usage data was displayed"; exit 2 }
 }
-
-# Read while the panel finishes drawing, rather than pausing for a fixed time.
-# `after` does not read the pty, and `log_file` records only what expect reads,
-# so everything drawn during such a pause never reaches the capture. The panel
-# renders in two passes and the windows Claude scopes to one model arrive in
-# the second, which is why they were missing from every capture while an
-# interactive session showed them. Lengthening the pause did not help - a
-# longer pause is simply a longer stretch of not reading.
-#
-# Stops after the screen has been quiet for a moment, and gives up at the cap
-# so that a panel which never settles still yields the reading it has. If it
-# cannot refresh, Claude Code leaves the last-known values on screen; the
-# parser reports that state in JSON.
-set settle_deadline [expr {[clock seconds] + $settle_cap_seconds}]
-set timeout $settle_quiet_seconds
+set deadline [expr {[clock seconds] + $cap}]
+set timeout $quiet
 expect {
-	-re {.+} {
-		if {[clock seconds] < $settle_deadline} { exp_continue }
-	}
-	timeout {}
-	eof {}
+  -re {.+} { if {[clock seconds] < $deadline} { exp_continue } }
+  timeout {}
+  eof {}
 }
 send -- "\033"
 after 100
@@ -347,665 +61,539 @@ after 100
 catch {close}
 catch {wait}
 log_file
-EXPECT
+'''
 
-then
-	printf 'failed to open Claude usage panel\n' >&2
-else
-	if [[ -n "${CLAUDE_USAGE_CAPTURE_PATH:-}" ]]; then
-		install -m 0600 -- "$capture_file" "$CLAUDE_USAGE_CAPTURE_PATH" \
-			|| printf 'claude usage: could not save the capture to %s\n' \
-				"$CLAUDE_USAGE_CAPTURE_PATH" >&2
-	fi
+ISO_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$"
+)
+HEADING_RE = re.compile(r"Current\s*(session|week)\b[ \t]*", re.I)
+MONTHS = {name.lower(): number for number, name in enumerate(
+    "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), 1
+)}
 
-	# Only worth asking again if the panel changed the answer, which it does
-	# by renewing the token. After `changed` the endpoint would say the same
-	# thing twice, and the second ask is one more request it is refusing.
-	if [[ "$api_outcome" == auth ]] && fetch_from_api "$api_file"; then
-		reading_mode=api
-		reading_file="$api_file"
-	else
-		reading_mode=screen
-		reading_file="$capture_file"
-	fi
-fi
 
-fi
+class UsageError(Exception):
+    pass
 
-if [[ -z "$reading_mode" ]]; then
-	printf 'failed to refresh Claude usage; using cached data when available\n' >&2
-	if [[ -s "$cache_file" ]]; then
-		cat -- "$cache_file"
-		exit 0
-	fi
-	exit 70
-fi
 
-if ! perl -MEncode=decode -MJSON::PP -MPOSIX=strftime,tzset -MScalar::Util=looks_like_number -MTime::Local=timelocal,timegm - "$reading_mode" "$reading_file" "$cache_file" "$samples_file" >"$result_file" <<'PERL'
-use strict;
-use warnings;
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, new_url):
+        return None
 
-# `screen` reads Claude Code's /usage panel, `api` reads the usage endpoint.
-# Only the reading differs: the history, the sample rules and the JSON contract
-# below are shared, because that is where the rules live that a second copy
-# would drift away from.
-my ($mode, $input_file, $cache_file, $samples_file) = @ARGV;
-open my $input, '<:raw', $input_file
-	or die "cannot read $mode input: $!\n";
-local $/;
-my $raw_input = decode('UTF-8', <$input> // '', Encode::FB_DEFAULT);
-close $input;
 
-# Remove OSC, CSI, and remaining short escape sequences emitted by the TUI.
-sub normalize_screen {
-	my ($screen) = @_;
-	$screen =~ s/\e\][^\a]*(?:\a|\e\\)//gs;
-	$screen =~ s/\e\[[0-?]*[ -\/]*[\@-~]//g;
-	$screen =~ s/\e.//gs;
-	$screen =~ tr/\x{00a0}/ /;
-	$screen =~ s/\r/\n/g;
-	$screen =~ s/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]//g;
-	$screen =~ s/[ \t]+/ /g;
-	$screen =~ s/\n+/\n/g;
-	return $screen;
-}
+def env_value(name, default):
+    return os.environ.get(name) or default
 
-# The panel gives each window a heading of its own: `Current session`, then
-# `Current week (all models)`, and on a plan that caps one model separately a
-# further `Current week (<model>)`. Cut the screen at those headings so a
-# window's numbers are read only from its own stretch.
-#
-# A single expression per window cannot do this. `Current week` followed by
-# `.*?% used` scans past the end of its own section, so the moment a second
-# weekly heading appears the all-models window reads the per-model figures -
-# a wrong value written under a name that has been right for months.
-sub scan_sections {
-	my ($screen) = @_;
-	my @sections;
 
-	while ($screen =~ /Current\s*(session|week)\b[ \t]*/gi) {
-		my $kind = lc $1;
-		my $heading_at = $-[0];
-		my $body_at = $+[0];
-		my ($label, $unreadable);
+def positive_env(name, default):
+    value = env_value(name, str(default))
+    if not re.fullmatch(r"[1-9]\d*", value):
+        raise UsageError(f"{name} must be a positive integer")
+    return int(value)
 
-		# Only a bracket that opens on the heading's own line and closes on it
-		# is a label. A bracket that does not read that way is not the same
-		# thing as no bracket at all: `Current week` with nothing after it is
-		# the wording from before the per-model windows existed and means the
-		# total, while a bracket we could not read is a name we failed to
-		# read, and calling that the total would publish one model's
-		# consumption as every model's.
-		if (substr($screen, $body_at, 1) eq '(') {
-			if (substr($screen, $body_at, 60) =~ /^\([ \t]*([^()\n]{1,40}?)[ \t]*\)/) {
-				$label = $1;
-				$body_at += $+[0];
-			}
-			else {
-				$unreadable = 1;
-			}
-		}
 
-		# Resume after the label rather than after the heading, so a bracket
-		# that happens to contain these words cannot open a second section.
-		pos($screen) = $body_at;
+def parse_iso8601(value):
+    if not isinstance(value, str) or not ISO_RE.fullmatch(value):
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
-		push @sections, {
-			kind => $kind,
-			label => $label,
-			unreadable => $unreadable,
-			heading_at => $heading_at,
-			body_at => $body_at,
-		};
-	}
 
-	# A window's numbers sit on the lines directly under its heading. Bounding
-	# the body there as well as at the next heading matters because the panel
-	# prints figures that belong to no window of ours: the credits block at the
-	# foot carries its own `100% 100% used` and `Resets Oct 1`, and a partial
-	# redraw leaves numbers behind with no heading of their own. A heading
-	# drawn before its numbers would otherwise reach them and publish a
-	# complete, plausible, wrong window.
-	my $body_lines = 4;
-	for my $i (0 .. $#sections) {
-		my $body_end = $i < $#sections ? $sections[$i + 1]{heading_at} : length $screen;
-		my $body = substr $screen, $sections[$i]{body_at},
-			$body_end - $sections[$i]{body_at};
-		# The body opens with the newline that ends the heading's own line, so
-		# the first field of the split is empty and does not count as a line.
-		my @lines = split /\n/, $body, -1;
-		@lines = @lines[0 .. $body_lines] if @lines > $body_lines + 1;
-		$sections[$i]{body} = join "\n", @lines;
-	}
+def local_zone_name():
+    if os.environ.get("TZ"):
+        return os.environ["TZ"]
+    try:
+        name = Path("/etc/timezone").read_text().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    try:
+        target = os.readlink("/etc/localtime")
+        if "zoneinfo/" in target:
+            return target.split("zoneinfo/", 1)[1]
+    except OSError:
+        pass
+    return time.tzname[time.localtime().tm_isdst > 0]
 
-	return @sections;
-}
 
-# The gauge prints the figure twice - `31% 31% used` - so the percentage is
-# taken from the one the word follows, not the first on the line.
-#
-# Case-insensitive, as the expression this replaced was. The helper publishes
-# nothing unless both windows parse, so a capitalisation change would not cost
-# the new window - it would stop the helper outright and leave the widget
-# re-reading a cache that never moves again.
-sub reading_from {
-	my ($body) = @_;
-	return undef unless $body =~ /(\d+(?:\.\d+)?)%\s*used/i;
-	my $percent = $1;
-	return undef unless $body =~ /Resets\s*([^\n]+?)\s*\(([^()\n]+)\)/i;
-	return [$percent, $1, $2];
-}
+def local_zone():
+    try:
+        return ZoneInfo(local_zone_name())
+    except (ZoneInfoNotFoundError, ValueError):
+        return dt.datetime.now().astimezone().tzinfo
 
-# `(all models)` is what the panel calls the window that spans every model, and
-# a heading with no bracket at all is the same window under the older wording.
-#
-# Matched exactly. A looser test reads the words wherever they appear, and a
-# model named in a way that contains them - `(Fable, not all models)` - would
-# then be published as the weekly total. Wording that drifts costs the reading
-# instead, which stops the helper visibly rather than writing a wrong number.
-sub is_all_models {
-	my ($label) = @_;
-	return 1 unless defined $label;
-	return $label =~ /^all\s+models$/i ? 1 : 0;
-}
 
-sub read_windows {
-	my ($screen) = @_;
-	my ($session, $week, %model);
+def iso_local(moment):
+    return moment.astimezone(local_zone()).isoformat(timespec="seconds")
 
-	for my $section (scan_sections($screen)) {
-		next if $section->{unreadable};
-		my $reading = reading_from($section->{body})
-			or next;
-		my $window = { label => $section->{label}, reading => $reading };
 
-		# The capture holds every redraw of the panel, and the headings of a
-		# half-drawn one carry no numbers yet, so each window keeps the last
-		# render that was complete rather than the last heading seen.
-		if ($section->{kind} eq 'session') {
-			$session = $window;
-		}
-		elsif (is_all_models($section->{label})) {
-			$week = $window;
-		}
-		else {
-			$model{ $section->{label} } = $window;
-		}
-	}
+def api_windows(payload):
+    limits = payload.get("limits") if isinstance(payload, dict) else None
+    if not isinstance(limits, list):
+        return None
+    found, scoped = {}, []
+    for item in limits:
+        if not isinstance(item, dict):
+            continue
+        percent, reset = number(item.get("percent")), parse_iso8601(item.get("resets_at"))
+        if percent is None or reset is None:
+            continue
+        window = {"used_percent": percent, "reset": reset}
+        kind = item.get("kind")
+        if kind == "session":
+            found["session"] = window
+        elif kind == "weekly_all":
+            found["week"] = window
+        elif kind == "weekly_scoped":
+            try:
+                label = item["scope"]["model"]["display_name"]
+            except (KeyError, TypeError):
+                continue
+            if isinstance(label, str) and label:
+                window["label"] = label
+                scoped.append(window)
+    found["model_labels"] = [item["label"] for item in scoped]
+    found["model"] = scoped[0] if len(scoped) == 1 else None
+    return found if found.get("session") and found.get("week") else None
 
-	# One per-model window is the one to record. Two and the screen does not
-	# say which of them the widget is for, so neither is recorded: writing
-	# either would put one model's consumption under the other's name, and
-	# writing nothing is the lighter failure.
-	my @model_labels = sort keys %model;
-	my $model_week = @model_labels == 1 ? $model{ $model_labels[0] } : undef;
 
-	return {
-		session => $session,
-		week => $week,
-		model_week => $model_week,
-		model_labels => \@model_labels,
-	};
-}
+def normalize_screen(text):
+    text = re.sub(r"\x1b\][^\a]*(?:\a|\x1b\\)", "", text, flags=re.S)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = re.sub(r"\x1b.", "", text, flags=re.S)
+    text = text.replace("\xa0", " ").replace("\r", "\n")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\n+", "\n", text)
 
-sub hour_24 {
-	my ($hour, $ampm) = @_;
-	$hour %= 12;
-	$hour += 12 if lc($ampm) eq 'pm';
-	return $hour;
-}
 
-sub iso_local {
-	my ($epoch) = @_;
-	my $value = strftime('%Y-%m-%dT%H:%M:%S%z', localtime($epoch));
-	$value =~ s/([+-]\d{2})(\d{2})$/$1:$2/;
-	return $value;
-}
+def screen_windows(raw):
+    text = normalize_screen(raw)
+    headings = []
+    position = 0
+    while match := HEADING_RE.search(text, position):
+        at, label, unreadable = match.end(), None, False
+        if text[at:at + 1] == "(":
+            label_match = re.match(r"\([ \t]*([^()\n]{1,40}?)[ \t]*\)", text[at:at + 60])
+            if label_match:
+                label, at = label_match.group(1), at + label_match.end()
+            else:
+                unreadable = True
+        headings.append([match.group(1).lower(), label, unreadable, match.start(), at])
+        position = at
 
-# The endpoint gives an instant, with an offset and fractional seconds. Read as
-# an instant, so none of the guessing the panel's labels need applies here.
-sub parse_iso8601 {
-	my ($value) = @_;
-	return undef unless defined $value;
-	my ($y, $mo, $d, $h, $mi, $sec, $zone) = $value =~ m{
-		^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?
-		(Z|[+-]\d{2}:?\d{2})$
-	}x or return undef;
-	my $epoch = eval { timegm($sec, $mi, $h, $d, $mo - 1, $y) };
-	return undef unless defined $epoch;
-	return $epoch if $zone eq 'Z';
-	my ($sign, $zh, $zm) = $zone =~ /^([+-])(\d{2}):?(\d{2})$/ or return undef;
-	my $offset = ($zh * 3600 + $zm * 60) * ($sign eq '-' ? -1 : 1);
-	return $epoch - $offset;
-}
+    found, models = {}, {}
+    for index, (kind, label, unreadable, _, at) in enumerate(headings):
+        end = headings[index + 1][3] if index + 1 < len(headings) else len(text)
+        body = "\n".join(text[at:end].split("\n")[:5])
+        percent = re.search(r"(\d+(?:\.\d+)?)%\s*used", body, re.I)
+        reset = re.search(r"Resets\s*([^\n]+?)\s*\(([^()\n]+)\)", body, re.I)
+        if unreadable or not percent or not reset:
+            continue
+        reading = [number(percent.group(1)), reset.group(1), reset.group(2)]
+        if kind == "session":
+            found["session"] = {"reading": reading}
+        elif label is None or re.fullmatch(r"all\s+models", label, re.I):
+            found["week"] = {"reading": reading}
+        else:
+            models[label] = {"label": label, "reading": reading}
+    labels = sorted(models)
+    found["model_labels"] = labels
+    found["model"] = models[labels[0]] if len(labels) == 1 else None
+    return found, text
 
-# The name the panel prints beside a reset. Derived here because the endpoint
-# reports the instant only, and the widget still shows this when it has no
-# instant to count down to.
-sub local_timezone {
-	return $ENV{TZ} if defined $ENV{TZ} && length $ENV{TZ};
-	if (open my $zone, '<', '/etc/timezone') {
-		my $name = <$zone>;
-		close $zone;
-		if (defined $name) {
-			$name =~ s/\s+$//;
-			return $name if length $name;
-		}
-	}
-	my $link = readlink '/etc/localtime';
-	return $1 if defined $link && $link =~ m{zoneinfo/(.+)$};
 
-	# The abbreviation, not `UTC`. The instants beside it come from
-	# `localtime`, so `UTC` would be a name the widget accepts and renders in,
-	# showing a 09:00 reset as 00:00. An abbreviation is either accepted and
-	# right, or refused - and a refused one leaves the widget on the viewer's
-	# own zone, which is the zone these instants are already in.
-	return strftime('%Z', localtime(time));
-}
+def wall_time(zone, year, month, day, hour, minute):
+    try:
+        value = dt.datetime(year, month, day, hour, minute, tzinfo=zone)
+    except ValueError:
+        return None
+    # ZoneInfo chooses the earlier side of a nonexistent wall time. Perl's
+    # timelocal normalizes that time forward, so preserve that observable rule.
+    roundtrip = value.astimezone(dt.timezone.utc).astimezone(zone)
+    return roundtrip
 
-# `resets_at_display` is what the widgets fall back to when there is no
-# `resets_at` to count down to, and this path always has one. So it carries the
-# instant rather than a rendering of it: spelling it the way the panel spells
-# it produced a string no viewer would ever see.
-sub api_usage_object {
-	my ($window) = @_;
-	my $epoch = $window->{resets_at_epoch};
-	my $moment = iso_local($epoch);
-	return {
-		used_percent => 0 + $window->{used_percent},
-		resets_at => $moment,
-		resets_at_display => $moment,
-		timezone => local_timezone(),
-	};
-}
 
-# timelocal croaks on a date that does not exist - Feb 29 of a non-leap year,
-# reachable because the neighbouring years are candidates too - and that would
-# take the whole reading down, so an impossible date becomes a dropped
-# candidate instead. A time that a DST change skips is not this case: timelocal
-# returns the shifted instant for those, and the candidate is kept.
-sub local_epoch {
-	my ($minute, $hour, $mday, $month, $year) = @_;
-	my $epoch = eval { timelocal(0, $minute, $hour, $mday, $month, $year) };
-	return $epoch;
-}
+def normalize_reset(display, timezone, kind, now=None):
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    now = now.astimezone(zone) if now else dt.datetime.now(zone)
+    candidates = []
+    clock = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?(am|pm)", display, re.I)
+    dated = re.fullmatch(
+        r"([A-Za-z]{3})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)", display, re.I
+    )
+    if kind == "session" and clock:
+        hour = int(clock.group(1)) % 12 + (12 if clock.group(3).lower() == "pm" else 0)
+        minute = int(clock.group(2) or 0)
+        for offset in (-1, 0, 1):
+            day = now.date() + dt.timedelta(days=offset)
+            candidates.append(wall_time(zone, day.year, day.month, day.day, hour, minute))
+    elif dated and dated.group(1).lower() in MONTHS:
+        hour = int(dated.group(3)) % 12 + (12 if dated.group(5).lower() == "pm" else 0)
+        minute, month, day = int(dated.group(4) or 0), MONTHS[dated.group(1).lower()], int(dated.group(2))
+        for year in (now.year - 1, now.year, now.year + 1):
+            candidates.append(wall_time(zone, year, month, day, hour, minute))
+    limit = dt.timedelta(hours=5, minutes=10) if kind == "session" else dt.timedelta(days=7, minutes=10)
+    distance = lambda item: abs(item.timestamp() - now.timestamp())
+    candidates = [item for item in candidates if item and distance(item) <= limit.total_seconds()]
+    return min(candidates, key=distance).isoformat(timespec="seconds") if candidates else None
 
-# Each window is a fixed length, so a reset cannot be further from now than
-# that in either direction: ahead of it the window would not have started, and
-# behind it the screen would be more than a whole window stale. Displayed to
-# the minute, a reset can read a little beyond its own window, hence the grace.
-#
-# These lengths decide whether a reset is published at all, so a provider-side
-# change to a window would stop `resets_at` and history collection with only a
-# stderr line per run to say so. The widgets carry the same two lengths as
-# SESSION_WINDOW_SECONDS/WEEK_WINDOW_SECONDS in
-# widgets/main/src/components/claudeUsage/ClaudeUsage.tsx and
-# widgets/ai-usage-details/src/App.tsx: change all three together.
-my %window_seconds = (
-	session => 5 * 60 * 60,
-	week => 7 * 24 * 60 * 60,
-);
-my $window_grace_seconds = 600;
 
-# Claude reports the session reset as a bare time of day and the week reset as
-# a month and day: neither carries the date or year the reading belongs to, so
-# the occurrence has to be inferred. Take the one nearest to now, of those the
-# window length allows. A screen Claude has just refreshed always shows a reset
-# that is still ahead, and the alternatives are a day or a year away, so this
-# picks the same instant the arithmetic used to. A `last_known` screen is what
-# makes the rest matter: its reset may already have passed, and rolling that
-# forward would publish a reset a whole day (session) or year (week) out. Once
-# such a screen is more than a window stale, no candidate is credible - the
-# nearest would be the next window's, which has not started - so nothing is
-# published and the widget falls back to Claude's own label without a countdown.
-sub nearest_occurrence {
-	my ($now, $limit, @candidates) = @_;
-	my $nearest;
-	for my $candidate (@candidates) {
-		next unless defined $candidate;
-		next if defined $limit && abs($candidate - $now) > $limit;
-		$nearest = $candidate
-			if !defined $nearest || abs($candidate - $now) < abs($nearest - $now);
-	}
-	return $nearest;
-}
+def api_usage(window):
+    moment = iso_local(window["reset"])
+    return {"used_percent": window["used_percent"], "resets_at": moment,
+            "resets_at_display": moment, "timezone": local_zone_name()}
 
-sub normalize_reset {
-	my ($display, $timezone, $kind) = @_;
-	local $ENV{TZ} = $timezone;
-	tzset();
-	my $now = time;
-	my $epoch;
-	# The week label is also what a session reset falls back to when it carries
-	# a date, so the limit follows the kind rather than the pattern that matched.
-	my $limit = defined $window_seconds{$kind}
-		? $window_seconds{$kind} + $window_grace_seconds
-		: undef;
 
-	if ($kind eq 'session' && $display =~ /^(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
-		my $minute = defined $2 ? $2 : 0;
-		my $hour = hour_24($1, $3);
-		# Each day contributes its own calendar date, and the wall-clock time is
-		# rebuilt from those parts, so a DST change shifts neither. The walk to
-		# the neighbouring days starts from local noon: the day before a
-		# spring-forward is 23 hours long, so stepping 86400 seconds from a time
-		# late in it lands two dates later and skips the day the reset is on.
-		# Noon cannot cross a date boundary for the hour a transition moves.
-		my @today = localtime($now);
-		my $noon = local_epoch(0, 12, $today[3], $today[4], $today[5]);
-		$noon = $now unless defined $noon;
-		my @candidates = map {
-			my @day = localtime($noon + $_ * 86_400);
-			local_epoch($minute, $hour, $day[3], $day[4], $day[5]);
-		} (-1, 0, 1);
-		$epoch = nearest_occurrence($now, $limit, @candidates);
-	}
-	elsif ($display =~ /^([A-Za-z]{3})\s*(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)$/i) {
-		my %month;
-		@month{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)} = 0 .. 11;
-		# The session pattern has always been case-insensitive. Matching that
-		# here costs a normalized lookup: an unknown month name must not reach
-		# timelocal as undef.
-		my $month = $month{ucfirst lc $1};
-		my $minute = defined $4 ? $4 : 0;
-		if (defined $month) {
-			my $hour = hour_24($3, $5);
-			my $year = (localtime($now))[5];
-			$epoch = nearest_occurrence($now, $limit,
-				map { local_epoch($minute, $hour, $2, $month, $_) }
-					($year - 1, $year, $year + 1));
-		}
-	}
+def screen_usage(window, kind, now=None):
+    percent, display, timezone = window["reading"]
+    display, timezone = display.strip(), timezone.strip()
+    display = re.sub(r"^([A-Z][a-z]{2})(\d{1,2}),", r"\1 \2, ", display)
+    result = {"used_percent": percent, "resets_at_display": display, "timezone": timezone}
+    reset = normalize_reset(display, timezone, kind, now)
+    if reset:
+        result["resets_at"] = reset
+    return result
 
-	return defined $epoch ? iso_local($epoch) : undef;
-}
 
-sub usage_object {
-	my ($match, $kind) = @_;
-	my ($percent, $reset_display, $timezone) = @$match;
-	$reset_display =~ s/^\s+|\s+$//g;
-	$timezone =~ s/^\s+|\s+$//g;
-	$reset_display =~ s/^([A-Z][a-z]{2})(\d{1,2}),/$1 $2, /;
-	my $normalized = normalize_reset($reset_display, $timezone, $kind);
-	my %result = (
-		used_percent => 0 + $percent,
-		resets_at_display => $reset_display,
-		timezone => $timezone,
-	);
-	$result{resets_at} = $normalized if defined $normalized;
-	return \%result;
-}
+def fetch_api(url, timeout, credentials):
+    try:
+        token = json.loads(credentials.read_text())["claudeAiOauth"]["accessToken"]
+        if not isinstance(token, str) or not token:
+            raise ValueError
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        print("claude usage: no usable token in the credentials file", file=sys.stderr)
+        return "auth", None, None
+    request = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "claude-usage-json/1",
+    })
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        print(f"claude usage: usage endpoint returned HTTP {error.code}", file=sys.stderr)
+        return ("auth" if error.code in (401, 403) else
+                "wait" if error.code == 429 or error.code >= 500 else "changed"), None, None
+    except (OSError, http.client.HTTPException):
+        return "wait", None, None
+    try:
+        def reject_constant(value):
+            raise ValueError(value)
 
-sub archive_sample {
-	my ($path, $sample) = @_;
-	return unless defined $path && length $path;
+        payload = json.loads(raw, parse_constant=reject_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        print("claude usage: usage endpoint did not return JSON", file=sys.stderr)
+        return "changed", None, None
+    windows = api_windows(payload)
+    if not windows:
+        print("claude usage: usage endpoint answered without the windows", file=sys.stderr)
+        return "changed", None, raw
+    return "ok", windows, raw
 
-	# Give it its mode before anything writes, so the file is never briefly
-	# readable at the process umask. The Codex helper does the same.
-	unless (-e $path) {
-		open my $created, '>>:raw', $path or return;
-		close $created;
-		chmod 0600, $path;
-	}
 
-	# A failed archive write must not cost the caller its usage reading.
-	open my $log, '>>:raw', $path or return;
-	print {$log} JSON::PP->new->canonical->encode($sample), "\n";
-	close $log;
-	return;
-}
+def atomic_write(path, data, mode):
+    path = Path(path)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as temporary:
+            temporary.write(data)
+        os.replace(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
 
-# The endpoint names each window rather than printing a heading for it, so
-# there is nothing to classify: `kind` says which window, and `scope.model`
-# names the model a scoped one belongs to. The reset arrives as an instant, so
-# none of the guessing about which occurrence of `5:50am` is meant applies.
-sub read_api_windows {
-	my ($payload) = @_;
-	# No guard on the shape: the payload only reaches here after the precheck
-	# decoded these same bytes and found the limits array. A payload that got
-	# past both and still has no windows falls out as `session`/`week`
-	# undefined, which the caller already reports.
-	my $decoded = eval { JSON::PP->new->decode($payload) };
-	my $limits = ref $decoded eq 'HASH' ? $decoded->{limits} : undef;
-	$limits = [] unless ref $limits eq 'ARRAY';
 
-	my %found;
-	my @scoped;
-	for my $limit (@$limits) {
-		next unless ref $limit eq 'HASH';
-		next unless looks_like_number($limit->{percent});
-		next unless defined $limit->{resets_at};
-		my $window = {
-			used_percent => 0 + $limit->{percent},
-			resets_at_epoch => parse_iso8601($limit->{resets_at}),
-		};
-		next unless defined $window->{resets_at_epoch};
+def account_labels(path=None):
+    try:
+        account_file = path or Path.home() / ".claude.json"
+        data = json.loads(account_file.read_bytes())
+        account = data["oauthAccount"]
+        labels = {
+            "organization_id": account["organizationUuid"],
+            "user_account_uuid": account["accountUuid"],
+            "user_email": account["emailAddress"],
+            "user_id": data["userID"],
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    return labels if all(isinstance(value, str) and value for value in labels.values()) else {}
 
-		if (($limit->{kind} // '') eq 'session') {
-			$found{session} = $window;
-		}
-		elsif (($limit->{kind} // '') eq 'weekly_all') {
-			$found{week} = $window;
-		}
-		elsif (($limit->{kind} // '') eq 'weekly_scoped') {
-			my $label = eval { $limit->{scope}{model}{display_name} };
-			next unless defined $label && length $label;
-			$window->{label} = $label;
-			push @scoped, $window;
-		}
-	}
 
-	# The same rule the screen reading uses: two scoped windows and nothing
-	# says which the widget is for, so neither is recorded.
-	$found{model_labels} = [map { $_->{label} } @scoped];
-	$found{week_model} = @scoped == 1 ? $scoped[0] : undef;
-	return \%found;
-}
+def prometheus_text(output, identity):
+    def labels(**values):
+        escaped = []
+        for key, value in values.items():
+            value = str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+            escaped.append(f'{key}="{value}"')
+        return "{" + ",".join(escaped) + "}"
 
-my ($text, $windows, $session, $week, $model_week, $api);
-if ($mode eq 'screen') {
-	$text = normalize_screen($raw_input);
-	$windows = read_windows($text);
-	$session = $windows->{session};
-	$week = $windows->{week};
-	$model_week = $windows->{model_week};
-}
-else {
-	$text = '';
-	$api = read_api_windows($raw_input);
-	$windows = { model_labels => $api->{model_labels} };
-	$session = $api->{session};
-	$week = $api->{week};
-	$model_week = $api->{week_model};
-}
+    identity_labels = labels(**identity) if identity else ""
+    rows = [
+        "# HELP claude_usage_used_percent Percentage of a Claude usage window consumed.",
+        "# TYPE claude_usage_used_percent gauge",
+        "# HELP claude_usage_reset_timestamp_seconds Unix timestamp when a Claude usage window resets.",
+        "# TYPE claude_usage_reset_timestamp_seconds gauge",
+        "# HELP claude_usage_generated_timestamp_seconds Unix timestamp of the usage reading.",
+        "# TYPE claude_usage_generated_timestamp_seconds gauge",
+        f"claude_usage_generated_timestamp_seconds{identity_labels} {parse_iso8601(output['generated_at']).timestamp():.0f}",
+        "# HELP claude_usage_refresh_last_known Whether Claude reported a last-known rather than live reading.",
+        "# TYPE claude_usage_refresh_last_known gauge",
+        f"claude_usage_refresh_last_known{identity_labels} {int(output['refresh_status'] == 'last_known')}",
+    ]
+    for key, window, extra in (
+        ("current_session", "session", {}),
+        ("current_week", "weekly_all", {}),
+        ("current_week_model", "weekly_scoped", {"model": output.get("current_week_model", {}).get("label")}),
+    ):
+        usage = output.get(key)
+        if not usage:
+            continue
+        metric_labels = labels(window=window, **identity, **extra)
+        rows.append(f"claude_usage_used_percent{metric_labels} {usage['used_percent']:.15g}")
+        reset = parse_iso8601(usage.get("resets_at"))
+        if reset:
+            rows.append(f"claude_usage_reset_timestamp_seconds{metric_labels} {reset.timestamp():.0f}")
+    return ("\n".join(rows) + "\n").encode()
 
-if (!$session || !$week) {
-	# Name what was found. A weekly heading whose label went unrecognised is
-	# read as a per-model window, and then the message alone would send the
-	# reader looking for a window that was on the screen all along.
-	# Names the source it actually read. Saying `/usage` when the reading came
-	# from the endpoint sends whoever finds this in the cron log to a screen
-	# that was never involved.
-	die sprintf
-		"could not read the session and all-models weekly windows from %s"
-			. " (session %s, all-models week %s, per-model weekly labels: %s)\n",
-		$mode eq 'screen' ? 'the Claude /usage panel' : 'the usage endpoint',
-		$session ? 'found' : 'missing',
-		$week ? 'found' : 'missing',
-		@{ $windows->{model_labels} }
-			? join(', ', @{ $windows->{model_labels} })
-			: 'none';
-}
 
-# Two of them and no way to tell which the widget should draw. Recording either
-# would put one model's consumption under the other's name for as long as the
-# screen stays that way, so the window is left out and the other two go on.
-if (!$model_week && @{ $windows->{model_labels} } > 1) {
-	printf {*STDERR} "claude usage: %d per-model weekly windows on screen (%s); none recorded\n",
-		scalar @{ $windows->{model_labels} },
-		join ', ', @{ $windows->{model_labels} };
-}
+def capture_screen(path, settings):
+    expect = shutil.which("expect")
+    claude = os.environ.get("CLAUDE_USAGE_CLAUDE_BIN")
+    if not claude:
+        home_copy = Path.home() / "bin/claude"
+        claude = str(home_copy) if os.access(home_copy, os.X_OK) else shutil.which("claude")
+    if not expect or not claude or not os.access(claude, os.X_OK):
+        print("required executable not found: expect or claude", file=sys.stderr)
+        return False
+    workdir = Path(env_value("CLAUDE_USAGE_WORK_DIR", settings["cache_dir"] / "workdir"))
+    try:
+        workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        workdir.chmod(0o700)
+    except OSError as error:
+        print(f"cannot prepare Claude usage working directory: {error}", file=sys.stderr)
+        return False
+    env = os.environ | {"CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1"}
+    args = [expect, "-f", "-", str(path), str(settings["timeout"]), claude,
+            settings["session_id"], str(settings["quiet"]), str(settings["cap"])]
+    try:
+        completed = subprocess.run(args, input=EXPECT, text=True, cwd=workdir, env=env,
+                                   timeout=settings["timeout"] + settings["cap"] + 10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
-# Only the panel reports a stale reading of its own; the endpoint answers with
-# what it has or fails outright.
-my $compact_text = $text;
-$compact_text =~ s/\s+//g;
-my ($age) = $compact_text =~ /Showinglast-knownusageasof(\d+[smhd])ago/i;
-my $refresh_status = defined $age ? 'last_known' : 'not_reported';
-my $generated_epoch = time;
-my $generated_at = iso_local($generated_epoch);
-# A per-model week is a week: same length, so the same rule decides which
-# occurrence of a screen-read reset label is meant.
-my ($session_usage, $week_usage, $model_week_usage);
-if ($mode eq 'screen') {
-	$session_usage = usage_object($session->{reading}, 'session');
-	$week_usage = usage_object($week->{reading}, 'week');
-	if ($model_week) {
-		$model_week_usage = usage_object($model_week->{reading}, 'week');
-		$model_week_usage->{label} = $model_week->{label};
-	}
-}
-else {
-	$session_usage = api_usage_object($session);
-	$week_usage = api_usage_object($week);
-	if ($model_week) {
-		$model_week_usage = api_usage_object($model_week);
-		$model_week_usage->{label} = $model_week->{label};
-	}
-}
 
-my @history;
-if (-s $cache_file) {
-	my $previous = eval {
-		open my $cache, '<:raw', $cache_file
-			or die "cannot read previous cache: $!\n";
-		local $/;
-		my $decoded = JSON::PP->new->decode(<$cache> // '{}');
-		close $cache;
-		$decoded;
-	};
+def number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
-	if (ref($previous) eq 'HASH' && ref($previous->{history}) eq 'ARRAY') {
-		my $cutoff = $generated_epoch - 14 * 24 * 60 * 60;
-		# The same rule the write below applies: a reading that lost a reset
-		# time was caught mid-draw and its percentages cannot be trusted. Read
-		# on every write, so this also purges samples a helper without that
-		# rule left behind - they would otherwise poison the graphs for 14 days.
-		#
-		# Deliberately coarser than the widget, which drops a sample only from
-		# the period whose reset it lacks. What is in doubt here is the reading,
-		# not its placement: the one observed reported 0% for a week that was at
-		# 8% either side, and the other half of that same screen is no more
-		# trustworthy. The widget's per-period rule is for a cache this version
-		# has not rewritten yet, not a second opinion on which samples are good.
-		@history = grep {
-			ref($_) eq 'HASH'
-				&& looks_like_number($_->{recorded_at})
-				&& $_->{recorded_at} >= $cutoff
-				&& looks_like_number($_->{session_used_percent})
-				&& looks_like_number($_->{week_used_percent})
-				&& defined $_->{session_resets_at}
-				&& defined $_->{week_resets_at}
-		} @{$previous->{history}};
 
-		# The per-model window is carried as a complete triple or not at all. A
-		# percentage with no reset cannot be placed in a window, and one with no
-		# label cannot be told apart from the next model's, so a sample that has
-		# part of the triple loses that part and keeps the two windows that were
-		# always there. Applied on every write, so a cache an earlier helper left
-		# half-written is cleaned rather than drawn for the next 14 days.
-		for my $sample (@history) {
-			next if looks_like_number($sample->{week_model_used_percent})
-				&& defined $sample->{week_model_resets_at}
-				&& defined $sample->{week_model_label};
-			delete @{$sample}{
-				qw(week_model_used_percent week_model_resets_at week_model_label)
-			};
-		}
-	}
-}
+def build_output(mode, windows, text, previous, archive, now=None):
+    now = now or dt.datetime.now().astimezone()
+    epoch = int(now.timestamp())
+    if mode == "api":
+        session, week = api_usage(windows["session"]), api_usage(windows["week"])
+        model = api_usage(windows["model"]) | {"label": windows["model"]["label"]} if windows["model"] else None
+        refresh, age = "not_reported", None
+    else:
+        session = screen_usage(windows["session"], "session", now)
+        week = screen_usage(windows["week"], "week", now)
+        model = screen_usage(windows["model"], "week", now) | {"label": windows["model"]["label"]} if windows["model"] else None
+        compact = re.sub(r"\s+", "", text)
+        match = re.search(r"Showinglast-knownusageasof(\d+[smhd])ago", compact, re.I)
+        refresh, age = ("last_known", match.group(1)) if match else ("not_reported", None)
 
-# A read that produced a percentage but no reset time caught the screen
-# half-drawn, and its percentage is not to be trusted: the one observed
-# reported 0% for a week that was at 8% either side of it. The current values
-# are still published - they self-correct on the next run - but a sample like
-# that must not enter the history the graphs are derived from.
-my $reset_times_parsed = defined $session_usage->{resets_at}
-	&& defined $week_usage->{resets_at};
+    cutoff, history = epoch - 14 * 86400, []
+    source_history = previous.get("history", []) if isinstance(previous, dict) else []
+    for sample in source_history if isinstance(source_history, list) else []:
+        recorded = number(sample.get("recorded_at")) if isinstance(sample, dict) else None
+        if (recorded is not None and recorded >= cutoff
+                and number(sample.get("session_used_percent")) is not None
+                and number(sample.get("week_used_percent")) is not None
+                and sample.get("session_resets_at") and sample.get("week_resets_at")):
+            sample = sample.copy()
+            sample["recorded_at"] = recorded
+            if not (number(sample.get("week_model_used_percent")) is not None
+                    and sample.get("week_model_resets_at") and sample.get("week_model_label")):
+                for key in ("week_model_used_percent", "week_model_resets_at", "week_model_label"):
+                    sample.pop(key, None)
+            history.append(sample)
 
-if ($refresh_status ne 'last_known'
-	&& $model_week_usage
-	&& !defined $model_week_usage->{resets_at}) {
-	printf {*STDERR}
-		"claude usage: per-model weekly reset time did not parse; that window not recorded\n";
-}
+    if refresh != "last_known" and session.get("resets_at") and week.get("resets_at"):
+        sample = {"recorded_at": epoch, "session_used_percent": session["used_percent"],
+                  "week_used_percent": week["used_percent"], "session_resets_at": session["resets_at"],
+                  "week_resets_at": week["resets_at"]}
+        if model and model.get("resets_at"):
+            sample |= {"week_model_used_percent": model["used_percent"],
+                       "week_model_resets_at": model["resets_at"], "week_model_label": model["label"]}
+        if history and epoch - history[-1]["recorded_at"] < 60:
+            history[-1] = sample
+        else:
+            history.append(sample)
+        try:
+            archive.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a") as stream:
+                stream.write(json.dumps(sample, separators=(",", ":"), sort_keys=True) + "\n")
+        except OSError:
+            pass
+    elif refresh != "last_known":
+        print("claude usage: reset time did not parse; sample not recorded", file=sys.stderr)
 
-if ($refresh_status ne 'last_known' && !$reset_times_parsed) {
-	# Left silent this would stop history collection for good if the wording or
-	# date format ever changes: `generated_at` keeps moving, so the freshness
-	# indicator stays green while the graphs empty out as the window rolls on.
-	# cron pipes stderr to logger.
-	printf {*STDERR} "claude usage: reset time did not parse; sample not recorded\n";
-}
+    output = {"source": "claude usage api" if mode == "api" else "claude /usage",
+              "generated_at": now.isoformat(timespec="seconds"), "refresh_status": refresh,
+              "current_session": session, "current_week": week, "history": history}
+    if model:
+        output["current_week_model"] = model
+    if age:
+        output["last_known_age"] = age
+    return output
 
-if ($refresh_status ne 'last_known' && $reset_times_parsed) {
-	my %sample = (
-		recorded_at => 0 + $generated_epoch,
-		session_used_percent => 0 + $session_usage->{used_percent},
-		week_used_percent => 0 + $week_usage->{used_percent},
-	);
-	$sample{session_resets_at} = $session_usage->{resets_at}
-		if defined $session_usage->{resets_at};
-	$sample{week_resets_at} = $week_usage->{resets_at}
-		if defined $week_usage->{resets_at};
 
-	# The per-model window rides along; it does not gate the sample the way the
-	# other two do. Its heading and its reset wording are the newest part of the
-	# screen and the likeliest to change, and letting a change there stop the
-	# sample would empty the graphs for the two windows that still parsed.
-	if ($model_week_usage && defined $model_week_usage->{resets_at}) {
-		$sample{week_model_used_percent} = 0 + $model_week_usage->{used_percent};
-		$sample{week_model_resets_at} = $model_week_usage->{resets_at};
-		$sample{week_model_label} = $model_week_usage->{label};
-	}
+def print_cache(cache, missing_code):
+    try:
+        if cache.stat().st_size:
+            sys.stdout.buffer.write(cache.read_bytes())
+            return 0
+    except OSError:
+        pass
+    print("Claude usage cache is not available yet", file=sys.stderr)
+    return missing_code
 
-	if (@history && $generated_epoch - $history[-1]->{recorded_at} < 60) {
-		$history[-1] = \%sample;
-	}
-	else {
-		push @history, \%sample;
-	}
 
-	# Archived even when it replaced the previous cache entry: dropping it
-	# would lose the newer reading for good. Readers dedupe on recorded_at.
-	archive_sample($samples_file, \%sample);
-}
+def settings():
+    cache_dir = Path(env_value("CLAUDE_USAGE_CACHE_DIR", Path.home() / ".cache/claude-usage-json"))
+    source = env_value("CLAUDE_USAGE_SOURCE", "auto")
+    if source not in ("auto", "screen"):
+        raise UsageError("CLAUDE_USAGE_SOURCE must be auto or screen")
+    session_id = env_value("CLAUDE_USAGE_SESSION_ID", "ca1de000-0000-4000-8000-000000000001")
+    try:
+        parsed_session_id = uuid.UUID(session_id)
+    except (ValueError, AttributeError):
+        raise UsageError("CLAUDE_USAGE_SESSION_ID must be a valid UUID") from None
+    if str(parsed_session_id) != session_id.lower():
+        raise UsageError("CLAUDE_USAGE_SESSION_ID must be a valid UUID")
+    return {"cache_dir": cache_dir, "source": source, "session_id": session_id,
+            "timeout": positive_env("CLAUDE_USAGE_TIMEOUT", 45),
+            "api_timeout": positive_env("CLAUDE_USAGE_API_TIMEOUT", 15),
+            "ttl": positive_env("CLAUDE_USAGE_CACHE_TTL", 300),
+            "quiet": positive_env("CLAUDE_USAGE_SETTLE_QUIET", 4),
+            "cap": positive_env("CLAUDE_USAGE_SETTLE_CAP", 25),
+            "api_url": env_value("CLAUDE_USAGE_API_URL", "https://api.anthropic.com/api/oauth/usage")}
 
-my %output = (
-	source => $mode eq 'screen' ? 'claude /usage' : 'claude usage api',
-	generated_at => $generated_at,
-	refresh_status => $refresh_status,
-	current_session => $session_usage,
-	current_week => $week_usage,
-	history => \@history,
-);
-$output{current_week_model} = $model_week_usage if $model_week_usage;
-$output{last_known_age} = $age if defined $age;
 
-# Not pretty-printed: the widget re-reads this file every 60s, and indentation
-# was a third of its size.
-print JSON::PP->new->canonical->encode(\%output), "\n";
-PERL
+def main(argv):
+    if len(argv) > 1 or (argv and argv[0] not in ("--force", "--cached-only")):
+        print(f"usage: {sys.argv[0]} [--force|--cached-only]", file=sys.stderr)
+        return 64
+    cache_dir = Path(env_value("CLAUDE_USAGE_CACHE_DIR", Path.home() / ".cache/claude-usage-json"))
+    cache = cache_dir / "usage.json"
+    if argv == ["--cached-only"]:
+        return print_cache(cache, 66)
+    try:
+        config = settings()
+    except UsageError as error:
+        print(error, file=sys.stderr)
+        return 64
+    force = argv == ["--force"]
+    try:
+        cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        cache_dir.chmod(0o700)
+        lock = open(cache_dir / "update.lock", "a+")
+        os.chmod(lock.name, 0o600)
+    except OSError as error:
+        print(f"cannot prepare Claude usage cache: {error}", file=sys.stderr)
+        return 73
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not force:
+            try:
+                if cache.stat().st_size and time.time() - cache.stat().st_mtime < config["ttl"]:
+                    return print_cache(cache, 66)
+            except OSError:
+                pass
 
-then
-	printf 'failed to parse Claude usage; using cached data when available\n' >&2
-	if [[ -s "$cache_file" ]]; then
-		cat -- "$cache_file"
-		exit 0
-	fi
-	exit 65
-fi
+        mode = windows = text = None
+        outcome = "changed"
+        credentials = Path.home() / ".claude/.credentials.json"
+        if config["source"] != "screen":
+            outcome, windows, api_response = fetch_api(config["api_url"], config["api_timeout"], credentials)
+            if api_response is not None:
+                try:
+                    atomic_write(cache_dir / "api-response.json", api_response, 0o600)
+                except OSError as error:
+                    print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
+            if windows:
+                mode = "api"
+        if config["source"] == "screen" or (not mode and outcome != "wait"):
+            fd, capture_name = tempfile.mkstemp(prefix="claude-usage-")
+            os.close(fd)
+            capture = Path(capture_name)
+            try:
+                if capture_screen(capture, config):
+                    debug = os.environ.get("CLAUDE_USAGE_CAPTURE_PATH")
+                    if debug:
+                        try:
+                            atomic_write(debug, capture.read_bytes(), 0o600)
+                        except OSError as error:
+                            print(f"claude usage: cannot save screen capture: {error}", file=sys.stderr)
+                    if outcome == "auth":
+                        _, retry_windows, api_response = fetch_api(
+                            config["api_url"], config["api_timeout"], credentials
+                        )
+                        if api_response is not None:
+                            try:
+                                atomic_write(cache_dir / "api-response.json", api_response, 0o600)
+                            except OSError as error:
+                                print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
+                        if retry_windows:
+                            mode, windows = "api", retry_windows
+                    if not mode:
+                        text = capture.read_text(encoding="utf-8", errors="replace")
+                        windows, text = screen_windows(text)
+                        if windows.get("session") and windows.get("week"):
+                            mode = "screen"
+            finally:
+                capture.unlink(missing_ok=True)
+        if not mode:
+            print("failed to refresh Claude usage; using cached data when available", file=sys.stderr)
+            return print_cache(cache, 70)
+        if len(windows["model_labels"]) > 1:
+            print(f"claude usage: {len(windows['model_labels'])} per-model weekly windows; none recorded", file=sys.stderr)
+        try:
+            previous = json.loads(cache.read_bytes()) if cache.exists() else {}
+        except (OSError, ValueError):
+            previous = {}
+        output = build_output(mode, windows, text or "", previous, cache_dir / "samples.ndjson")
+        data = (json.dumps(output, separators=(",", ":"), sort_keys=True) + "\n").encode()
+        try:
+            atomic_write(cache, data, 0o600)
+        except OSError as error:
+            print(f"cannot write Claude usage cache: {error}", file=sys.stderr)
+            return 73
+        textfile = os.environ.get("CLAUDE_USAGE_TEXTFILE_PATH")
+        if textfile:
+            try:
+                atomic_write(textfile, prometheus_text(output, account_labels()), 0o644)
+            except OSError as error:
+                print(f"claude usage: cannot write textfile collector output: {error}", file=sys.stderr)
+        sys.stdout.buffer.write(data)
+        return 0
 
-chmod 600 -- "$result_file"
-mv -f -- "$result_file" "$cache_file"
-cat -- "$cache_file"
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

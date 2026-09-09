@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+
+import datetime as dt
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+from zoneinfo import ZoneInfo
+
+
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE / "claude-usage-json"
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("claude_usage_json", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+usage = importlib.util.module_from_spec(spec)
+loader.exec_module(usage)
+
+
+def limit(kind, percent, reset="2026-09-14T00:00:00+00:00", model=None):
+    item = {"kind": kind, "percent": percent, "resets_at": reset}
+    if model is not None:
+        item["scope"] = {"model": {"display_name": model}}
+    return item
+
+
+def reading(session=7, week=44, models=()):
+    return {"limits": [limit("session", session), limit("weekly_all", week)] + [
+        limit("weekly_scoped", percent, model=model) for model, percent in models
+    ]}
+
+
+class ApiTests(unittest.TestCase):
+    def test_account_labels_require_the_complete_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "claude.json"
+            path.write_text(json.dumps({
+                "oauthAccount": {
+                    "organizationUuid": "organization",
+                    "accountUuid": "account",
+                    "emailAddress": "user@example.test",
+                },
+                "userID": "user",
+            }))
+            self.assertEqual(usage.account_labels(path), {
+                "organization_id": "organization",
+                "user_account_uuid": "account",
+                "user_email": "user@example.test",
+                "user_id": "user",
+            })
+            path.write_text(json.dumps({"oauthAccount": {}, "userID": "user"}))
+            self.assertEqual(usage.account_labels(path), {})
+            path.write_bytes(b'{"userID": "\xff"}')
+            self.assertEqual(usage.account_labels(path), {})
+
+    def test_redirects_are_not_followed_with_the_oauth_header(self):
+        handler = usage.NoRedirect()
+        request = usage.urllib.request.Request(
+            "https://api.anthropic.com/api/oauth/usage",
+            headers={"Authorization": "Bearer secret"},
+        )
+        self.assertIsNone(handler.redirect_request(
+            request, None, 302, "Found", {}, "https://example.test/collect"
+        ))
+
+    def test_incomplete_response_is_a_wait_failure(self):
+        credentials = mock.Mock()
+        credentials.read_text.return_value = json.dumps(
+            {"claudeAiOauth": {"accessToken": "secret"}}
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"{")
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(usage.urllib.request, "build_opener", return_value=opener):
+            self.assertEqual(usage.fetch_api("https://example.test", 1, credentials),
+                             ("wait", None, None))
+
+    def test_named_windows_and_offset(self):
+        windows = usage.api_windows(reading(models=[("Fable", 12)]))
+        self.assertEqual(windows["session"]["used_percent"], 7)
+        self.assertEqual(windows["week"]["used_percent"], 44)
+        self.assertEqual(windows["model"]["label"], "Fable")
+        self.assertEqual(windows["model"]["reset"].timestamp(), 1789344000)
+
+    def test_multiple_scoped_windows_are_ambiguous(self):
+        windows = usage.api_windows(reading(models=[("Fable", 12), ("Opus", 30)]))
+        self.assertIsNone(windows["model"])
+        self.assertEqual(windows["model_labels"], ["Fable", "Opus"])
+
+    def test_requires_both_primary_windows_with_valid_resets(self):
+        self.assertIsNone(usage.api_windows({"limits": [limit("session", 7)]}))
+        self.assertIsNone(usage.api_windows({"limits": [
+            limit("session", 7, "next Tuesday"), limit("weekly_all", 44)
+        ]}))
+
+    def test_iso_parser_is_strict(self):
+        accepted = ["2026-09-14T00:00:00Z", "2026-09-14T09:00:00+09:00",
+                    "2026-09-14T09:00:00+0900", "2026-09-14T00:00:00.12+00:00"]
+        refused = ["2026-09-14T00:00:00", "2026-13-45T00:00:00Z", "next Tuesday", ""]
+        self.assertTrue(all(usage.parse_iso8601(value) for value in accepted))
+        self.assertTrue(all(usage.parse_iso8601(value) is None for value in refused))
+
+
+class ScreenTests(unittest.TestCase):
+    def parse(self, lines):
+        return usage.screen_windows("\r\n".join(lines))[0]
+
+    def test_windows_stay_in_their_sections(self):
+        windows = self.parse([
+            "Current session", "29% 28% used", "Resets 11:10am (Asia/Tokyo)",
+            "Current week (all models)", "31% 31% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+            "Current week (Fable)", "68% 68% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+        ])
+        self.assertEqual(windows["session"]["reading"][0], 28)
+        self.assertEqual(windows["week"]["reading"][0], 31)
+        self.assertEqual(windows["model"]["reading"][0], 68)
+
+    def test_last_complete_redraw_wins(self):
+        windows = self.parse([
+            "Current session", "23% 23% used", "Resets 11:10am (Asia/Tokyo)",
+            "Current week (all models)", "31% 31% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+            "Current session", "Current week (all models)",
+        ])
+        self.assertEqual(windows["session"]["reading"][0], 23)
+        self.assertEqual(windows["week"]["reading"][0], 31)
+
+    def test_unreadable_label_and_distant_orphan_numbers_are_dropped(self):
+        windows = self.parse([
+            "Current session", "5% 5% used", "Resets 9:10pm (Asia/Tokyo)",
+            "Current week (all models)", "37% 37% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+            "Current week (Fable 5.1 (1M context))", "Scanning", "Please wait", "Still scanning",
+            "99% 99% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+        ])
+        self.assertEqual(windows["week"]["reading"][0], 37)
+        self.assertIsNone(windows["model"])
+
+    def test_model_name_merely_mentioning_all_models_is_not_the_total(self):
+        windows = self.parse([
+            "Current session", "5% 5% used", "Resets 9:10pm (Asia/Tokyo)",
+            "Current week (all models)", "38% 38% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+            "Current week (Fable, not all models)", "7% 7% used", "Resets Sep 14, 9am (Asia/Tokyo)",
+        ])
+        self.assertEqual(windows["week"]["reading"][0], 38)
+        self.assertEqual(windows["model"]["label"], "Fable, not all models")
+
+
+class ResetTests(unittest.TestCase):
+    zone = ZoneInfo("Asia/Tokyo")
+
+    def at(self, year, month, day, hour, minute=0):
+        return dt.datetime(year, month, day, hour, minute, tzinfo=self.zone)
+
+    def test_nearest_session_occurrence(self):
+        self.assertEqual(usage.normalize_reset("1am", "Asia/Tokyo", "session",
+                                              self.at(2026, 9, 5, 23)),
+                         "2026-09-06T01:00:00+09:00")
+        self.assertEqual(usage.normalize_reset("5:50am", "Asia/Tokyo", "session",
+                                              self.at(2026, 9, 5, 6, 20)),
+                         "2026-09-05T05:50:00+09:00")
+
+    def test_nearest_week_occurrence_and_invalid_date(self):
+        self.assertEqual(usage.normalize_reset("Jan 2, 9am", "Asia/Tokyo", "week",
+                                              self.at(2026, 12, 30, 10)),
+                         "2027-01-02T09:00:00+09:00")
+        self.assertIsNone(usage.normalize_reset("Feb 29, 9am", "Asia/Tokyo", "week",
+                                               self.at(2026, 2, 27, 10)))
+
+    def test_window_stale_reset_is_refused(self):
+        self.assertIsNone(usage.normalize_reset("5:50am", "Asia/Tokyo", "session",
+                                               self.at(2026, 9, 5, 23, 50)))
+        self.assertIsNone(usage.normalize_reset("Sep 7, 9am", "Asia/Tokyo", "week",
+                                               self.at(2026, 9, 15, 10)))
+
+    def test_dst_transition_survives(self):
+        ny = ZoneInfo("America/New_York")
+        now = dt.datetime(2026, 3, 8, 1, 0, tzinfo=ny)
+        self.assertIsNotNone(usage.normalize_reset("2:30am", "America/New_York", "session", now))
+
+
+C_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+
+
+class EndToEndTests(unittest.TestCase):
+    def run_script(self, home, url, textfile=None, cache_dir=None, extra=None):
+        env = os.environ.copy() | {
+            "HOME": str(home),
+            "CLAUDE_USAGE_API_URL": url,
+            "CLAUDE_USAGE_CACHE_DIR": str(cache_dir or home / ".cache/claude-usage-json"),
+        } | (extra or {})
+        if textfile:
+            env["CLAUDE_USAGE_TEXTFILE_PATH"] = str(textfile)
+        return subprocess.run([SCRIPT, "--force"], env=env, text=True, capture_output=True)
+
+    def prepare_home(self, root):
+        credentials = root / ".claude/.credentials.json"
+        credentials.parent.mkdir()
+        credentials.write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret"}}))
+        (root / ".claude.json").write_text(json.dumps({
+            "oauthAccount": {
+                "organizationUuid": "organization",
+                "accountUuid": "account",
+                "emailAddress": "user@example.test",
+            },
+            "userID": "user",
+        }))
+
+    def test_cache_dir_override_keeps_standard_cache_and_emits_collector_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            old = home / ".cache/claude-usage-json/usage.json"
+            old.parent.mkdir(parents=True)
+            old.write_text("do not touch\n")
+            textfile = home / "collector/claude.prom"
+            textfile.parent.mkdir()
+            body = json.dumps(reading(models=[("Fable\"\\\n", 12)]), separators=(",", ":")).encode()
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(body)
+            cache_dir = home / ".cache/claude-usage-json-dev"
+            result = self.run_script(home, endpoint.as_uri(), textfile, cache_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((cache_dir / "api-response.json").read_bytes(), body)
+            self.assertEqual(old.read_text(), "do not touch\n")
+            output = json.loads(result.stdout)
+            self.assertEqual(output["current_week_model"]["used_percent"], 12)
+            metrics = textfile.read_text()
+            identity = 'organization_id="organization",user_account_uuid="account",user_email="user@example.test",user_id="user"'
+            samples = [line for line in metrics.splitlines() if line and not line.startswith("#")]
+            self.assertEqual(len(samples), 8)
+            self.assertTrue(all(identity in line for line in samples))
+            self.assertIn(f'window="weekly_scoped",{identity},model="Fable\\"\\\\\\n"', metrics)
+            self.assertEqual(textfile.stat().st_mode & 0o777, 0o644)
+
+    def test_failed_refresh_does_not_freshen_cache_or_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_text('{"generated_at":"old"}\n')
+            textfile = home / "collector/claude.prom"
+            textfile.parent.mkdir()
+            textfile.write_text("old metrics\n")
+            old_mtime = textfile.stat().st_mtime_ns
+            result = self.run_script(home, (home / "unreachable.json").as_uri(), textfile)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, cache.read_text())
+            self.assertEqual(textfile.read_text(), "old metrics\n")
+            self.assertEqual(textfile.stat().st_mtime_ns, old_mtime)
+
+    def test_screen_capture_decodes_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            commands = home / "commands"
+            commands.mkdir()
+            expect = commands / "expect"
+            expect.write_text(r'''#!/bin/sh
+session=$(date -d '+5 minutes' '+%-I:%M%p')
+week=$(date -d '+7 days' '+%b %-d, %-I:%M%p')
+printf 'Current session\n7%% used\nResets \302\240%s (Asia/Tokyo)\nCurrent week (all models)\n44%% used\nResets %s (Asia/Tokyo)\n' "$session" "$week" > "$3"
+''')
+            expect.chmod(0o755)
+            claude = commands / "claude"
+            claude.write_text("#!/bin/sh\n")
+            claude.chmod(0o755)
+            env = os.environ.copy() | {
+                "HOME": str(home),
+                "PATH": f"{commands}:{os.environ['PATH']}",
+                "LC_ALL": "C",
+                "PYTHONCOERCECLOCALE": "0",
+                "PYTHONUTF8": "0",
+                "CLAUDE_USAGE_SOURCE": "screen",
+                "CLAUDE_USAGE_CLAUDE_BIN": str(claude),
+                "CLAUDE_USAGE_CACHE_DIR": str(home / "cache"),
+            }
+            result = subprocess.run([SCRIPT, "--force"], env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertNotIn("\ufffd", output["current_session"]["resets_at_display"])
+            self.assertIn("resets_at", output["current_session"])
+
+    def test_account_identity_reads_as_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            # The real file carries prompt history, so a non-ASCII byte is the
+            # normal case rather than the exception.
+            (home / ".claude.json").write_bytes(json.dumps({
+                "oauthAccount": {
+                    "organizationUuid": "organization",
+                    "accountUuid": "account",
+                    "emailAddress": "user@example.test",
+                },
+                "userID": "user",
+                "tip": "50% promo \u00b7 clau.de",
+            }, ensure_ascii=False).encode("utf-8"))
+            textfile = home / "collector/claude.prom"
+            textfile.parent.mkdir()
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri(), textfile, extra=C_LOCALE)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('user_email="user@example.test"', textfile.read_text())
+
+    def test_previous_cache_reads_as_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            # What the helper this replaced left behind: raw UTF-8 rather than
+            # escapes. Read through the locale it stops the run before the
+            # cache is rewritten, so every later run stops in the same place.
+            cache.write_bytes(json.dumps({
+                "history": [{
+                    # 14日の保持窓の内側に置く。固定値だと窓が過ぎた日に落ちる。
+                    "recorded_at": int(dt.datetime.now().timestamp()) - 3600,
+                    "session_used_percent": 1, "week_used_percent": 2,
+                    "session_resets_at": "2026-09-09T04:00:00+09:00",
+                    "week_resets_at": "2026-09-14T09:00:00+09:00",
+                    "week_model_label": "Fable\u00b75.1",
+                    "week_model_used_percent": 3,
+                    "week_model_resets_at": "2026-09-14T09:00:00+09:00",
+                }],
+            }, ensure_ascii=False).encode("utf-8"))
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri(), extra=C_LOCALE)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["history"][0]["week_model_label"],
+                             "Fable\u00b75.1")
+
+    def test_unreadable_previous_cache_does_not_stop_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_bytes(b'{"history": [{"week_model_label": "\xff"}]}')
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(json.loads(result.stdout)["history"]), 1)
+
+    def test_cached_only_is_read_only_and_ignores_refresh_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            cache = home / "custom/usage.json"
+            cache.parent.mkdir()
+            cache.write_text("cached\n")
+            env = os.environ.copy() | {"HOME": str(home), "CLAUDE_USAGE_CACHE_DIR": str(cache.parent),
+                                       "CLAUDE_USAGE_TIMEOUT": "invalid"}
+            result = subprocess.run([SCRIPT, "--cached-only"], env=env, text=True, capture_output=True)
+            self.assertEqual((result.returncode, result.stdout), (0, "cached\n"))
+            self.assertEqual(set(cache.parent.iterdir()), {cache})
+
+    def test_cached_only_uses_the_standard_cache_without_an_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_text("cached\n")
+            env = os.environ.copy() | {"HOME": str(home)}
+            env.pop("CLAUDE_USAGE_CACHE_DIR", None)
+            result = subprocess.run([SCRIPT, "--cached-only"], env=env, text=True, capture_output=True)
+            self.assertEqual((result.returncode, result.stdout), (0, "cached\n"))
+
+    def test_empty_cache_override_uses_default_instead_of_current_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            cwd = Path(directory) / "cwd"
+            home.mkdir()
+            cwd.mkdir()
+            before = cwd.stat().st_mode
+            env = os.environ.copy() | {"HOME": str(home), "CLAUDE_USAGE_CACHE_DIR": ""}
+            result = subprocess.run([SCRIPT, "--cached-only"], cwd=cwd, env=env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 66)
+            self.assertEqual(cwd.stat().st_mode, before)
+            self.assertEqual(list(cwd.iterdir()), [])
+
+    def test_prometheus_last_known_and_age_are_both_observable(self):
+        now = dt.datetime(2026, 9, 9, 1, 2, 3, tzinfo=dt.timezone(dt.timedelta(hours=9)))
+        windows, text = usage.screen_windows("\n".join([
+            "Showing last-known usage as of 2h ago", "Current session", "7% 7% used",
+            "Resets 4am (Asia/Tokyo)", "Current week (all models)", "44% 44% used",
+            "Resets Sep 14, 9am (Asia/Tokyo)",
+        ]))
+        with tempfile.TemporaryDirectory() as directory:
+            output = usage.build_output("screen", windows, text, {}, Path(directory) / "samples", now)
+        metrics = usage.prometheus_text(output, {}).decode()
+        self.assertIn("claude_usage_generated_timestamp_seconds 1788883323", metrics)
+        self.assertIn("claude_usage_refresh_last_known 1", metrics)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
