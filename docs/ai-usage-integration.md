@@ -29,7 +29,8 @@ live取得とwidget表示を分離する理由は次のとおりです。
 - Claude取得には数秒以上かかる。
 - Codex app-server取得にも実測で約3秒かかる。
 - widgetはモニターごとに起動するため、直接取得するとプロセスが重複する。
-- `--cached-only` のWindows→WSL読み出しは実測で約0.4秒だった。
+- `--cached-only` のWindows→WSL読み出しは実測で約0.4秒だった (bash/perl helper時)。
+  Python helperはWSL側だけで約0.7秒 (旧: 約0.007秒) を要し、interpreter起動が支配的である。
 
 各ヘルパーは一時ファイルへJSONを書き、検証後にcacheへ移動する。lockで同時更新も
 防ぐ。live取得に失敗し、既存cacheがある場合は最後のcacheを返す。
