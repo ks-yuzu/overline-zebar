@@ -366,12 +366,11 @@ def prometheus_text(output, identity):
 
 def capture_screen(path, settings):
     expect = shutil.which("expect")
-    claude = os.environ.get("CLAUDE_USAGE_CLAUDE_BIN")
-    if not claude:
-        home_copy = Path.home() / "bin/claude"
-        claude = str(home_copy) if os.access(home_copy, os.X_OK) else shutil.which("claude")
-    if not expect or not claude or not os.access(claude, os.X_OK):
-        print("required executable not found: expect or claude", file=sys.stderr)
+    claude = os.environ.get("CLAUDE_USAGE_CLAUDE_BIN") or shutil.which("claude")
+    missing = [name for name, found in (("expect", expect), ("claude", claude))
+               if not found or not os.access(found, os.X_OK)]
+    if missing:
+        print(f"required executable not found on PATH: {', '.join(missing)}", file=sys.stderr)
         return False
     workdir = Path(env_value("CLAUDE_USAGE_WORK_DIR", settings["cache_dir"] / "workdir"))
     try:

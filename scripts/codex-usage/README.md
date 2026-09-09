@@ -31,9 +31,16 @@ Confirm the live refresh and JSON output with:
 codex-usage-json --force
 ```
 
-The helper discovers Codex installed in `$HOME/bin`, the current `PATH`, or an
-NVM installation. This allows the cron job to run without loading an
-interactive shell configuration.
+The helper takes Codex from `CODEX_USAGE_CODEX_BIN`, then from `PATH`, and
+fails when neither names an executable. Because cron sees a different `PATH`
+than an interactive shell, `codex` must be reachable from it -- a symlink in
+`/usr/local/bin` is enough.
+
+The launcher needs `node`, which cron's `PATH` rarely carries. When `node` is
+absent the helper walks the launcher's symlink chain and adds the directory
+holding a sibling `node` to `PATH`. npm links a global launcher beside the node
+that owns it, so this covers NVM and every other version manager without
+naming one.
 
 Install the entries in `crontab.example` with `crontab -e`. The cache is stored
 at `$HOME/.cache/codex-usage-json/usage.json`; the main widget reads it once a

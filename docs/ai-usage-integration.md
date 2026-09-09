@@ -860,19 +860,26 @@ Claude/Codex chipをクリックし、次を確認する。
 
 cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常読み込まれない。
 
-Claude helperは`$HOME/bin/claude`、次にcronから見える`PATH`を探索する。CLIを
-`$HOME/.local/bin`などPATH外へ入れている場合はどちらでも見つからないため、
-cron entryで`CLAUDE_USAGE_CLAUDE_BIN`を指定する。`expect`もcronから見える位置に
-必要である。例は`scripts/claude-usage/crontab.example`にある。
+両helperはCLIを次の順で解決する。helper自身は環境固有のパスを持たない。
 
-Codex helperは次の順で実行ファイルを探索する。
-
-1. `$HOME/bin/codex`
+1. 環境変数 (`CLAUDE_USAGE_CLAUDE_BIN` / `CODEX_USAGE_CODEX_BIN`)
 2. cronから見える`PATH`
-3. `$HOME/.nvm/versions/node/*/bin/codex`
 
-NVM配下で見つけた場合は、同じ`bin` directoryをPATHへ追加してから起動する。
-これにより`#!/usr/bin/env node`もcron環境で解決できる。
+どちらでも見つからなければ失敗し、不足している実行ファイル名をstderrへ出す。
+CLIをPATH外へ入れている場合は、環境変数で指すか、`/usr/local/bin`などcronから
+見える位置へsymlinkを張る。Claude側は`expect`も同様に必要である。例は
+`scripts/claude-usage/crontab.example`にある。
+
+Codexのlauncherは`#!/usr/bin/env node`のNode scriptだが、cronの`PATH`にはnodeが
+載っていないことが多い。`node`がPATHに無い場合、helperはlauncherのsymlink chainを
+1 hopずつ辿り、`node`が同居するdirectoryをPATHへ追加する。
+
+npmはglobal launcherを、それを持つnodeと同じ`bin`へsymlinkとして張る。この規約に
+のみ依存するため、NVM以外の版管理ツールでも同じ経路で解決できる。chainを最後まで
+解決すると`lib/node_modules`配下へ入りnodeと同居しなくなるため、完全解決は使わない。
+
+Codexのrefresh失敗時は、掴んだlauncherのパスと解決した`node`をstderrへ出す。
+どのCodexを起動したかが分からないと切り分けができない。
 
 cron jobは正常時のJSONを`/dev/null`へ送り、stderrだけを次のjournal tagへ送る。
 

@@ -77,32 +77,9 @@ if [[ "$force_refresh" == false ]] && cache_is_fresh; then
 	exit 0
 fi
 
-find_codex_bin() {
-	local candidate discovered=''
-
-	if [[ -x "$HOME/bin/codex" ]]; then
-		printf '%s' "$HOME/bin/codex"
-		return
-	fi
-
-	discovered="$(command -v codex || true)"
-	if [[ -n "$discovered" ]]; then
-		printf '%s' "$discovered"
-		return
-	fi
-
-	# cron does not load NVM's shell initialization. Discover the newest
-	# installed NVM Codex launcher and add its sibling node binary to PATH.
-	for candidate in "$HOME"/.nvm/versions/node/*/bin/codex; do
-		[[ -x "$candidate" ]] || continue
-		discovered="$candidate"
-	done
-	printf '%s' "$discovered"
-}
-
-codex_bin="${CODEX_USAGE_CODEX_BIN:-$(find_codex_bin)}"
+codex_bin="${CODEX_USAGE_CODEX_BIN:-$(command -v codex || true)}"
 if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
-	printf 'Codex executable not found; set CODEX_USAGE_CODEX_BIN\n' >&2
+	printf 'Codex executable not found on PATH; set CODEX_USAGE_CODEX_BIN\n' >&2
 	if [[ -s "$cache_file" ]]; then
 		cat -- "$cache_file"
 		exit 0
@@ -110,8 +87,45 @@ if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
 	exit 69
 fi
 
-codex_bin_dir="${codex_bin%/*}"
-export PATH="$codex_bin_dir:$PATH"
+# The launcher npm installs is a Node script whose shebang is `env node`, and
+# cron's PATH carries no version manager's node. npm links a global launcher
+# beside the node that owns it, so walking the symlink chain reaches a usable
+# node without this script naming a version manager or a home-relative path.
+# Resolving the chain to its end instead lands inside `lib/node_modules`, which
+# has no node beside it.
+find_node_dir() {
+	local path="$1" dir target hops=0
+
+	while [[ -n "$path" ]] && ((hops <= 8)); do
+		dir="${path%/*}"
+		if [[ -x "$dir/node" ]]; then
+			printf '%s' "$dir"
+			return
+		fi
+		if [[ ! -L "$path" ]]; then
+			return 0
+		fi
+		target="$(readlink -- "$path")"
+		case "$target" in
+			/*) path="$target" ;;
+			*) path="$dir/$target" ;;
+		esac
+		hops=$((hops + 1))
+	done
+}
+
+if ! command -v node >/dev/null 2>&1; then
+	node_dir="$(find_node_dir "$codex_bin")"
+	if [[ -z "$node_dir" ]]; then
+		printf 'node not found on PATH or beside %s\n' "$codex_bin" >&2
+		if [[ -s "$cache_file" ]]; then
+			cat -- "$cache_file"
+			exit 0
+		fi
+		exit 69
+	fi
+	export PATH="$node_dir:$PATH"
+fi
 
 archive_sample() {
 	# Entries repeat a recorded_at when a run lands within 60s of the previous
@@ -272,7 +286,8 @@ refresh_usage() {
 
 if ! refresh_usage; then
 	stop_server
-	printf 'failed to refresh Codex usage; using cached data when available\n' >&2
+	printf 'failed to refresh Codex usage through %s (node: %s); using cached data when available\n' \
+		"$codex_bin" "$(command -v node || printf 'not found')" >&2
 	if [[ -s "$error_file" ]]; then
 		sed -n '1,5p' "$error_file" >&2
 	fi
