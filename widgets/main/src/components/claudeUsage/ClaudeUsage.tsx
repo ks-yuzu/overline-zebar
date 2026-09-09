@@ -1,6 +1,10 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip, clampPercentage, usableTimeZone } from '@overline-zebar/ui';
-import { Bot } from 'lucide-react';
+import {
+  Chip,
+  clampPercentage,
+  ServiceIcon,
+  usableTimeZone,
+} from '@overline-zebar/ui';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
@@ -126,7 +130,7 @@ export default function ClaudeUsage() {
       }}
     >
       <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
-      <Bot aria-label="Claude usage" className="h-3.5 w-3.5 text-icon" />
+      <ServiceIcon label="Claude usage" service="claude" />
       <Stat
         Icon={<p className="font-medium text-icon">5H</p>}
         stat={`${sessionUsage}%`}
