@@ -871,8 +871,12 @@ CLIをPATH外へ入れている場合は、環境変数で指すか、`/usr/loca
 `scripts/claude-usage/crontab.example`にある。
 
 Codexのlauncherは`#!/usr/bin/env node`のNode scriptだが、cronの`PATH`にはnodeが
-載っていないことが多い。`node`がPATHに無い場合、helperはlauncherのsymlink chainを
-1 hopずつ辿り、`node`が同居するdirectoryをPATHへ追加する。
+載っていないことが多い。helperはlauncherのsymlink chainを1 hopずつ辿り、`node`が
+同居するdirectoryを見つけたらPATHの先頭へ置く。
+
+これはPATHが既に持つnodeより優先する。launcherと一緒に入ったnodeがそれを導入した
+版であり、`/usr/bin`の古いnodeではengine不足で動かないことがある。見つからないのは
+異常ではない。native binaryのCodexはnodeを必要としないため、そのまま起動する。
 
 npmはglobal launcherを、それを持つnodeと同じ`bin`へsymlinkとして張る。この規約に
 のみ依存するため、NVM以外の版管理ツールでも同じ経路で解決できる。chainを最後まで
@@ -960,7 +964,6 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | `required executable not found: <名前>`（exit 70） | Claude helperの依存不足。欠けているものが行に出る。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
 | `Codex executable not usable: <値>`（exit 69） | cronから`codex`が見えない。`/usr/local/bin`へsymlinkを張るか、`CODEX_USAGE_CODEX_BIN`で明示する。値が出ていればその指定が実行可能でない |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
-| `Codex executable not found`（exit 69）             | cronのPATHに`codex`が無い。`CODEX_USAGE_CODEX_BIN`で明示する               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
 
 `shellExec`はwidgetの`config.ts`と`zpack.json`の`argsRegex`が完全一致した
@@ -1013,6 +1016,7 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
+bash scripts/codex-usage/test-codex-usage-json
 node packages/ui/test-usage-series.mjs
 ```
 

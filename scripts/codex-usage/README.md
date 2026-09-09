@@ -36,11 +36,15 @@ fails when neither names an executable. Because cron sees a different `PATH`
 than an interactive shell, `codex` must be reachable from it -- a symlink in
 `/usr/local/bin` is enough.
 
-The launcher needs `node`, which cron's `PATH` rarely carries. When `node` is
-absent the helper walks the launcher's symlink chain and adds the directory
-holding a sibling `node` to `PATH`. npm links a global launcher beside the node
-that owns it, so this covers NVM and every other version manager without
-naming one.
+The launcher needs `node`, which cron's `PATH` rarely carries. The helper walks
+the launcher's symlink chain and puts the directory holding a sibling `node`
+first on `PATH`. npm links a global launcher beside the node that owns it, so
+this covers NVM and every other version manager without naming one.
+
+That node wins over one `PATH` already carries, because a distro node older
+than the launcher's engine fails where its own node works. Finding none is not
+an error: a Codex installed as a native binary needs no node and is launched
+as it is.
 
 Install the entries in `crontab.example` with `crontab -e`. The cache is stored
 at `$HOME/.cache/codex-usage-json/usage.json`; the main widget reads it once a
