@@ -88,13 +88,6 @@ if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
 	exit 69
 fi
 
-# An npm-installed launcher is a Node script whose shebang is `env node`, so
-# `node` has to be on PATH as well. This script does not go looking for one:
-# whichever it picked would be a guess about which node the operator meant, and
-# a version manager installs a global package under one node version, so the
-# pair belongs to whoever runs the helper. `crontab.example` asks nvm for that
-# pair with `nvm exec`; the failure line below names the node in use.
-
 archive_sample() {
 	# Entries repeat a recorded_at when a run lands within 60s of the previous
 	# one, the same case the cache collapses. Readers dedupe on recorded_at.
@@ -254,8 +247,8 @@ refresh_usage() {
 
 if ! refresh_usage; then
 	stop_server
-	printf 'failed to refresh Codex usage through %s (node: %s); using cached data when available\n' \
-		"$codex_bin" "$(command -v node || printf 'not found')" >&2
+	printf 'failed to refresh Codex usage through %s; using cached data when available\n' \
+		"$codex_bin" >&2
 	if [[ -s "$error_file" ]]; then
 		sed -n '1,5p' "$error_file" >&2
 	fi

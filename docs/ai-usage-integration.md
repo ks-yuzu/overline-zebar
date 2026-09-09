@@ -858,7 +858,7 @@ Claude/Codex chipをクリックし、次を確認する。
 
 ## Cron環境
 
-cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常読み込まれない。
+cronはinteractive shellの初期化を行わないため、そのPATHは対話シェルのものと異なる。
 
 両helperはCLIを次の順で解決する。helper自身は環境固有のパスを持たない。
 
@@ -869,23 +869,7 @@ cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常�
 CLIをPATH外へ入れている場合は、環境変数で指すか、cronから見える位置へ載せる。
 Claude側は`expect`も同様に必要である。例は各`crontab.example`にある。
 
-Codexのlauncherは`#!/usr/bin/env node`のNode scriptであり、`node`もPATHに必要である。
-**helperはnodeを探さない。** どのnodeを選んでも「利用者がどれを使いたいか」の推測に
-なるうえ、版管理ツールはglobal packageをnode版ごとに持つため、launcherとnodeは
-一組で決まる。組を決めるのは helper ではなく、helper を起動する側である。
-
-`scripts/codex-usage/crontab.example`はその組をnvmに問う。`nvm.sh`はrcファイル無しで
-sourceでき、`nvm exec <alias>`はaliasのbin directoryを先頭に置いて実行するため、
-`codex`と`node`が同じ版から来る。`nvm alias default`を張り替えるだけで追随し、
-crontabにパスを書き込まない。
-
-nvmはglobal packageをnode版ごとに持つ。`nvm install`の後はその版へCodexを入れ直すか
-`--reinstall-packages-from`を使う。していなければhelperはexit 69で明示的に止まる。
-
-nvmを使わない場合は、`codex`と`node`をcronのPATHへ載せるか、
-`CODEX_USAGE_CODEX_BIN`でlauncherを直接指す。
-
-Codexのrefresh失敗時は、掴んだlauncherのパスと解決した`node`をstderrへ出す。
+Codexのrefresh失敗時は、掴んだlauncherのパスをstderrへ出す。
 どのCodexを起動したかが分からないと切り分けができない。
 
 cron jobは正常時のJSONを`/dev/null`へ送り、stderrだけを次のjournal tagへ送る。
@@ -965,8 +949,7 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
 | `required executable not found: <名前>`（exit 70） | Claude helperの依存不足。欠けているものが行に出る。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
-| `Codex executable not usable: <値>`（exit 69） | cronから`codex`が見えない。`crontab.example`の`nvm exec`の形になっているかを確認する。`nvm install`の後にCodexを入れ直していない場合もここで止まる。値が出ていればその指定が実行可能でない |
-| `env: 'node': No such file or directory` | `codex`は見えているが`node`が無い。`nvm exec`を通していないか、PATHにnodeが載っていない |
+| `Codex executable not usable: <値>`（exit 69） | cronのPATHから`codex`が見えない。`/usr/local/bin`へsymlinkを張るか、`CODEX_USAGE_CODEX_BIN`で明示する。値が出ていればその指定が実行可能でない |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
 

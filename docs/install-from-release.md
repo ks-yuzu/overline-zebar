@@ -97,13 +97,12 @@ trustに答えて終了する。これを飛ばすと
 ```
 @reboot     CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
 */5 * * * * CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
-@reboot     NVM_DIR="$HOME/.nvm" /usr/bin/timeout 60s /bin/bash -c '. "$NVM_DIR/nvm.sh" --no-use && nvm exec --silent default "$HOME/bin/codex-usage-json" --force' 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
-*/5 * * * * NVM_DIR="$HOME/.nvm" /usr/bin/timeout 60s /bin/bash -c '. "$NVM_DIR/nvm.sh" --no-use && nvm exec --silent default "$HOME/bin/codex-usage-json" --force' 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+@reboot     /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+*/5 * * * * /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
 ```
 
-Codexの行が`nvm exec`を通しているのは、`codex`とlauncherが必要とする`node`を
-同じnode版から取るためである。nvmを使っていない場合は`nvm exec`の包みを外し、
-`codex`と`node`をcronのPATHへ載せるか、`CODEX_USAGE_CODEX_BIN`で直接指す。
+`codex`もcronのPATHから見える必要がある。載っていなければ`/usr/local/bin`へ
+symlinkを張るか、`CODEX_USAGE_CODEX_BIN`を上の行へ足す。
 
 ## 3. fontを入れる
 
