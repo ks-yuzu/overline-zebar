@@ -41,10 +41,15 @@ the launcher's symlink chain and puts the directory holding a sibling `node`
 first on `PATH`. npm links a global launcher beside the node that owns it, so
 this covers NVM and every other version manager without naming one.
 
-That node wins over one `PATH` already carries, because a distro node older
-than the launcher's engine fails where its own node works. Finding none is not
-an error: a Codex installed as a native binary needs no node and is launched
-as it is.
+When more than one hop has a `node` beside it, the last one wins. The chain
+starts wherever `PATH` found the launcher -- `/usr/local/bin` above, which
+often holds an unrelated `node` -- while the launcher and the node that owns it
+are paired at the end.
+
+That node also wins over one `PATH` already carries, because a distro node
+older than the launcher's engine fails where its own node works. Finding none
+is not an error: a Codex installed as a native binary needs no node and is
+launched as it is.
 
 Install the entries in `crontab.example` with `crontab -e`. The cache is stored
 at `$HOME/.cache/codex-usage-json/usage.json`; the main widget reads it once a

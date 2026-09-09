@@ -872,7 +872,11 @@ CLIをPATH外へ入れている場合は、環境変数で指すか、`/usr/loca
 
 Codexのlauncherは`#!/usr/bin/env node`のNode scriptだが、cronの`PATH`にはnodeが
 載っていないことが多い。helperはlauncherのsymlink chainを1 hopずつ辿り、`node`が
-同居するdirectoryを見つけたらPATHの先頭へ置く。
+同居するdirectoryをPATHの先頭へ置く。
+
+複数のhopに`node`があれば最後のものを採る。chainの起点は`PATH`がlauncherを見つけた
+場所であり、設置先として案内している`/usr/local/bin`には無関係な`node`が居ることが
+ある。launcherとそれを所有するnodeが対になっているのはchainの終端側である。
 
 これはPATHが既に持つnodeより優先する。launcherと一緒に入ったnodeがそれを導入した
 版であり、`/usr/bin`の古いnodeではengine不足で動かないことがある。見つからないのは

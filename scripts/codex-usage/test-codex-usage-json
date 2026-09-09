@@ -90,6 +90,21 @@ launcher_at "$work/plain/codex"
 check 'a plain launcher finds its own sibling' \
 	"$work/plain" "$(find_node_dir "$work/plain/codex")"
 
+# The chain starts where PATH found the launcher, and the setup notes recommend
+# that be /usr/local/bin, which commonly holds an unrelated node. The owner is
+# the one paired with the launcher at the end of the chain, not the first found.
+node_in "$work/head/bin"
+ln -s "$work/npm/bin/codex" "$work/head/bin/codex"
+check 'a node at the head of the chain loses to the owner' \
+	"$work/npm/bin" "$(find_node_dir "$work/head/bin/codex")"
+
+# A directory is executable too, so `-x` alone would stop the walk on one named
+# `node` and never reach the real one.
+mkdir -p -- "$work/dirnode/node"
+launcher_at "$work/dirnode/codex"
+check 'a directory named node is not a node' \
+	'' "$(find_node_dir "$work/dirnode/codex")"
+
 # No node anywhere is not an error. A native Codex needs none, so the caller
 # launches it unchanged - and an empty result must not trip `set -e`.
 launcher_at "$work/native/codex"

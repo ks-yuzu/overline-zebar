@@ -386,7 +386,12 @@ def capture_screen(path, settings):
         completed = subprocess.run(args, input=EXPECT, text=True, cwd=workdir, env=env,
                                    timeout=settings["timeout"] + settings["cap"] + 10)
     except (OSError, subprocess.TimeoutExpired):
+        print(f"claude usage: {claude} did not complete", file=sys.stderr)
         return False
+    if completed.returncode != 0:
+        # Which binary, because expect keeps the child's own complaint in the
+        # pty capture and the caller's line alone does not say what it ran.
+        print(f"claude usage: {claude} exited {completed.returncode}", file=sys.stderr)
     return completed.returncode == 0
 
 

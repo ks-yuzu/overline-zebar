@@ -1,5 +1,15 @@
-# `codex` must be reachable from cron's PATH, which is not an interactive
-# shell's. Symlink it into /usr/local/bin, or set CODEX_USAGE_CODEX_BIN here.
 # Refresh the cache when the WSL distribution starts and every five minutes.
-@reboot /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+#
+# cron does not load an interactive shell, so `codex` is usually not on PATH.
+# Symlink it somewhere cron already looks, such as /usr/local/bin, or point
+# CODEX_USAGE_CODEX_BIN at the launcher by uncommenting it below (adjust the
+# path for your install). Without one of the two the helper exits 69 and serves
+# the last cache it has, which the widget shows as stale.
+#
+# `node` does not have to be on PATH: the helper takes the one npm installed
+# beside the launcher.
+@reboot     /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
 */5 * * * * /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+
+# @reboot     CODEX_USAGE_CODEX_BIN="$HOME/.nvm/versions/node/v24.19.0/bin/codex" /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+# */5 * * * * CODEX_USAGE_CODEX_BIN="$HOME/.nvm/versions/node/v24.19.0/bin/codex" /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron

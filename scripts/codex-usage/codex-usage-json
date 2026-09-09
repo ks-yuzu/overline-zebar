@@ -100,21 +100,20 @@ fi
 # Finding none is not an error: a Codex installed as a native binary needs no
 # node, so the launch still goes ahead and reports its own failure.
 find_node_dir() {
-	local path="$1" dir target hops=0
+	local path="$1" dir target found='' hops=0
 
 	# Real chains are one or two hops. The cap is what stops a symlink cycle.
 	while [[ -n "$path" ]] && ((hops <= 8)); do
 		dir="${path%/*}"
-		if [[ -x "$dir/node" ]]; then
+		# `-f` as well as `-x`: a directory named `node` is executable too, and
+		# taking it would stop the walk short of the real one.
+		if [[ -f "$dir/node" && -x "$dir/node" ]]; then
 			# A relative target leaves `..` in the middle of the path. It
 			# resolves either way, but this lands on PATH and in the failure
 			# line, where a reader has to recognise the directory.
-			printf '%s' "$(cd -- "$dir" && pwd)"
-			return
+			found="$(cd -- "$dir" && pwd)"
 		fi
-		if [[ ! -L "$path" ]]; then
-			return 0
-		fi
+		[[ -L "$path" ]] || break
 		target="$(readlink -- "$path")"
 		case "$target" in
 			/*) path="$target" ;;
@@ -122,6 +121,12 @@ find_node_dir() {
 		esac
 		hops=$((hops + 1))
 	done
+
+	# The last hop's node, not the first. The chain starts wherever PATH found
+	# the launcher - `/usr/local/bin`, which the setup notes recommend and which
+	# commonly holds an unrelated `node`. npm installs the launcher beside the
+	# node that owns it, and that pairing is at the end of the chain.
+	printf '%s' "$found"
 }
 
 node_dir="$(find_node_dir "$codex_bin")"
