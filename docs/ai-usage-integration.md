@@ -866,25 +866,24 @@ cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常�
 2. cronから見える`PATH`
 
 どちらでも見つからなければ失敗し、不足している実行ファイル名をstderrへ出す。
-CLIをPATH外へ入れている場合は、環境変数で指すか、`/usr/local/bin`などcronから
-見える位置へsymlinkを張る。Claude側は`expect`も同様に必要である。例は
-`scripts/claude-usage/crontab.example`にある。
+CLIをPATH外へ入れている場合は、環境変数で指すか、cronから見える位置へ載せる。
+Claude側は`expect`も同様に必要である。例は各`crontab.example`にある。
 
-Codexのlauncherは`#!/usr/bin/env node`のNode scriptだが、cronの`PATH`にはnodeが
-載っていないことが多い。helperはlauncherのsymlink chainを1 hopずつ辿り、`node`が
-同居するdirectoryをPATHの先頭へ置く。
+Codexのlauncherは`#!/usr/bin/env node`のNode scriptであり、`node`もPATHに必要である。
+**helperはnodeを探さない。** どのnodeを選んでも「利用者がどれを使いたいか」の推測に
+なるうえ、版管理ツールはglobal packageをnode版ごとに持つため、launcherとnodeは
+一組で決まる。組を決めるのは helper ではなく、helper を起動する側である。
 
-複数のhopに`node`があれば最後のものを採る。chainの起点は`PATH`がlauncherを見つけた
-場所であり、設置先として案内している`/usr/local/bin`には無関係な`node`が居ることが
-ある。launcherとそれを所有するnodeが対になっているのはchainの終端側である。
+`scripts/codex-usage/crontab.example`はその組をnvmに問う。`nvm.sh`はrcファイル無しで
+sourceでき、`nvm exec <alias>`はaliasのbin directoryを先頭に置いて実行するため、
+`codex`と`node`が同じ版から来る。`nvm alias default`を張り替えるだけで追随し、
+crontabにパスを書き込まない。
 
-これはPATHが既に持つnodeより優先する。launcherと一緒に入ったnodeがそれを導入した
-版であり、`/usr/bin`の古いnodeではengine不足で動かないことがある。見つからないのは
-異常ではない。native binaryのCodexはnodeを必要としないため、そのまま起動する。
+nvmはglobal packageをnode版ごとに持つ。`nvm install`の後はその版へCodexを入れ直すか
+`--reinstall-packages-from`を使う。していなければhelperはexit 69で明示的に止まる。
 
-npmはglobal launcherを、それを持つnodeと同じ`bin`へsymlinkとして張る。この規約に
-のみ依存するため、NVM以外の版管理ツールでも同じ経路で解決できる。chainを最後まで
-解決すると`lib/node_modules`配下へ入りnodeと同居しなくなるため、完全解決は使わない。
+nvmを使わない場合は、`codex`と`node`をcronのPATHへ載せるか、
+`CODEX_USAGE_CODEX_BIN`でlauncherを直接指す。
 
 Codexのrefresh失敗時は、掴んだlauncherのパスと解決した`node`をstderrへ出す。
 どのCodexを起動したかが分からないと切り分けができない。
@@ -966,7 +965,8 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
 | `required executable not found: <名前>`（exit 70） | Claude helperの依存不足。欠けているものが行に出る。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
-| `Codex executable not usable: <値>`（exit 69） | cronから`codex`が見えない。`/usr/local/bin`へsymlinkを張るか、`CODEX_USAGE_CODEX_BIN`で明示する。値が出ていればその指定が実行可能でない |
+| `Codex executable not usable: <値>`（exit 69） | cronから`codex`が見えない。`crontab.example`の`nvm exec`の形になっているかを確認する。`nvm install`の後にCodexを入れ直していない場合もここで止まる。値が出ていればその指定が実行可能でない |
+| `env: 'node': No such file or directory` | `codex`は見えているが`node`が無い。`nvm exec`を通していないか、PATHにnodeが載っていない |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
 
@@ -1020,7 +1020,6 @@ CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
-bash scripts/codex-usage/test-codex-usage-json
 node packages/ui/test-usage-series.mjs
 ```
 

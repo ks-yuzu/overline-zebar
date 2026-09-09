@@ -1,15 +1,19 @@
 # Refresh the cache when the WSL distribution starts and every five minutes.
 #
-# cron does not load an interactive shell, so `codex` is usually not on PATH.
-# Symlink it somewhere cron already looks, such as /usr/local/bin, or point
-# CODEX_USAGE_CODEX_BIN at the launcher by uncommenting it below (adjust the
-# path for your install). Without one of the two the helper exits 69 and serves
-# the last cache it has, which the widget shows as stale.
+# cron loads no shell initialization, so a version manager's `codex` and the
+# `node` its shebang needs are both off PATH. nvm answers that itself: sourcing
+# `nvm.sh` works without an rc file, and `nvm exec <alias>` runs the helper with
+# the bin directory of that alias in front. Both come from the same version,
+# and re-pointing `nvm alias default` is enough - no path here to keep in sync.
 #
-# `node` does not have to be on PATH: the helper takes the one npm installed
-# beside the launcher.
-@reboot     /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
-*/5 * * * * /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+# nvm installs a global package under one node version. After `nvm install`,
+# reinstall Codex under the new version (or use --reinstall-packages-from), or
+# the helper exits 69 and says so.
+@reboot     NVM_DIR="$HOME/.nvm" /usr/bin/timeout 60s /bin/bash -c '. "$NVM_DIR/nvm.sh" --no-use && nvm exec --silent default "$HOME/bin/codex-usage-json" --force' 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+*/5 * * * * NVM_DIR="$HOME/.nvm" /usr/bin/timeout 60s /bin/bash -c '. "$NVM_DIR/nvm.sh" --no-use && nvm exec --silent default "$HOME/bin/codex-usage-json" --force' 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
 
-# @reboot     CODEX_USAGE_CODEX_BIN="$HOME/.nvm/versions/node/v24.19.0/bin/codex" /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
-# */5 * * * * CODEX_USAGE_CODEX_BIN="$HOME/.nvm/versions/node/v24.19.0/bin/codex" /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+# Without nvm, put `codex` and `node` on cron's PATH and drop the wrapper, or
+# name the launcher directly. The helper takes the variable over PATH.
+#
+# @reboot     CODEX_USAGE_CODEX_BIN=/usr/local/bin/codex /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
+# */5 * * * * CODEX_USAGE_CODEX_BIN=/usr/local/bin/codex /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron

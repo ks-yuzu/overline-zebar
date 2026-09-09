@@ -88,51 +88,12 @@ if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
 	exit 69
 fi
 
-# The launcher npm installs is a Node script whose shebang is `env node`, and
-# cron's PATH carries no version manager's node. npm links a global launcher
-# beside the node that owns it, so walking the symlink chain reaches a usable
-# node without this script naming a version manager or a home-relative path.
-# Resolving the chain to its end instead lands inside `lib/node_modules`, which
-# has no node beside it.
-#
-# The result is preferred over whatever node PATH already carries, because a
-# distro node older than the launcher's engine fails where its own node works.
-# Finding none is not an error: a Codex installed as a native binary needs no
-# node, so the launch still goes ahead and reports its own failure.
-find_node_dir() {
-	local path="$1" dir target found='' hops=0
-
-	# Real chains are one or two hops. The cap is what stops a symlink cycle.
-	while [[ -n "$path" ]] && ((hops <= 8)); do
-		dir="${path%/*}"
-		# `-f` as well as `-x`: a directory named `node` is executable too, and
-		# taking it would stop the walk short of the real one.
-		if [[ -f "$dir/node" && -x "$dir/node" ]]; then
-			# A relative target leaves `..` in the middle of the path. It
-			# resolves either way, but this lands on PATH and in the failure
-			# line, where a reader has to recognise the directory.
-			found="$(cd -- "$dir" && pwd)"
-		fi
-		[[ -L "$path" ]] || break
-		target="$(readlink -- "$path")"
-		case "$target" in
-			/*) path="$target" ;;
-			*) path="$dir/$target" ;;
-		esac
-		hops=$((hops + 1))
-	done
-
-	# The last hop's node, not the first. The chain starts wherever PATH found
-	# the launcher - `/usr/local/bin`, which the setup notes recommend and which
-	# commonly holds an unrelated `node`. npm installs the launcher beside the
-	# node that owns it, and that pairing is at the end of the chain.
-	printf '%s' "$found"
-}
-
-node_dir="$(find_node_dir "$codex_bin")"
-if [[ -n "$node_dir" ]]; then
-	export PATH="$node_dir:$PATH"
-fi
+# An npm-installed launcher is a Node script whose shebang is `env node`, so
+# `node` has to be on PATH as well. This script does not go looking for one:
+# whichever it picked would be a guess about which node the operator meant, and
+# a version manager installs a global package under one node version, so the
+# pair belongs to whoever runs the helper. `crontab.example` asks nvm for that
+# pair with `nvm exec`; the failure line below names the node in use.
 
 archive_sample() {
 	# Entries repeat a recorded_at when a run lands within 60s of the previous

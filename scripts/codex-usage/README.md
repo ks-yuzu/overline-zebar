@@ -32,24 +32,19 @@ codex-usage-json --force
 ```
 
 The helper takes Codex from `CODEX_USAGE_CODEX_BIN`, then from `PATH`, and
-fails when neither names an executable. Because cron sees a different `PATH`
-than an interactive shell, `codex` must be reachable from it -- a symlink in
-`/usr/local/bin` is enough.
+fails when neither names an executable. It does not look for `node`, which the
+launcher's `#!/usr/bin/env node` needs: any node it picked would be a guess at
+which one the operator meant, and a version manager installs a global package
+under one node version, so the launcher and its node come as a pair.
 
-The launcher needs `node`, which cron's `PATH` rarely carries. The helper walks
-the launcher's symlink chain and puts the directory holding a sibling `node`
-first on `PATH`. npm links a global launcher beside the node that owns it, so
-this covers NVM and every other version manager without naming one.
+`crontab.example` asks nvm for that pair. `nvm.sh` can be sourced without an rc
+file, and `nvm exec <alias>` puts the alias's bin directory in front, so both
+`codex` and `node` come from the same version. Re-pointing `nvm alias default`
+is then the only thing to keep current -- no path is written down here.
 
-When more than one hop has a `node` beside it, the last one wins. The chain
-starts wherever `PATH` found the launcher -- `/usr/local/bin` above, which
-often holds an unrelated `node` -- while the launcher and the node that owns it
-are paired at the end.
-
-That node also wins over one `PATH` already carries, because a distro node
-older than the launcher's engine fails where its own node works. Finding none
-is not an error: a Codex installed as a native binary needs no node and is
-launched as it is.
+nvm installs a global package under one node version. After `nvm install`,
+reinstall Codex under the new version (or use `--reinstall-packages-from`), or
+the helper exits 69 and says so.
 
 Install the entries in `crontab.example` with `crontab -e`. The cache is stored
 at `$HOME/.cache/codex-usage-json/usage.json`; the main widget reads it once a
