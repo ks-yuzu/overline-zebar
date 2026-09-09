@@ -14,9 +14,10 @@ import {
   windowTrendRange,
   clampPercentage,
   getThresholdColor,
+  ServiceIcon,
 } from '@overline-zebar/ui';
 import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
-import { Bot, Clock3, X } from 'lucide-react';
+import { Clock3, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
 import { hasModelWindow, useClaudeUsage } from './useClaudeUsage';
@@ -350,7 +351,7 @@ export default function App() {
     <div className="flex h-screen flex-col gap-3 overflow-y-auto rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
       <header className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-icon" />
+          <ServiceIcon className="text-xl" service="claude" />
           <div>
             <h1 className="text-sm font-semibold">Claude usage</h1>
             <p className="text-[10px] text-text-muted">Current plan windows</p>

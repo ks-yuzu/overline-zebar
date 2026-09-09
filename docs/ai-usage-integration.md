@@ -142,12 +142,18 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 
 - 先頭のアイコンはNerd Fonts v3.5.1のCodicons (Claudeは`cod-claude`、Codexは
   `cod-openai`) で、[Cojica](https://github.com/ks-yuzu/Cojica)から出す。
+  **chipと詳細viewの見出しの両方で同じ印を使う** (`ServiceIcon`、
+  `packages/ui/src/components/icons/service.tsx`)。
   - **fontは同梱しない。**Windows側に導入済みであることが前提で、無い環境では
     豆腐になる。導入手順は[Releaseから導入する](./install-from-release.md)にある。
   - Geist Monoのように`public/`へ実体を置く道も取れるが、widgetごとに複製が
-    増える。iconのためだけに12MBのfontを2つ以上のwidgetへ置くのは釣り合わない。
+    増える。iconのためだけに12MBのfontを3つのwidgetへ置くのは釣り合わない。
   - lucideの`Bot` / `Code2`から置き換えた。ロボットとコードの一般記号であって、
     2つ並んだときにどちらのproviderかは隣の数値を読まないと分からなかった。
+  - **大きさは呼び出し側が決める。**chipは`text-lg` (14px、既定)、詳細viewの
+    見出しは`text-xl` (16px)。置き換え前のlucideの`h-3.5` / `h-4`に合わせている。
+  - **`label`を渡すのはchipだけ。**詳細viewの見出しは隣の`<h1>`がproviderを
+    名乗るため、glyphはa11y treeから外す。lucideも同じ扱いだった。
 - CPU/RAMと同じ`useInlineStats`設定を共有する。
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。

@@ -1,12 +1,11 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip, clampPercentage } from '@overline-zebar/ui';
+import { Chip, clampPercentage, ServiceIcon } from '@overline-zebar/ui';
 import { Fragment, useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
 import { worstProjection } from '../../utils/projectWindowUsage';
 import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
-import ServiceIcon from '../aiUsage/ServiceIcon';
 import { getUsageFreshness } from '../aiUsage/freshness';
 import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
 import Stat from '../stat/Stat';
@@ -97,7 +96,7 @@ export default function CodexUsage() {
       }}
     >
       <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
-      <ServiceIcon service="codex" />
+      <ServiceIcon label="Codex usage" service="codex" />
       {windows.map((window, index) => (
         <Fragment key={`${index}-${window.windowDurationMins}`}>
           {/* A direct child of the chip, as on the Claude one: inside the

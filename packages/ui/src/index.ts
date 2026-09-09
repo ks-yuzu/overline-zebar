@@ -44,6 +44,7 @@ export {
 } from './components/select';
 export { Switch } from './components/switch';
 export { WindowsIcon } from './components/icons/windows';
+export { ServiceIcon } from './components/icons/service';
 export { Navbar, NavbarItem } from './components/navbar';
 export { default as PanelLayout } from './components/panel-layout/PanelLayout';
 export { Input } from './components/input';

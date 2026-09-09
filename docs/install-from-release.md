@@ -103,8 +103,9 @@ trustに答えて終了する。これを飛ばすと
 
 ## 3. fontを入れる
 
-Claude/Codex chipの先頭のアイコンは[Cojica](https://github.com/ks-yuzu/Cojica)の
-グリフである。**packにfontは入っていない。**Windows側へ導入しないと、
+Claude/Codex chipと詳細viewの見出しのアイコンは
+[Cojica](https://github.com/ks-yuzu/Cojica)のグリフである。
+**packにfontは入っていない。**Windows側へ導入しないと、
 アイコンの位置が豆腐 (□) になる。
 
 [Cojica v1.0.0](https://github.com/ks-yuzu/Cojica/releases/tag/v1.0.0)の
@@ -130,8 +131,8 @@ wsl.exe -- sh -c '$HOME/bin/codex-usage-json --cached-only'
 ```
 
 Zebarを再起動し、main barのClaude/Codex chipに数値が出ること、clickで詳細viewが
-開くことを確認する。chipの先頭がClaudeの星形とOpenAIの結び目になっていれば
-fontも通っている。
+開くことを確認する。chipの先頭と詳細viewの見出しがClaudeの星形とOpenAIの
+結び目になっていればfontも通っている。
 
 ## うまくいかない時
 
@@ -142,7 +143,7 @@ fontも通っている。
   違う。Windows側から上の`wsl.exe`のcommandを実行して切り分ける
 - **値が更新されない** — cronが動いていない。`journalctl -t claude-usage.cron`
   (または`/var/log/syslog`) を見る
-- **chipの先頭が豆腐 (□)** — Cojicaが導入されていない。手順3を行う
+- **アイコンが豆腐 (□)** — Cojicaが導入されていない。手順3を行う
 
 ## 検証状況
 

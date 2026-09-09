@@ -1,12 +1,16 @@
 import { useWidgetSetting } from '@overline-zebar/config';
-import { Chip, clampPercentage, usableTimeZone } from '@overline-zebar/ui';
+import {
+  Chip,
+  clampPercentage,
+  ServiceIcon,
+  usableTimeZone,
+} from '@overline-zebar/ui';
 import { useRef } from 'react';
 import * as zebar from 'zebar';
 import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
 import { worstProjection } from '../../utils/projectWindowUsage';
 import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
-import ServiceIcon from '../aiUsage/ServiceIcon';
 import { getUsageFreshness } from '../aiUsage/freshness';
 import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
 import Stat from '../stat/Stat';
@@ -126,7 +130,7 @@ export default function ClaudeUsage() {
       }}
     >
       <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
-      <ServiceIcon service="claude" />
+      <ServiceIcon label="Claude usage" service="claude" />
       <Stat
         Icon={<p className="font-medium text-icon">5H</p>}
         stat={`${sessionUsage}%`}
