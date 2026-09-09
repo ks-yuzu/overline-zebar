@@ -957,7 +957,8 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | `exited with 127`                                   | 既定distributionにhelperが無い。`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
-| `required executable not found: expect or claude`（exit 70） | Claude helperの依存不足。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
+| `required executable not found: <名前>`（exit 70） | Claude helperの依存不足。欠けているものが行に出る。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
+| `Codex executable not usable: <値>`（exit 69） | cronから`codex`が見えない。`/usr/local/bin`へsymlinkを張るか、`CODEX_USAGE_CODEX_BIN`で明示する。値が出ていればその指定が実行可能でない |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
 | `Codex executable not found`（exit 69）             | cronのPATHに`codex`が無い。`CODEX_USAGE_CODEX_BIN`で明示する               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |

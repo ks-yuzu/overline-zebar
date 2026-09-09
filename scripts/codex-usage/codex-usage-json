@@ -79,7 +79,8 @@ fi
 
 codex_bin="${CODEX_USAGE_CODEX_BIN:-$(command -v codex || true)}"
 if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
-	printf 'Codex executable not found on PATH; set CODEX_USAGE_CODEX_BIN\n' >&2
+	printf 'Codex executable not usable: %s; set CODEX_USAGE_CODEX_BIN or put codex on PATH\n' \
+		"${codex_bin:-not found on PATH}" >&2
 	if [[ -s "$cache_file" ]]; then
 		cat -- "$cache_file"
 		exit 0
@@ -93,6 +94,11 @@ fi
 # node without this script naming a version manager or a home-relative path.
 # Resolving the chain to its end instead lands inside `lib/node_modules`, which
 # has no node beside it.
+#
+# The result is preferred over whatever node PATH already carries, because a
+# distro node older than the launcher's engine fails where its own node works.
+# Finding none is not an error: a Codex installed as a native binary needs no
+# node, so the launch still goes ahead and reports its own failure.
 find_node_dir() {
 	local path="$1" dir target hops=0
 
@@ -114,16 +120,8 @@ find_node_dir() {
 	done
 }
 
-if ! command -v node >/dev/null 2>&1; then
-	node_dir="$(find_node_dir "$codex_bin")"
-	if [[ -z "$node_dir" ]]; then
-		printf 'node not found on PATH or beside %s\n' "$codex_bin" >&2
-		if [[ -s "$cache_file" ]]; then
-			cat -- "$cache_file"
-			exit 0
-		fi
-		exit 69
-	fi
+node_dir="$(find_node_dir "$codex_bin")"
+if [[ -n "$node_dir" ]]; then
 	export PATH="$node_dir:$PATH"
 fi
 
