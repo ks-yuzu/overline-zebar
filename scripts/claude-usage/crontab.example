@@ -3,5 +3,15 @@
 # cron does not load an interactive shell, so `claude` is usually not on PATH.
 # Point CLAUDE_USAGE_CLAUDE_BIN at the CLI (adjust the path for your install),
 # or add its directory to the crontab PATH instead.
+#
+# To also emit node_exporter textfile collector output, add
+# CLAUDE_USAGE_TEXTFILE_PATH alongside CLAUDE_USAGE_CLAUDE_BIN below, e.g.
+# CLAUDE_USAGE_TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/claude_usage.prom
+# That directory is only an example: node_exporter has no default for it, so use
+# whatever `--collector.textfile.directory` was given. It has to exist already
+# and be writable by the cron user - the helper does not create it, and when it
+# cannot write there it logs one line per run while the cache refresh itself
+# still succeeds. The output carries account labels; see
+# docs/ai-usage-integration.md before widening who can read it.
 @reboot     CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
 */5 * * * * CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
