@@ -249,6 +249,37 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(textfile.read_text(), "old metrics\n")
             self.assertEqual(textfile.stat().st_mtime_ns, old_mtime)
 
+    def test_screen_capture_decodes_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            commands = home / "commands"
+            commands.mkdir()
+            expect = commands / "expect"
+            expect.write_text(r'''#!/bin/sh
+session=$(date -d '+5 minutes' '+%-I:%M%p')
+week=$(date -d '+7 days' '+%b %-d, %-I:%M%p')
+printf 'Current session\n7%% used\nResets \302\240%s (Asia/Tokyo)\nCurrent week (all models)\n44%% used\nResets %s (Asia/Tokyo)\n' "$session" "$week" > "$3"
+''')
+            expect.chmod(0o755)
+            claude = commands / "claude"
+            claude.write_text("#!/bin/sh\n")
+            claude.chmod(0o755)
+            env = os.environ.copy() | {
+                "HOME": str(home),
+                "PATH": f"{commands}:{os.environ['PATH']}",
+                "LC_ALL": "C",
+                "PYTHONCOERCECLOCALE": "0",
+                "PYTHONUTF8": "0",
+                "CLAUDE_USAGE_SOURCE": "screen",
+                "CLAUDE_USAGE_CLAUDE_BIN": str(claude),
+                "CLAUDE_USAGE_CACHE_DIR": str(home / "cache"),
+            }
+            result = subprocess.run([SCRIPT, "--force"], env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertNotIn("\ufffd", output["current_session"]["resets_at_display"])
+            self.assertIn("resets_at", output["current_session"])
+
     def test_cached_only_is_read_only_and_ignores_refresh_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

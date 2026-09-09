@@ -949,8 +949,7 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | `exited with 127`                                   | 既定distributionにhelperが無い。`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
-| `required command not found: expect`（exit 69）     | Claude helperの依存不足。`expect`を導入する                                |
-| `Claude executable not found`（exit 69）            | cronのPATHに`claude`が無い。`CLAUDE_USAGE_CLAUDE_BIN`で明示する            |
+| `required executable not found: expect or claude`（exit 70） | Claude helperの依存不足。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
 | `Codex executable not found`（exit 69）             | cronのPATHに`codex`が無い。`CODEX_USAGE_CODEX_BIN`で明示する               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
@@ -960,7 +959,7 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 widgetは`--`のままになる。`env`は`argsRegex`の対象外なので、`WSL_UTF8`を
 足しても`zpack.json`の変更は要らない。
 
-exit codeの読み分けは次のとおり。`0`・`64`・`66`・`69`はhelperが返したもので、
+exit codeの読み分けは次のとおり。`0`・`64`・`66`・`69`・`70`・`73`はhelperが返したもので、
 それ以外は`wsl.exe`が返したものである。widgetはhelperのstderrと`wsl.exe`の
 stdoutの両方をerror messageへ載せる。
 

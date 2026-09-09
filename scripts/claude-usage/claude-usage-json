@@ -563,7 +563,7 @@ def main(argv):
                         if retry_windows:
                             mode, windows = "api", retry_windows
                     if not mode:
-                        text = capture.read_text(errors="replace")
+                        text = capture.read_text(encoding="utf-8", errors="replace")
                         windows, text = screen_windows(text)
                         if windows.get("session") and windows.get("week"):
                             mode = "screen"
