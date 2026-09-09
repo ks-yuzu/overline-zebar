@@ -314,7 +314,7 @@ def atomic_write(path, data, mode):
 def account_labels(path=None):
     try:
         account_file = path or Path.home() / ".claude.json"
-        data = json.loads(account_file.read_text())
+        data = json.loads(account_file.read_bytes())
         account = data["oauthAccount"]
         labels = {
             "organization_id": account["organizationUuid"],
@@ -322,7 +322,7 @@ def account_labels(path=None):
             "user_email": account["emailAddress"],
             "user_id": data["userID"],
         }
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError):
         return {}
     return labels if all(isinstance(value, str) and value for value in labels.values()) else {}
 
@@ -575,8 +575,8 @@ def main(argv):
         if len(windows["model_labels"]) > 1:
             print(f"claude usage: {len(windows['model_labels'])} per-model weekly windows; none recorded", file=sys.stderr)
         try:
-            previous = json.loads(cache.read_text()) if cache.exists() else {}
-        except (OSError, json.JSONDecodeError):
+            previous = json.loads(cache.read_bytes()) if cache.exists() else {}
+        except (OSError, ValueError):
             previous = {}
         output = build_output(mode, windows, text or "", previous, cache_dir / "samples.ndjson")
         data = (json.dumps(output, separators=(",", ":"), sort_keys=True) + "\n").encode()

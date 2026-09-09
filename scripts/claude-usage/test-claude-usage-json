@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "claude-usage-json"
+sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader("claude_usage_json", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 usage = importlib.util.module_from_spec(spec)
@@ -54,6 +56,8 @@ class ApiTests(unittest.TestCase):
                 "user_id": "user",
             })
             path.write_text(json.dumps({"oauthAccount": {}, "userID": "user"}))
+            self.assertEqual(usage.account_labels(path), {})
+            path.write_bytes(b'{"userID": "\xff"}')
             self.assertEqual(usage.account_labels(path), {})
 
     def test_redirects_are_not_followed_with_the_oauth_header(self):
@@ -181,13 +185,16 @@ class ResetTests(unittest.TestCase):
         self.assertIsNotNone(usage.normalize_reset("2:30am", "America/New_York", "session", now))
 
 
+C_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+
+
 class EndToEndTests(unittest.TestCase):
-    def run_script(self, home, url, textfile=None, cache_dir=None):
+    def run_script(self, home, url, textfile=None, cache_dir=None, extra=None):
         env = os.environ.copy() | {
             "HOME": str(home),
             "CLAUDE_USAGE_API_URL": url,
             "CLAUDE_USAGE_CACHE_DIR": str(cache_dir or home / ".cache/claude-usage-json"),
-        }
+        } | (extra or {})
         if textfile:
             env["CLAUDE_USAGE_TEXTFILE_PATH"] = str(textfile)
         return subprocess.run([SCRIPT, "--force"], env=env, text=True, capture_output=True)
@@ -279,6 +286,70 @@ printf 'Current session\n7%% used\nResets \302\240%s (Asia/Tokyo)\nCurrent week 
             output = json.loads(result.stdout)
             self.assertNotIn("\ufffd", output["current_session"]["resets_at_display"])
             self.assertIn("resets_at", output["current_session"])
+
+    def test_account_identity_reads_as_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            # The real file carries prompt history, so a non-ASCII byte is the
+            # normal case rather than the exception.
+            (home / ".claude.json").write_bytes(json.dumps({
+                "oauthAccount": {
+                    "organizationUuid": "organization",
+                    "accountUuid": "account",
+                    "emailAddress": "user@example.test",
+                },
+                "userID": "user",
+                "tip": "50% promo \u00b7 clau.de",
+            }, ensure_ascii=False).encode("utf-8"))
+            textfile = home / "collector/claude.prom"
+            textfile.parent.mkdir()
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri(), textfile, extra=C_LOCALE)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('user_email="user@example.test"', textfile.read_text())
+
+    def test_previous_cache_reads_as_utf8_when_the_locale_is_c(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            # What the helper this replaced left behind: raw UTF-8 rather than
+            # escapes. Read through the locale it stops the run before the
+            # cache is rewritten, so every later run stops in the same place.
+            cache.write_bytes(json.dumps({
+                "history": [{
+                    # 14日の保持窓の内側に置く。固定値だと窓が過ぎた日に落ちる。
+                    "recorded_at": int(dt.datetime.now().timestamp()) - 3600,
+                    "session_used_percent": 1, "week_used_percent": 2,
+                    "session_resets_at": "2026-09-09T04:00:00+09:00",
+                    "week_resets_at": "2026-09-14T09:00:00+09:00",
+                    "week_model_label": "Fable\u00b75.1",
+                    "week_model_used_percent": 3,
+                    "week_model_resets_at": "2026-09-14T09:00:00+09:00",
+                }],
+            }, ensure_ascii=False).encode("utf-8"))
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri(), extra=C_LOCALE)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["history"][0]["week_model_label"],
+                             "Fable\u00b75.1")
+
+    def test_unreadable_previous_cache_does_not_stop_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.prepare_home(home)
+            cache = home / ".cache/claude-usage-json/usage.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_bytes(b'{"history": [{"week_model_label": "\xff"}]}')
+            endpoint = home / "endpoint.json"
+            endpoint.write_bytes(json.dumps(reading()).encode())
+            result = self.run_script(home, endpoint.as_uri())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(json.loads(result.stdout)["history"]), 1)
 
     def test_cached_only_is_read_only_and_ignores_refresh_settings(self):
         with tempfile.TemporaryDirectory() as directory:
