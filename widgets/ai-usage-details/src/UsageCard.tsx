@@ -96,10 +96,11 @@ export default function UsageCard({
           <Clock3 className="h-3 w-3" />
           <span>{reset}</span>
         </div>
-        {/* Indented to the reset it qualifies, and only ever one line: the
-            card below it has no room to give. */}
+        {/* Indented to the reset it qualifies, and set no larger than it: the
+            theme's xs is 10px, so an arbitrary 11px reads as the louder of the
+            two lines. Only ever one line, too - the card below has no room. */}
         {projection && (
-          <span className="truncate pl-[18px] text-[11px]" title={projection}>
+          <span className="truncate pl-[18px] text-xs" title={projection}>
             {projection}
           </span>
         )}
