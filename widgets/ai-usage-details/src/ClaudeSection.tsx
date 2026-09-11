@@ -231,8 +231,17 @@ export default function ClaudeSection({
   const dailyModelUsage = weekModel
     ? buildDailyUsage(weekModelSamples, historyRange)
     : undefined;
-  /* All models only. The scoped window is two views of one quantity, and the
-     chip leaves it out of its projection for that reason. */
+  const sessionProjection = usageProjection(
+    {
+      usedPercent: data.current_session.used_percent,
+      resetsAt: data.current_session.resets_at
+        ? Date.parse(data.current_session.resets_at)
+        : Number.NaN,
+      windowSeconds: SESSION_WINDOW_SECONDS,
+    },
+    now,
+    data.current_session.timezone
+  );
   const weekProjection = usageProjection(
     {
       usedPercent: data.current_week.used_percent,
@@ -244,6 +253,21 @@ export default function ClaudeSection({
     now,
     data.current_week.timezone
   );
+  /* The chip folds this into the all-models projection because one bar cannot
+     say which quota it is following. A chart can draw both. */
+  const weekModelProjection = weekModel
+    ? usageProjection(
+        {
+          usedPercent: weekModel.used_percent,
+          resetsAt: weekModel.resets_at
+            ? Date.parse(weekModel.resets_at)
+            : Number.NaN,
+          windowSeconds: WEEK_WINDOW_SECONDS,
+        },
+        now,
+        weekModel.timezone
+      )
+    : undefined;
   const sessionPeaks = buildWindowPeaks(sessionSamples, {
     ...historyRange,
     now: now / 1000,
@@ -266,6 +290,7 @@ export default function ClaudeSection({
       <div className="grid min-h-0 grid-cols-2 gap-2">
         <UsageCard
           label="5H session"
+          projection={sessionProjection?.text}
           reset={`Resets in ${formatSessionReset(data.current_session.resets_at, now)}`}
           thresholds={thresholds}
           usedPercent={data.current_session.used_percent}
@@ -300,6 +325,7 @@ export default function ClaudeSection({
             label="5H"
             paceGuide={sessionRange.started}
             points={sessionHistory}
+            projection={sessionProjection?.point}
             startAt={sessionRange.startAt}
             viewWidth={CHART_WIDTH_HALF}
           />
@@ -322,6 +348,7 @@ export default function ClaudeSection({
             projection={weekProjection?.point}
             secondaryLabel={weekModel?.label}
             secondaryPoints={weekModelHistory}
+            secondaryProjection={weekModelProjection?.point}
             startAt={weekRange.startAt}
             viewWidth={CHART_WIDTH_HALF}
           />

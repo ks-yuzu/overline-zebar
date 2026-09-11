@@ -1,4 +1,5 @@
 import {
+  formatRemaining,
   projectWindowUsage,
   usableTimeZone,
   windowExhaustionAt,
@@ -6,12 +7,11 @@ import {
 import type { UsageWindow } from '@overline-zebar/ui';
 
 /**
- * A window that resets several times a day is back before a projection can be
- * acted on, and its card already carries the reset as a countdown. Both the
- * line and the wording are gated here rather than at each call site, so the
- * two cannot come to differ about which windows are worth projecting.
+ * A window this short carries its reset as a countdown rather than a date, and
+ * the projection has to read the same way: a card that counts down to its
+ * reset and names a date for running out is read as two different clocks.
  */
-const MIN_PROJECTED_WINDOW_SECONDS = 24 * 60 * 60;
+const RELATIVE_WINDOW_SECONDS = 24 * 60 * 60;
 
 function formatMoment(epochMs: number, timeZone: string | undefined) {
   return new Intl.DateTimeFormat('ja-JP', {
@@ -37,8 +37,8 @@ export type UsageProjection = {
 
 /**
  * What the pace so far says about the rest of the window, for both the card
- * and the chart. Undefined where there is nothing worth saying: too short a
- * window, or one too young to extrapolate from.
+ * and the chart. Undefined where there is nothing worth saying: a window with
+ * nothing spent, or one too young to extrapolate from.
  *
  * The two readings are one call so that the moment the line crosses 100% is
  * the moment the card names.
@@ -48,7 +48,6 @@ export function usageProjection(
   now: number,
   timeZone?: string
 ): UsageProjection | undefined {
-  if (window.windowSeconds < MIN_PROJECTED_WINDOW_SECONDS) return undefined;
   /* Nothing spent is no pace to carry forward. The reset such a window reports
      is still sliding - `windowTrendRange` refuses to pin its axis to it for
      that reason - so a point placed at it lands outside the axis on show.
@@ -60,13 +59,18 @@ export function usageProjection(
   if (value === null) return undefined;
 
   const exhaustsAt = windowExhaustionAt(window, now);
-  return exhaustsAt === null
-    ? {
-        point: { recordedAt: window.resetsAt / 1000, value },
-        text: `~${Math.round(100 - value)}% left at reset`,
-      }
-    : {
-        point: { recordedAt: exhaustsAt / 1000, value: 100 },
-        text: `Runs out ~${formatMoment(exhaustsAt, timeZone)}`,
-      };
+  if (exhaustsAt === null) {
+    return {
+      point: { recordedAt: window.resetsAt / 1000, value },
+      text: `~${Math.round(100 - value)}% left at reset`,
+    };
+  }
+
+  return {
+    point: { recordedAt: exhaustsAt / 1000, value: 100 },
+    text:
+      window.windowSeconds < RELATIVE_WINDOW_SECONDS
+        ? `Runs out in ${formatRemaining(exhaustsAt, now)}`
+        : `Runs out ~${formatMoment(exhaustsAt, timeZone)}`,
+  };
 }

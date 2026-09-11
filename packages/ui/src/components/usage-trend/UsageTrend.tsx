@@ -32,6 +32,8 @@ type Props = {
    * the one named beside the chart cannot come out at different times.
    */
   projection?: TrendPoint;
+  /** The same for `secondaryPoints`, which carries its own quota and pace. */
+  secondaryProjection?: TrendPoint;
   /** A second quantity on the same axis, measured the same way. */
   secondaryPoints?: TrendPoint[];
   secondaryLabel?: string;
@@ -77,6 +79,7 @@ export default function UsageTrend({
   projection,
   secondaryPoints,
   secondaryLabel,
+  secondaryProjection,
   startAt,
   viewWidth = DEFAULT_WIDTH,
 }: Props) {
@@ -99,24 +102,26 @@ export default function UsageTrend({
       .map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
       .join(' ');
   const coordinates = sampled.map(project);
-  const secondaryCoordinates = secondaryPoints
-    ? downsample(secondaryPoints).map(project)
-    : [];
+  const sampledSecondary = secondaryPoints ? downsample(secondaryPoints) : [];
+  const secondaryCoordinates = sampledSecondary.map(project);
   const linePath = pathOf(coordinates);
   const secondaryPath = pathOf(secondaryCoordinates);
   const lastCoordinate = coordinates.at(-1);
   const lastSecondaryCoordinate = secondaryCoordinates.at(-1);
-  const lastPoint = sampled.at(-1);
   /* A series already at 100 has nowhere to run, and a point behind the last
      sample would draw the line back into the window it has left. */
-  const projectionEnd =
-    projection &&
-    lastPoint &&
-    lastPoint.value < 100 &&
-    projection.recordedAt > lastPoint.recordedAt
-      ? projection
+  const carriedOn = (
+    from: TrendPoint | undefined,
+    to: TrendPoint | undefined
+  ) =>
+    from && to && from.value < 100 && to.recordedAt > from.recordedAt
+      ? project(to)
       : undefined;
-  const projectionCoordinate = projectionEnd && project(projectionEnd);
+  const projectionCoordinate = carriedOn(sampled.at(-1), projection);
+  const secondaryProjectionCoordinate = carriedOn(
+    sampledSecondary.at(-1),
+    secondaryProjection
+  );
 
   return (
     <div>
@@ -126,7 +131,11 @@ export default function UsageTrend({
             secondaryLabel && secondaryCoordinates.length > 0
               ? `, ${pointsLabel} and ${secondaryLabel}`
               : ''
-          }${projectionCoordinate ? ', with the pace so far carried on' : ''}`}
+          }${
+            projectionCoordinate || secondaryProjectionCoordinate
+              ? ', with the pace so far carried on'
+              : ''
+          }`}
           className="w-full"
           style={{ height: HEIGHT }}
           role="img"
@@ -183,28 +192,30 @@ export default function UsageTrend({
             />
           )}
           <g clipPath={`url(#${clipId})`}>
-            {lastCoordinate && projectionEnd && projectionCoordinate && (
-              <>
-                <path
-                  d={pathOf([lastCoordinate, projectionCoordinate])}
-                  fill="none"
-                  opacity="0.75"
-                  stroke={SERIES_PRIMARY}
-                  strokeDasharray="3 3"
-                  strokeLinecap="round"
-                  strokeWidth="1.5"
-                />
-                {projectionEnd.value >= 100 && (
-                  <circle
-                    cx={projectionCoordinate.x}
-                    cy={projectionCoordinate.y}
-                    fill="none"
-                    r="2.5"
-                    stroke={SERIES_PRIMARY}
-                    strokeWidth="1.2"
-                  />
-                )}
-              </>
+            {lastCoordinate && projectionCoordinate && (
+              <path
+                d={pathOf([lastCoordinate, projectionCoordinate])}
+                fill="none"
+                opacity="0.75"
+                stroke={SERIES_PRIMARY}
+                strokeDasharray="3 3"
+                strokeLinecap="round"
+                strokeWidth="1.5"
+              />
+            )}
+            {lastSecondaryCoordinate && secondaryProjectionCoordinate && (
+              <path
+                d={pathOf([
+                  lastSecondaryCoordinate,
+                  secondaryProjectionCoordinate,
+                ])}
+                fill="none"
+                opacity="0.75"
+                stroke={SERIES_SECONDARY}
+                strokeDasharray="3 3"
+                strokeLinecap="round"
+                strokeWidth="1.5"
+              />
             )}
             {coordinates.length >= 2 && (
               <path
