@@ -22,7 +22,8 @@
     "build": "tsc && tailwindcss -i ./src/index.css -o ./dist/index.css",
     "check-types": "tsc --noEmit",
     "dev": "tailwindcss -i ./src/index.css -o ./dist/index.css --watch",
-    "lint": "eslint src --max-warnings 0"
+    "lint": "eslint src --max-warnings 0",
+    "test": "tsc && node test-usage-series.mjs && node test-usage-status.mjs && node test-usage-projection.mjs"
   },
   "dependencies": {
     "@base-ui-components/react": "1.0.0-beta.2",

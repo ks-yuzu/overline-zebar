@@ -319,7 +319,7 @@ export default function ClaudeSection({
             paceGuide={weekRange.started}
             points={weekHistory}
             pointsLabel="all models"
-            projection={weekProjection}
+            projection={weekProjection?.point}
             secondaryLabel={weekModel?.label}
             secondaryPoints={weekModelHistory}
             startAt={weekRange.startAt}

@@ -25,14 +25,13 @@ type Props = {
   /** Legend text for `points`. */
   pointsLabel?: string;
   /**
-   * Continues `points` at the pace so far, as a dashed line to the end of the
-   * axis. `exhaustsAt` is when that pace reaches 100%, in epoch seconds; the
-   * line stops there rather than running along the top of the plot.
+   * Where the pace so far leads, drawn as a dashed continuation of the line:
+   * the point it reaches 100% at, or where it lands at the end of the axis.
    *
-   * The moment is passed in rather than derived here, so the crossing drawn
-   * and the one named beside the chart cannot come out at different times.
+   * The point is passed in rather than derived here, so the crossing drawn and
+   * the one named beside the chart cannot come out at different times.
    */
-  projection?: { value: number; exhaustsAt?: number };
+  projection?: TrendPoint;
   /** A second quantity on the same axis, measured the same way. */
   secondaryPoints?: TrendPoint[];
   secondaryLabel?: string;
@@ -108,20 +107,16 @@ export default function UsageTrend({
   const lastCoordinate = coordinates.at(-1);
   const lastSecondaryCoordinate = secondaryCoordinates.at(-1);
   const lastPoint = sampled.at(-1);
-  /* A series already at 100 has nowhere to run, and an exhaustion behind the
-     last sample would draw the line back into the window it has left. */
+  /* A series already at 100 has nowhere to run, and a point behind the last
+     sample would draw the line back into the window it has left. */
   const projectionEnd =
-    projection && lastPoint && lastPoint.value < 100
-      ? projection.exhaustsAt !== undefined
-        ? { recordedAt: projection.exhaustsAt, value: 100 }
-        : { recordedAt: endAt, value: projection.value }
-      : undefined;
-  const projectionCoordinate =
-    projectionEnd &&
+    projection &&
     lastPoint &&
-    projectionEnd.recordedAt > lastPoint.recordedAt
-      ? project(projectionEnd)
+    lastPoint.value < 100 &&
+    projection.recordedAt > lastPoint.recordedAt
+      ? projection
       : undefined;
+  const projectionCoordinate = projectionEnd && project(projectionEnd);
 
   return (
     <div>
@@ -188,7 +183,7 @@ export default function UsageTrend({
             />
           )}
           <g clipPath={`url(#${clipId})`}>
-            {lastCoordinate && projectionCoordinate && (
+            {lastCoordinate && projectionEnd && projectionCoordinate && (
               <>
                 <path
                   d={pathOf([lastCoordinate, projectionCoordinate])}
@@ -199,7 +194,7 @@ export default function UsageTrend({
                   strokeLinecap="round"
                   strokeWidth="1.5"
                 />
-                {projection?.exhaustsAt !== undefined && (
+                {projectionEnd.value >= 100 && (
                   <circle
                     cx={projectionCoordinate.x}
                     cy={projectionCoordinate.y}

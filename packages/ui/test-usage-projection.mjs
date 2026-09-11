@@ -7,10 +7,9 @@
 // a pace that never reaches 100 - only exist here, so this is where they can
 // fail.
 //
-// Runs against the built output, so build packages/ui first:
+// Runs against the built output, which the test script compiles first:
 //
-//   CI=1 corepack pnpm --filter @overline-zebar/ui build
-//   node packages/ui/test-usage-projection.mjs
+//   CI=1 corepack pnpm --filter @overline-zebar/ui test
 
 import {
   projectWindowUsage,

@@ -336,7 +336,7 @@ export default function CodexSection({
                 label={label}
                 paceGuide={range.started}
                 points={history}
-                projection={getProjection(window, now)}
+                projection={getProjection(window, now)?.point}
                 startAt={range.startAt}
                 viewWidth={plotWidth}
               />

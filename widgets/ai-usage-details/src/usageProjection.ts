@@ -25,10 +25,12 @@ function formatMoment(epochMs: number, timeZone: string | undefined) {
 }
 
 export type UsageProjection = {
-  /** Where the window lands at its reset, for the chart to run the line to. */
-  value: number;
-  /** When 100% is reached, in epoch seconds as the chart's axis reads them. */
-  exhaustsAt?: number;
+  /**
+   * The point the chart runs its dashed line to, in epoch seconds as the
+   * axis reads them: where 100% is reached, or where the window lands at its
+   * reset when it is not.
+   */
+  point: { recordedAt: number; value: number };
   /** The same projection as the card's second line. */
   text: string;
 };
@@ -53,10 +55,12 @@ export function usageProjection(
 
   const exhaustsAt = windowExhaustionAt(window, now);
   return exhaustsAt === null
-    ? { value, text: `~${Math.round(100 - value)}% left at reset` }
+    ? {
+        point: { recordedAt: window.resetsAt / 1000, value },
+        text: `~${Math.round(100 - value)}% left at reset`,
+      }
     : {
-        value,
-        exhaustsAt: exhaustsAt / 1000,
+        point: { recordedAt: exhaustsAt / 1000, value: 100 },
         text: `Runs out ~${formatMoment(exhaustsAt, timeZone)}`,
       };
 }
