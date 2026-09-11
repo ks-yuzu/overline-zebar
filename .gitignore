@@ -30,3 +30,7 @@ public/geistMono
 
 # Windows reserved device names
 nul
+
+# Python bytecode
+__pycache__/
+*.pyc

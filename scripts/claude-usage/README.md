@@ -27,7 +27,12 @@ install -Dm755 scripts/claude-usage/claude-usage-json \
 
 State is stored in `$HOME/.cache/claude-usage-json/`. A successful JSON
 response from the endpoint is also retained byte-for-byte as
-`api-response.json`. Both files are replaced atomically and use mode `0600`.
+`api-response.json`, and the same bytes are kept in `api-responses/` — the
+newest 4032, which is a fortnight of five-minute runs, the span the samples
+themselves keep. A reading that turns out to be wrong shows up days later as a
+shape in the chart, and by then the latest response alone says nothing about
+it. Set `CLAUDE_USAGE_API_RESPONSE_KEEP` to keep a different number. All of
+these are replaced atomically and use mode `0600`.
 For development, set `CLAUDE_USAGE_CACHE_DIR` to a separate directory; this
 keeps the normal cache untouched.
 
@@ -177,6 +182,7 @@ Environment variables provide optional overrides:
 - `CLAUDE_USAGE_API_TIMEOUT` (default: `15` seconds)
 - `CLAUDE_USAGE_TIMEOUT` (default: `45` seconds)
 - `CLAUDE_USAGE_CACHE_TTL` (default: `300` seconds)
+- `CLAUDE_USAGE_API_RESPONSE_KEEP` (default: `4032` retained responses)
 - `CLAUDE_USAGE_CACHE_DIR`
 - `CLAUDE_USAGE_CLAUDE_BIN`
 - `CLAUDE_USAGE_SESSION_ID`
