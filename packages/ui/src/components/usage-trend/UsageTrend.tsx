@@ -196,7 +196,7 @@ export default function UsageTrend({
               <path
                 d={pathOf([lastCoordinate, projectionCoordinate])}
                 fill="none"
-                opacity="0.45"
+                opacity="0.5"
                 stroke={SERIES_PRIMARY}
                 strokeDasharray="2 5"
                 strokeLinecap="round"
@@ -210,7 +210,7 @@ export default function UsageTrend({
                   secondaryProjectionCoordinate,
                 ])}
                 fill="none"
-                opacity="0.45"
+                opacity="0.5"
                 stroke={SERIES_SECONDARY}
                 strokeDasharray="2 5"
                 strokeLinecap="round"
