@@ -1,107 +1,137 @@
-// Checks when a window's pace is allowed to name an exhaustion, and when it is
-// not.
+// Checks how the panel reads a window's recent pace, and when it refuses to.
 //
-// The projection is the part of the panel with no wrong answer visible on the
-// screen: a moment stated confidently from two samples looks exactly like one
-// stated from a fortnight. The rules that keep it quiet - too young a window,
-// a pace that never reaches 100 - only exist here, so this is where they can
-// fail.
+// This pace is deliberately not the one the chip draws: the chip averages the
+// whole window, this measures the last seventh of it. Two surfaces answering
+// with different paces is the intent, so what has to hold here is that this
+// one is measured correctly and stays quiet when the samples cannot support
+// it - a moment stated confidently from a gap in the history looks exactly
+// like one stated from a full day of it.
 //
 // Runs against the built output, which the test script compiles first:
 //
 //   CI=1 corepack pnpm --filter @overline-zebar/ui test
 
-import {
-  projectWindowUsage,
-  windowExhaustionAt,
-} from './dist/utils/usageProjection.js';
+import { consumedOver } from './dist/utils/usageSeries.js';
+import { windowPace } from './dist/utils/usageProjection.js';
 
-const HOUR = 60 * 60 * 1000;
-const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const HOUR_MS = 60 * 60 * 1000;
+const HOUR = 60 * 60;
+const WEEK_SECONDS = 7 * 24 * HOUR;
 const NOW = 1_600_000_000_000;
+const NOW_SECONDS = NOW / 1000;
+/** The window every sample below belongs to, unless it says otherwise. */
+const END = NOW_SECONDS + 48 * HOUR;
 
-/** A weekly window `elapsedHours` old, reporting `usedPercent`. */
-function week(elapsedHours, usedPercent) {
+/** Readings at `[hoursAgo, value]`, oldest first. */
+function series(entries) {
+  return entries.map(([hoursAgo, value, windowEndsAt = END]) => ({
+    recordedAt: NOW_SECONDS - hoursAgo * HOUR,
+    value,
+    windowEndsAt,
+  }));
+}
+
+const lastDay = { startAt: NOW_SECONDS - 24 * HOUR, endAt: NOW_SECONDS };
+
+/** A weekly window `usedPercent` spent, resetting in 48 hours. */
+function week(usedPercent) {
   return {
     usedPercent,
-    resetsAt: NOW + (WEEK_SECONDS * 1000 - elapsedHours * HOUR),
+    resetsAt: NOW + 48 * HOUR_MS,
     windowSeconds: WEEK_SECONDS,
   };
 }
 
-/** Hours from now until the window is spent, to one decimal place. */
-function hoursUntilExhausted(window) {
-  const at = windowExhaustionAt(window, NOW);
-  return at === null ? null : Math.round(((at - NOW) / HOUR) * 10) / 10;
-}
-
 const cases = [
   {
-    // Half the window gone at half the quota reaches 100 exactly at the reset,
-    // and a reset is not an exhaustion: the quota lasted.
-    name: 'a pace that lands on 100 at the reset names no exhaustion',
-    run: () => hoursUntilExhausted(week(84, 50)),
-    expect: null,
+    name: 'the span is what was spent across it',
+    run: () => consumedOver(series([[48, 50], [24, 60], [0, 70]]), lastDay),
+    expect: 10,
   },
   {
-    name: 'a pace inside the quota names no exhaustion',
-    run: () => hoursUntilExhausted(week(84, 40)),
-    expect: null,
+    // A fall inside a window is the quota being handed back, never spending.
+    name: 'only rises count',
+    run: () => consumedOver(series([[24, 60], [12, 40], [0, 50]]), lastDay),
+    expect: 10,
   },
   {
-    // 84 hours for 70% is 1.2 hours per percent, so the last 30 take 36.
-    name: 'a pace past 100 names when the quota runs out',
-    run: () => hoursUntilExhausted(week(84, 70)),
-    expect: 36,
-  },
-  {
-    // The window is 168 hours, so a tenth of it is 16.8.
-    name: 'a window too young to extrapolate from names nothing',
-    run: () => [
-      hoursUntilExhausted(week(16, 90)),
-      hoursUntilExhausted(week(17, 90)),
-    ],
-    expect: [null, 1.9],
-  },
-  {
-    name: 'an unused window names nothing',
-    run: () => hoursUntilExhausted(week(84, 0)),
-    expect: null,
-  },
-  {
-    name: 'a window with no reset time names nothing',
+    // 60 is the baseline, then a window opens at 5 and climbs to 20.
+    name: 'a window opening inside the span counts its first reading whole',
     run: () =>
-      hoursUntilExhausted({
-        usedPercent: 90,
-        resetsAt: Number.NaN,
-        windowSeconds: WEEK_SECONDS,
-      }),
+      consumedOver(
+        series([[24, 60], [12, 5, END + 7 * 24 * HOUR], [0, 20, END + 7 * 24 * HOUR]]),
+        lastDay
+      ),
+    expect: 20,
+  },
+  {
+    name: 'a span with no reading at or before its start is not measured',
+    run: () => consumedOver(series([[12, 40], [0, 50]]), lastDay),
     expect: null,
   },
   {
-    // What keeps the card and the chip from telling two stories: the moment
-    // exists exactly when the level the chip draws passes 100.
-    name: 'an exhaustion exists exactly where the chip projects past 100',
-    run: () =>
-      [50, 70, 100].map((usedPercent) => {
-        const window = week(84, usedPercent);
-        return [
-          projectWindowUsage(window, NOW) > 100,
-          windowExhaustionAt(window, NOW) !== null,
-        ];
-      }),
-    expect: [
-      [false, false],
-      [true, true],
-      [true, true],
-    ],
+    name: 'a span holding only its baseline is not measured',
+    run: () => consumedOver(series([[24, 60]]), lastDay),
+    expect: null,
   },
   {
-    // A quota reported spent ran out at the reading, not at some point still
-    // to come: the pace that spent it reaches 100 exactly where it now is.
-    name: 'a spent window names the reading itself',
-    run: () => hoursUntilExhausted(week(84, 100)),
-    expect: 0,
+    // 10 points a day with 48 hours to run adds 20 to the 70 already spent.
+    name: 'a pace inside the quota says where the window lands',
+    run: () => {
+      const pace = windowPace(week(70), series([[24, 60], [0, 70]]), NOW);
+      return [Math.round(pace.valueAtReset), pace.exhaustsAt];
+    },
+    expect: [90, null],
+  },
+  {
+    // The same pace against 85 spent: the last 15 points take 36 hours.
+    name: 'a pace past the quota says when it runs out',
+    run: () => {
+      const pace = windowPace(week(85), series([[24, 75], [0, 85]]), NOW);
+      return [
+        Math.round(pace.valueAtReset),
+        Math.round((pace.exhaustsAt - NOW) / HOUR_MS),
+      ];
+    },
+    expect: [105, 36],
+  },
+  {
+    // Spending that stopped before the frame opened is not this window's pace.
+    name: 'only the last seventh of the window sets the pace',
+    run: () => {
+      const pace = windowPace(
+        week(70),
+        series([[72, 20], [48, 70], [24, 70], [0, 70]]),
+        NOW
+      );
+      return [pace.valueAtReset, pace.exhaustsAt];
+    },
+    expect: [70, null],
+  },
+  {
+    name: 'a window whose samples do not reach back over the frame is not read',
+    run: () => windowPace(week(70), series([[12, 60], [0, 70]]), NOW),
+    expect: null,
+  },
+  {
+    name: 'a window already past its reset is not read',
+    run: () =>
+      windowPace(
+        { usedPercent: 70, resetsAt: NOW - HOUR_MS, windowSeconds: WEEK_SECONDS },
+        series([[24, 60], [0, 70]]),
+        NOW
+      ),
+    expect: null,
+  },
+  {
+    name: 'a window with no reset time is not read',
+    run: () =>
+      windowPace(
+        { usedPercent: 70, resetsAt: Number.NaN, windowSeconds: WEEK_SECONDS },
+        series([[24, 60], [0, 70]]),
+        NOW
+      ),
+    expect: null,
   },
 ];
 

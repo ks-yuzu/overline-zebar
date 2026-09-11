@@ -77,13 +77,18 @@ function getTrendRange(
 }
 
 /** Reads Codex's window shape into the shared projection. */
-function getProjection(window: CodexUsageWindow, now: number) {
+function getProjection(
+  window: CodexUsageWindow,
+  samples: UsageHistorySample[],
+  now: number
+) {
   return usageProjection(
     {
       usedPercent: window.usedPercent,
       resetsAt: window.resetsAt * 1000,
       windowSeconds: window.windowDurationMins * 60,
     },
+    samples,
     now
   );
 }
@@ -292,7 +297,13 @@ export default function CodexSection({
           <UsageCard
             key={`${window.windowDurationMins}-${window.resetsAt}`}
             label={`${formatWindowDuration(window.windowDurationMins)} window`}
-            projection={getProjection(window, now)?.text}
+            projection={
+              getProjection(
+                window,
+                selectWindowSamples(data.history, window.windowDurationMins),
+                now
+              )?.text
+            }
             reset={formatReset(window, now)}
             thresholds={thresholds}
             usedPercent={window.usedPercent}
@@ -336,7 +347,7 @@ export default function CodexSection({
                 label={label}
                 paceGuide={range.started}
                 points={history}
-                projection={getProjection(window, now)?.point}
+                projection={getProjection(window, samples, now)?.point}
                 startAt={range.startAt}
                 viewWidth={plotWidth}
               />

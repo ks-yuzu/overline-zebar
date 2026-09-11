@@ -14,6 +14,7 @@ export type { UsageHistorySegment } from './components/usage-history/UsageHistor
 export {
   buildDailyUsage,
   buildWindowPeaks,
+  consumedOver,
   hasJustReset,
   isSameWindow,
   selectCurrentWindow,
@@ -21,11 +22,12 @@ export {
   windowTrendRange,
 } from './utils/usageSeries';
 export {
+  PACE_FRAME_DIVISOR,
   projectWindowUsage,
-  windowExhaustionAt,
+  windowPace,
   worstProjection,
 } from './utils/usageProjection';
-export type { UsageWindow } from './utils/usageProjection';
+export type { QuotaWindow, WindowPace } from './utils/usageProjection';
 export { usableTimeZone } from './utils/timeZone';
 export {
   formatRemaining,

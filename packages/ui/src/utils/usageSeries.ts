@@ -118,6 +118,59 @@ function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
  * both share one axis. For a rolling window the line also falls as usage ages
  * out, so the bars stay meaningful while that identity no longer holds.
  */
+/**
+ * How much of the quota was spent over a span, in percentage points.
+ *
+ * Only rises count, and the first reading of a window that opens inside the
+ * span counts whole: the same accounting as the daily bars, because it is the
+ * same question asked of a different range. A span may cross a reset - a pace
+ * is a property of the work, not of the quota it happens to be charged to -
+ * which is why the windows have to be told apart rather than subtracted.
+ *
+ * Null where the span has no baseline: without a reading at or before its
+ * start there is nothing to measure the first rise from, and a span that looks
+ * quiet is indistinguishable from one the collector never covered.
+ */
+export function consumedOver(
+  samples: UsageHistorySample[],
+  range: { startAt: number; endAt: number }
+): number | null {
+  const sorted = samples
+    .slice()
+    .sort((a, b) => a.recordedAt - b.recordedAt)
+    .filter((sample) => sample.recordedAt <= range.endAt);
+
+  // Walked back by hand: the package compiles against es2022, which has no
+  // findLastIndex.
+  let baselineIndex = -1;
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    if ((sorted[index]?.recordedAt ?? Infinity) <= range.startAt) {
+      baselineIndex = index;
+      break;
+    }
+  }
+  /* One guard, not two. `slice(-1)` would hand back the newest reading on its
+     own when no baseline was found, so a separate check for that could never
+     change the answer - and a rule that cannot change an answer cannot be
+     tested. A baseline and at least one reading after it, or there is nothing
+     to measure a rise from. */
+  const span = baselineIndex < 0 ? [] : sorted.slice(baselineIndex);
+  if (span.length < 2) return null;
+
+  let consumed = 0;
+  splitIntoWindows(span).forEach((usageWindow, index) => {
+    // The span's own baseline for the window it starts in; a window that opens
+    // inside the span opens empty, so its first reading is all consumption.
+    let previous = index === 0 ? (usageWindow.samples[0]?.value ?? 0) : 0;
+    for (const sample of usageWindow.samples) {
+      consumed += Math.max(0, sample.value - previous);
+      previous = sample.value;
+    }
+  });
+
+  return consumed;
+}
+
 export function buildDailyUsage(
   samples: UsageHistorySample[],
   range: { startAt: number; endAt: number }

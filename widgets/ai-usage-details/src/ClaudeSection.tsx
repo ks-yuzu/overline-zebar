@@ -239,6 +239,7 @@ export default function ClaudeSection({
         : Number.NaN,
       windowSeconds: SESSION_WINDOW_SECONDS,
     },
+    sessionSamples,
     now,
     data.current_session.timezone
   );
@@ -250,6 +251,7 @@ export default function ClaudeSection({
         : Number.NaN,
       windowSeconds: WEEK_WINDOW_SECONDS,
     },
+    weekSamples,
     now,
     data.current_week.timezone
   );
@@ -264,6 +266,7 @@ export default function ClaudeSection({
             : Number.NaN,
           windowSeconds: WEEK_WINDOW_SECONDS,
         },
+        weekModelSamples,
         now,
         weekModel.timezone
       )

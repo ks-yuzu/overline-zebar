@@ -1,10 +1,9 @@
 import {
   formatRemaining,
-  projectWindowUsage,
   usableTimeZone,
-  windowExhaustionAt,
+  windowPace,
 } from '@overline-zebar/ui';
-import type { UsageWindow } from '@overline-zebar/ui';
+import type { QuotaWindow, UsageHistorySample } from '@overline-zebar/ui';
 
 /**
  * A window this short carries its reset as a countdown rather than a date, and
@@ -36,41 +35,37 @@ export type UsageProjection = {
 };
 
 /**
- * What the pace so far says about the rest of the window, for both the card
- * and the chart. Undefined where there is nothing worth saying: a window with
- * nothing spent, or one too young to extrapolate from.
+ * What the recent pace says about the rest of the window, for both the card
+ * and the chart. Undefined where there is nothing to say - the samples do not
+ * cover the frame the pace is measured over, or the reset is already past.
  *
- * The two readings are one call so that the moment the line crosses 100% is
- * the moment the card names.
+ * The two readings come from one call so that the moment the line crosses
+ * 100% is the moment the card names.
  */
 export function usageProjection(
-  window: UsageWindow,
+  window: QuotaWindow,
+  samples: UsageHistorySample[],
   now: number,
   timeZone?: string
 ): UsageProjection | undefined {
-  /* Nothing spent is no pace to carry forward. The reset such a window reports
-     is still sliding - `windowTrendRange` refuses to pin its axis to it for
-     that reason - so a point placed at it lands outside the axis on show.
-     `windowExhaustionAt` already declines these, as its own tests hold; this
-     is the same rule for the branch that has no exhaustion to decline. */
-  if (window.usedPercent <= 0) return undefined;
+  const pace = windowPace(window, samples, now);
+  if (!pace) return undefined;
 
-  const value = projectWindowUsage(window, now);
-  if (value === null) return undefined;
-
-  const exhaustsAt = windowExhaustionAt(window, now);
-  if (exhaustsAt === null) {
+  if (pace.exhaustsAt === null) {
     return {
-      point: { recordedAt: window.resetsAt / 1000, value },
-      text: `${Math.round(100 - value)}% left at reset`,
+      point: {
+        recordedAt: window.resetsAt / 1000,
+        value: pace.valueAtReset,
+      },
+      text: `${Math.round(Math.max(0, 100 - pace.valueAtReset))}% left at reset`,
     };
   }
 
   return {
-    point: { recordedAt: exhaustsAt / 1000, value: 100 },
+    point: { recordedAt: pace.exhaustsAt / 1000, value: 100 },
     text:
       window.windowSeconds < RELATIVE_WINDOW_SECONDS
-        ? `Runs out in ${formatRemaining(exhaustsAt, now)}`
-        : `Runs out ${formatMoment(exhaustsAt, timeZone)}`,
+        ? `Runs out in ${formatRemaining(pace.exhaustsAt, now)}`
+        : `Runs out ${formatMoment(pace.exhaustsAt, timeZone)}`,
   };
 }

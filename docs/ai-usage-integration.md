@@ -329,9 +329,18 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - **今のpaceが続いた場合の予測を、card下端の1行とwindow内graphの破線で示す。**
   同じ`usageProjection`の1回の呼び出しが両方へ渡るため、**graphが100%を横切る
   時刻とcardが述べる時刻は同じものになる。**
-  - 予測値そのものはchipの背景と同じ`projectWindowUsage`から得る。したがって
-    「cardが枯渇時刻を述べる」ことと「chipの塗りが100%を超える」ことは同値である。
-    片方だけが警告する状態を作らない。
+  - **paceはwindowの直近1/7の実測消費から出す** (`windowPace` /
+    `PACE_FRAME_DIVISOR`)。7Dなら直近24時間、5Hなら直近約43分。
+  - **chipの`projectWindowUsage` (window全体の平均) とは別の定義である。**
+    これは意図した差で、1本のbarしか持たないchipはwindow全体で均すのが妥当であり、
+    直近と過去を描き分けられるgraphはそうではない。**したがって「cardが枯渇時刻を
+    述べる」ことと「chipの塗りが100%を超える」ことは同値ではない。**
+  - **測る枠はresetを跨いでよい。**paceは仕事の性質であって、その消費がどのquotaに
+    付け替えられたかとは別である。windowへ切り詰めると、resetの直後は数分の履歴から
+    外挿することになる。
+  - 消費量の数え方は日別棒と同じ`consumedOver`による。**上げ幅だけを数え、window内で
+    開いた最初のreadingは全量を数える。**下げはquotaが配り直された分であり、
+    使った分ではない。
   - 100%へ達するなら`Runs out MM/DD HH:mm`、達しないなら`N% left at reset`。
     行を消さずに意味を切り替える。消すと、欠損なのか余裕があるのか読めない。
   - **概算である旨の記号は付けない。**予測であることは文脈から明らかで、
@@ -339,8 +348,9 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - **5Hと7Dで同じlogicを使う。**windowの長さによらずpaceの出し方は変えない。
     ただし**1日未満のwindowは文言を相対にする** (`RELATIVE_WINDOW_SECONDS`)。
     resetを残り時間で数えているcardが枯渇だけ日付で言うと、2つの時計に読める。
-  - **window開始直後は出さない** (`MIN_ELAPSED_FRACTION`)。経過割合が小さいほど
-    除算が暴れる。外れた予測は無表示より害が大きい。
+  - **枠を覆うsampleが無ければ出さない。**枠の開始時点以前のreadingが無ければ
+    最初の上げ幅を測る基準が無く、静かだった枠と収集が届いていない枠を区別できない。
+    外れた予測は無表示より害が大きい。
   - graphの破線は最後の実測点から伸ばし、100%に達する点で止める。上端を横に走らせると
     「その水準を保つ」という別の意味に読める。
   - **model別のweekly windowにも破線を引く。**chipがこれを`worstProjection`から
