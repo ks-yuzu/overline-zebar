@@ -49,6 +49,12 @@ export function usageProjection(
   timeZone?: string
 ): UsageProjection | undefined {
   if (window.windowSeconds < MIN_PROJECTED_WINDOW_SECONDS) return undefined;
+  /* Nothing spent is no pace to carry forward. The reset such a window reports
+     is still sliding - `windowTrendRange` refuses to pin its axis to it for
+     that reason - so a point placed at it lands outside the axis on show.
+     `windowExhaustionAt` already declines these, as its own tests hold; this
+     is the same rule for the branch that has no exhaustion to decline. */
+  if (window.usedPercent <= 0) return undefined;
 
   const value = projectWindowUsage(window, now);
   if (value === null) return undefined;
