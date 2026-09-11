@@ -312,14 +312,17 @@ def record_api_response(cache_dir, response, keep):
 
     A reading that turns out to be wrong is only visible days later, as a shape
     in the fortnight chart, and by then the single latest response says nothing
-    about it. The retained copies are the raw bytes, because a misread is as
-    likely to be in how the response was parsed as in what it said.
+    about it. The copies are the raw bytes rather than anything derived from
+    them, because a reading can be wrong in which part of an answer it was
+    taken from. A body that did not parse is not kept: it produced no reading,
+    and so there is none to look up.
     """
     try:
         atomic_write(cache_dir / "api-response.json", response, 0o600)
     except OSError as error:
+        # Not a reason to skip the archive: the two are separate copies, and
+        # the archive is the one a questioned reading is looked up in.
         print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
-        return
 
     kept = cache_dir / "api-responses"
     try:
@@ -339,15 +342,19 @@ def record_api_response(cache_dir, response, keep):
         print(f"claude usage: cannot retain the API response: {error}", file=sys.stderr)
         return
 
-    try:
-        # `existing` is what was there before this run wrote, so the response
-        # just written is not among the candidates and needs no rule of its own.
-        for path in existing[:max(0, len(existing) - keep + 1)]:
+    # `existing` is what was there before this run wrote, so the response just
+    # written is not among the candidates and needs no rule of its own.
+    for path in existing[:max(0, len(existing) - keep + 1)]:
+        try:
             path.unlink()
-    except OSError as error:
-        # Its own line again: both copies are on disk, and the directory
-        # quietly growing past the only bound it has is its own problem.
-        print(f"claude usage: cannot prune retained API responses: {error}", file=sys.stderr)
+        except OSError as error:
+            # One entry that cannot go must not stop the ones that can. It is
+            # always the oldest, so it is always first, and a pass that stopped
+            # there would stop in the same place on every later run while the
+            # directory grew past the only bound it has. Its own line, too:
+            # both copies are written by now, and calling this a caching
+            # failure would send the reader to the endpoint.
+            print(f"claude usage: cannot prune {path.name}: {error}", file=sys.stderr)
 
 
 def atomic_write(path, data, mode):

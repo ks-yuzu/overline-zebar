@@ -52,8 +52,11 @@ endpointから受け取った有効なJSON応答は同じdirectoryの
 7%の出所を特定できなかった。整形せず原文で残すのは、誤りが応答の中身ではなく
 読み出し側にある可能性を潰せないためである。
 
+**JSONとして読めなかった応答は残さない。**readingを生まないため、辿るべき
+readingが無い。endpointが壊れた理由を追うのは別の目的である。
+
 保持数は `CLAUDE_USAGE_API_RESPONSE_KEEP` で変えられる。上限の4032件で8.2MB、
-剪定の`glob`と整列は実測58ms (drvfs上)。これが走るのはliveに取得した時、つまり
+剪定の一覧取得と整列は実測58ms (drvfs上)。これが走るのはliveに取得した時、つまり
 `--force`か、cacheが`CLAUDE_USAGE_CACHE_TTL`を過ぎた素の実行である。**widgetが叩く
 `--cached-only`は触れない。**素の実行を繰り返すと保持枠を消費するため、疑わしい
 readingを追う時は`--cached-only`で読むこと。
@@ -67,6 +70,13 @@ readingを追う時は`--cached-only`で読むこと。
 自分自身ではないため、1 tick先送りされるだけで、時計が遅れている間じゅう保持される
 post-stepのfileは常に1件だけになる。連番は書いた順そのものなので、時計と無関係に
 正しく並ぶ。
+
+**消せない1件で剪定を止めない。**削除は1件ずつ捕まえて次へ進む。詰まるfileは常に
+最古＝常に先頭なので、一括で中断すると以後どの実行も同じ場所で止まり、
+**剪定が恒久的に効かなくなる。**drvfs上でWindows側が掴んだfileなどが引き金になる。
+
+**`api-response.json`の書き込み失敗でarchiveを諦めない。**別々の写しであり、
+疑わしいreadingを引くのはarchiveの方である。
 
 開発時など通常のcacheを分離したい場合は、`CLAUDE_USAGE_CACHE_DIR` に別directoryを
 指定する。この指定だけでJSON cache、raw response、history、lockと、既定の作業directory
