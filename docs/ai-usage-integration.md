@@ -45,6 +45,17 @@ live取得とwidget表示を分離する理由は次のとおりです。
 endpointから受け取った有効なJSON応答は同じdirectoryの
 `api-response.json` に原文のbyte列で保存する。
 
+**同じbyte列を`api-responses/`にも残し、直近4032件を保持する。** 5分ごとのcronで
+14日分、samplesと同じ長さである。**歪んだreadingは数日後に14Dのgraphの形として
+初めて見えるため、最新1件だけでは出所を辿れない。**実際、週次の使用率が1日のうちに
+7%と37%を4往復し、日次消費が143%に膨らんだ事例で、生応答が残っておらず
+7%の出所を特定できなかった。整形せず原文で残すのは、誤りが応答の中身ではなく
+読み出し側にある可能性を潰せないためである。
+
+保持数は `CLAUDE_USAGE_API_RESPONSE_KEEP` で変えられる。上限の4032件で8.2MB、
+剪定の`glob`と整列は実測58ms (drvfs上)。これが走るのは`--force`の経路だけで、
+widgetが叩く`--cached-only`は触れない。
+
 開発時など通常のcacheを分離したい場合は、`CLAUDE_USAGE_CACHE_DIR` に別directoryを
 指定する。この指定だけでJSON cache、raw response、history、lockと、既定の作業directory
 が分離される。

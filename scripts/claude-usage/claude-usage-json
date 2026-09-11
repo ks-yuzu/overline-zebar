@@ -299,6 +299,29 @@ def fetch_api(url, timeout, credentials):
     return "ok", windows, raw
 
 
+def record_api_response(cache_dir, response, keep):
+    """Keeps the response just read, and the ones before it.
+
+    A reading that turns out to be wrong is only visible days later, as a shape
+    in the fortnight chart, and by then the single latest response says nothing
+    about it. The retained copies are the raw bytes, because a misread is as
+    likely to be in how the response was parsed as in what it said.
+    """
+    try:
+        atomic_write(cache_dir / "api-response.json", response, 0o600)
+        kept = cache_dir / "api-responses"
+        kept.mkdir(mode=0o700, exist_ok=True)
+        # The name is the key, so it carries enough of the capture time to be
+        # unique on its own rather than by how far apart runs happen to fall.
+        # It sorts oldest first, which is the order the pruning below reads.
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        atomic_write(kept / f"{stamp}.json", response, 0o600)
+        for path in sorted(kept.glob("*.json"))[:-keep]:
+            path.unlink()
+    except OSError as error:
+        print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
+
+
 def atomic_write(path, data, mode):
     path = Path(path)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=path.parent)
@@ -497,6 +520,9 @@ def settings():
             "ttl": positive_env("CLAUDE_USAGE_CACHE_TTL", 300),
             "quiet": positive_env("CLAUDE_USAGE_SETTLE_QUIET", 4),
             "cap": positive_env("CLAUDE_USAGE_SETTLE_CAP", 25),
+            # A fortnight of five-minute runs: the same span the samples keep,
+            # so a response is still there when its sample is questioned.
+            "api_response_keep": positive_env("CLAUDE_USAGE_API_RESPONSE_KEEP", 4032),
             "api_url": env_value("CLAUDE_USAGE_API_URL", "https://api.anthropic.com/api/oauth/usage")}
 
 
@@ -537,10 +563,7 @@ def main(argv):
         if config["source"] != "screen":
             outcome, windows, api_response = fetch_api(config["api_url"], config["api_timeout"], credentials)
             if api_response is not None:
-                try:
-                    atomic_write(cache_dir / "api-response.json", api_response, 0o600)
-                except OSError as error:
-                    print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
+                record_api_response(cache_dir, api_response, config["api_response_keep"])
             if windows:
                 mode = "api"
         if config["source"] == "screen" or (not mode and outcome != "wait"):
@@ -560,10 +583,7 @@ def main(argv):
                             config["api_url"], config["api_timeout"], credentials
                         )
                         if api_response is not None:
-                            try:
-                                atomic_write(cache_dir / "api-response.json", api_response, 0o600)
-                            except OSError as error:
-                                print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
+                            record_api_response(cache_dir, api_response, config["api_response_keep"])
                         if retry_windows:
                             mode, windows = "api", retry_windows
                     if not mode:
