@@ -62,7 +62,7 @@ def reply(request_id=2, primary=24, secondary=45):
 
 
 class ArchiveTests(unittest.TestCase):
-    def run_helper(self, cache_dir, stub, body, keep=None):
+    def run_helper(self, cache_dir, stub, body, keep=None, path_prefix=None):
         env = os.environ.copy() | {
             "CODEX_USAGE_CACHE_DIR": str(cache_dir),
             "CODEX_USAGE_CODEX_BIN": str(stub),
@@ -70,6 +70,8 @@ class ArchiveTests(unittest.TestCase):
         }
         if keep is not None:
             env["CODEX_USAGE_API_RESPONSE_KEEP"] = str(keep)
+        if path_prefix is not None:
+            env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
         return subprocess.run([SCRIPT, "--force"], env=env, text=True,
                               capture_output=True)
 
@@ -149,6 +151,10 @@ class ArchiveTests(unittest.TestCase):
             for _ in range(4):
                 result = self.run_helper(cache_dir, stub, reply(), keep=3)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                # Counting it would make the run try to remove it, every run,
+                # for as long as it sits there. Silence is the evidence that it
+                # was never a candidate.
+                self.assertNotIn("cannot prune", result.stderr)
 
             self.assertTrue(stray.is_dir())
             self.assertEqual(len(self.retained(cache_dir)), 3)
@@ -189,6 +195,42 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(len(self.retained(cache_dir)), 1)
             self.assertTrue((seeded / "notes.json").exists())
+
+    def test_one_removal_that_fails_does_not_stop_the_rest(self):
+        # The stuck entry is the oldest, so it is first in the pass. Stopping
+        # there would stop in the same place on every later run, and the
+        # directory would grow for good. `rm` is replaced rather than the file
+        # made stubborn, because a regular file in a writable directory cannot
+        # be made to refuse without privileges.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = self.prepare(root)
+            cache_dir = root / "cache"
+            for _ in range(5):
+                self.run_helper(cache_dir, stub, reply(), keep=5)
+
+            stuck = self.retained(cache_dir)[0]
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            rm = bin_dir / "rm"
+            rm.write_text(
+                "#!/bin/sh\n"
+                "for arg in \"$@\"; do\n"
+                f"  [ \"$arg\" = \"{stuck}\" ] && exit 1\n"
+                "done\n"
+                "exec /bin/rm \"$@\"\n"
+            )
+            rm.chmod(0o755)
+
+            # 5 kept, so this run has four to drop and the first of them fails.
+            result = self.run_helper(cache_dir, stub, reply(), keep=2,
+                                     path_prefix=str(bin_dir))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cannot prune", result.stderr)
+            self.assertTrue(stuck.exists())
+            # The stuck one, the one the limit keeps, and the one just written.
+            self.assertEqual(len(self.retained(cache_dir)), 3)
 
     def test_a_rejected_keep_stops_the_run_before_it_fetches(self):
         with tempfile.TemporaryDirectory() as directory:
