@@ -62,7 +62,7 @@ export function usageProjection(
   if (exhaustsAt === null) {
     return {
       point: { recordedAt: window.resetsAt / 1000, value },
-      text: `~${Math.round(100 - value)}% left at reset`,
+      text: `${Math.round(100 - value)}% left at reset`,
     };
   }
 
@@ -71,6 +71,6 @@ export function usageProjection(
     text:
       window.windowSeconds < RELATIVE_WINDOW_SECONDS
         ? `Runs out in ${formatRemaining(exhaustsAt, now)}`
-        : `Runs out ~${formatMoment(exhaustsAt, timeZone)}`,
+        : `Runs out ${formatMoment(exhaustsAt, timeZone)}`,
   };
 }

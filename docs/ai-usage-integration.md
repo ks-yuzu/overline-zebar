@@ -332,8 +332,10 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - 予測値そのものはchipの背景と同じ`projectWindowUsage`から得る。したがって
     「cardが枯渇時刻を述べる」ことと「chipの塗りが100%を超える」ことは同値である。
     片方だけが警告する状態を作らない。
-  - 100%へ達するなら`Runs out ~MM/DD HH:mm`、達しないなら`~N% left at reset`。
+  - 100%へ達するなら`Runs out MM/DD HH:mm`、達しないなら`N% left at reset`。
     行を消さずに意味を切り替える。消すと、欠損なのか余裕があるのか読めない。
+  - **概算である旨の記号は付けない。**予測であることは文脈から明らかで、
+    記号は丸め誤差しか表せない。この値の不確かさは丸めではなくpaceにある。
   - **5Hと7Dで同じlogicを使う。**windowの長さによらずpaceの出し方は変えない。
     ただし**1日未満のwindowは文言を相対にする** (`RELATIVE_WINDOW_SECONDS`)。
     resetを残り時間で数えているcardが枯渇だけ日付で言うと、2つの時計に読める。
