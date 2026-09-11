@@ -858,21 +858,19 @@ Claude/Codex chipをクリックし、次を確認する。
 
 ## Cron環境
 
-cronはinteractive shellの初期化を行わない。特にNVMのPATHは通常読み込まれない。
+cronはinteractive shellの初期化を行わないため、そのPATHは対話シェルのものと異なる。
 
-Claude helperは`$HOME/bin/claude`、次にcronから見える`PATH`を探索する。CLIを
-`$HOME/.local/bin`などPATH外へ入れている場合はどちらでも見つからないため、
-cron entryで`CLAUDE_USAGE_CLAUDE_BIN`を指定する。`expect`もcronから見える位置に
-必要である。例は`scripts/claude-usage/crontab.example`にある。
+両helperはCLIを次の順で解決する。helper自身は環境固有のパスを持たない。
 
-Codex helperは次の順で実行ファイルを探索する。
-
-1. `$HOME/bin/codex`
+1. 環境変数 (`CLAUDE_USAGE_CLAUDE_BIN` / `CODEX_USAGE_CODEX_BIN`)
 2. cronから見える`PATH`
-3. `$HOME/.nvm/versions/node/*/bin/codex`
 
-NVM配下で見つけた場合は、同じ`bin` directoryをPATHへ追加してから起動する。
-これにより`#!/usr/bin/env node`もcron環境で解決できる。
+どちらでも見つからなければ失敗し、不足している実行ファイル名をstderrへ出す。
+CLIをPATH外へ入れている場合は、環境変数で指すか、cronから見える位置へ載せる。
+Claude側は`expect`も同様に必要である。例は各`crontab.example`にある。
+
+Codexのrefresh失敗時は、掴んだlauncherのパスをstderrへ出す。
+どのCodexを起動したかが分からないと切り分けができない。
 
 cron jobは正常時のJSONを`/dev/null`へ送り、stderrだけを次のjournal tagへ送る。
 
@@ -950,9 +948,9 @@ journalctl -t claude-usage.cron -t codex-usage.cron --since -30min
 | `exited with 127`                                   | 既定distributionにhelperが無い。`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | distributionが見つからない旨のerror                 | 既定distributionがcacheを更新しているdistributionではない。`wsl -l -v`で確認し`wsl --set-default <name>`、または`config.ts`へ`-d <name>`を戻す |
 | `cache is not available yet`（exit 66）             | cacheが未生成。cron側のlive更新が失敗しているので下の行を確認する          |
-| `required executable not found: expect or claude`（exit 70） | Claude helperの依存不足。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
+| `required executable not found: <名前>`（exit 70） | Claude helperの依存不足。欠けているものが行に出る。`expect`を導入するか、`CLAUDE_USAGE_CLAUDE_BIN`で`claude`を明示する |
+| `Codex executable not usable: <値>`（exit 69） | cronのPATHから`codex`が見えない。`/usr/local/bin`へsymlinkを張るか、`CODEX_USAGE_CODEX_BIN`で明示する。値が出ていればその指定が実行可能でない |
 | `timed out waiting for Claude Code input prompt`    | 起動directoryがtrustされていない。workdirで一度手動trustする               |
-| `Codex executable not found`（exit 69）             | cronのPATHに`codex`が無い。`CODEX_USAGE_CODEX_BIN`で明示する               |
 | 値は出るがstale表示のまま                           | cron停止、またはClaudeが`refresh_status: last_known`を返している           |
 
 `shellExec`はwidgetの`config.ts`と`zpack.json`の`argsRegex`が完全一致した

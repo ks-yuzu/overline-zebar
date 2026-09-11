@@ -31,9 +31,10 @@ Confirm the live refresh and JSON output with:
 codex-usage-json --force
 ```
 
-The helper discovers Codex installed in `$HOME/bin`, the current `PATH`, or an
-NVM installation. This allows the cron job to run without loading an
-interactive shell configuration.
+The helper takes Codex from `CODEX_USAGE_CODEX_BIN`, then from `PATH`, and
+fails when neither names an executable. Because cron sees a different `PATH`
+than an interactive shell, `codex` has to be reachable from it -- a symlink in
+`/usr/local/bin` is enough -- or named by the variable, which wins over `PATH`.
 
 Install the entries in `crontab.example` with `crontab -e`. The cache is stored
 at `$HOME/.cache/codex-usage-json/usage.json`; the main widget reads it once a

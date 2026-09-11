@@ -91,8 +91,8 @@ trustに答えて終了する。これを飛ばすと
 
 ### cronを入れる
 
-`crontab.example`を`crontab -e`へ写す。`claude`のパスは自分の環境に合わせる
-(cronはinteractive shellを読まないため、PATHに載っていない)。
+`crontab.example`を`crontab -e`へ写す。`claude`と`codex`のパスは自分の環境に
+合わせる (cronはinteractive shellを読まないため、PATHに載っていない)。
 
 ```
 @reboot     CLAUDE_USAGE_CLAUDE_BIN="$HOME/.local/bin/claude" /usr/bin/timeout 60s "$HOME/bin/claude-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-usage.cron
@@ -100,6 +100,9 @@ trustに答えて終了する。これを飛ばすと
 @reboot     /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
 */5 * * * * /usr/bin/timeout 30s "$HOME/bin/codex-usage-json" --force 2>&1 >/dev/null | /usr/bin/logger -t codex-usage.cron
 ```
+
+`codex`もcronのPATHから見える必要がある。載っていなければ`/usr/local/bin`へ
+symlinkを張るか、`CODEX_USAGE_CODEX_BIN`を上の行へ足す。
 
 ## 3. fontを入れる
 

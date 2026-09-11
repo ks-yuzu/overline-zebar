@@ -77,41 +77,16 @@ if [[ "$force_refresh" == false ]] && cache_is_fresh; then
 	exit 0
 fi
 
-find_codex_bin() {
-	local candidate discovered=''
-
-	if [[ -x "$HOME/bin/codex" ]]; then
-		printf '%s' "$HOME/bin/codex"
-		return
-	fi
-
-	discovered="$(command -v codex || true)"
-	if [[ -n "$discovered" ]]; then
-		printf '%s' "$discovered"
-		return
-	fi
-
-	# cron does not load NVM's shell initialization. Discover the newest
-	# installed NVM Codex launcher and add its sibling node binary to PATH.
-	for candidate in "$HOME"/.nvm/versions/node/*/bin/codex; do
-		[[ -x "$candidate" ]] || continue
-		discovered="$candidate"
-	done
-	printf '%s' "$discovered"
-}
-
-codex_bin="${CODEX_USAGE_CODEX_BIN:-$(find_codex_bin)}"
+codex_bin="${CODEX_USAGE_CODEX_BIN:-$(command -v codex || true)}"
 if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
-	printf 'Codex executable not found; set CODEX_USAGE_CODEX_BIN\n' >&2
+	printf 'Codex executable not usable: %s; set CODEX_USAGE_CODEX_BIN or put codex on PATH\n' \
+		"${codex_bin:-not found on PATH}" >&2
 	if [[ -s "$cache_file" ]]; then
 		cat -- "$cache_file"
 		exit 0
 	fi
 	exit 69
 fi
-
-codex_bin_dir="${codex_bin%/*}"
-export PATH="$codex_bin_dir:$PATH"
 
 archive_sample() {
 	# Entries repeat a recorded_at when a run lands within 60s of the previous
@@ -272,7 +247,8 @@ refresh_usage() {
 
 if ! refresh_usage; then
 	stop_server
-	printf 'failed to refresh Codex usage; using cached data when available\n' >&2
+	printf 'failed to refresh Codex usage through %s; using cached data when available\n' \
+		"$codex_bin" >&2
 	if [[ -s "$error_file" ]]; then
 		sed -n '1,5p' "$error_file" >&2
 	fi
