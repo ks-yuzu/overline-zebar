@@ -299,6 +299,14 @@ def fetch_api(url, timeout, credentials):
     return "ok", windows, raw
 
 
+# The sequence leads the name so that the archive orders by the order things
+# were written. A clock can step backwards - a host waking from sleep is enough
+# - and ordering by a clock reading would make every run during the lag look
+# like the oldest file in the directory, so each would be dropped by the next.
+# The capture time follows it, for whoever reads the directory.
+RETAINED_RE = re.compile(r"(\d{9})-\d{8}T\d{6}\.\d{6}Z\.json")
+
+
 def record_api_response(cache_dir, response, keep):
     """Keeps the response just read, and the ones before it.
 
@@ -307,32 +315,38 @@ def record_api_response(cache_dir, response, keep):
     about it. The retained copies are the raw bytes, because a misread is as
     likely to be in how the response was parsed as in what it said.
     """
-    kept = cache_dir / "api-responses"
-    # The name is the key, so it carries enough of the capture time to be
-    # unique on its own rather than by how far apart runs happen to fall.
-    # It sorts oldest first, which is the order the pruning below reads.
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    written = kept / f"{stamp}.json"
     try:
         atomic_write(cache_dir / "api-response.json", response, 0o600)
-        kept.mkdir(mode=0o700, exist_ok=True)
-        atomic_write(written, response, 0o600)
     except OSError as error:
         print(f"claude usage: cannot cache API response: {error}", file=sys.stderr)
         return
+
+    kept = cache_dir / "api-responses"
     try:
-        # Everything but the response just written. Sorting by name reads a
-        # clock that can step backwards - a host waking from sleep is enough -
-        # and the newest file would then look like the oldest and be the one
-        # dropped, leaving nothing recorded for exactly the run whose reading
-        # is most worth questioning.
-        older = [path for path in sorted(kept.glob("*.json")) if path != written]
-        for path in older[:max(0, len(older) - keep + 1)]:
+        kept.mkdir(mode=0o700, exist_ok=True)
+        # `mode=` is ignored for a directory that is already there, the same
+        # reason `main` chmods the cache directory it has just made.
+        kept.chmod(0o700)
+        existing = sorted(path for path in kept.iterdir()
+                          if RETAINED_RE.fullmatch(path.name))
+        sequence = 1 + (int(RETAINED_RE.fullmatch(existing[-1].name).group(1))
+                        if existing else 0)
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        atomic_write(kept / f"{sequence:09d}-{stamp}.json", response, 0o600)
+    except OSError as error:
+        # Named apart from the caching: `api-response.json` is current by now,
+        # and saying otherwise sends the reader to the endpoint.
+        print(f"claude usage: cannot retain the API response: {error}", file=sys.stderr)
+        return
+
+    try:
+        # `existing` is what was there before this run wrote, so the response
+        # just written is not among the candidates and needs no rule of its own.
+        for path in existing[:max(0, len(existing) - keep + 1)]:
             path.unlink()
     except OSError as error:
-        # Its own line: both copies are on disk, so naming the caching here
-        # would send the reader to the endpoint while the directory quietly
-        # grows past the only bound it has.
+        # Its own line again: both copies are on disk, and the directory
+        # quietly growing past the only bound it has is its own problem.
         print(f"claude usage: cannot prune retained API responses: {error}", file=sys.stderr)
 
 
