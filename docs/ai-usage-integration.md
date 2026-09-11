@@ -460,6 +460,14 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
 - **開く位置はchipではなくbarの右端を基準にする。**パネルはchipから画面端までの
   余白より広く、chip基準で置くと画面左へはみ出す。加えて、押したchipで位置が
   変わるパネルは2枚に見える。
+  - **幅はbarの幅で頭打ちにする。**1700pxは1366 / 1440のモニタより広く、click時の
+    placementはpresetを上書きするため、上限が無いと左側のproviderが画面外に開いて
+    手が届かない。グラフは自分のviewBoxを持つため縮んで収まる。
+  - 判定にはmonitorのpixelではなく`document.documentElement.scrollWidth`を使う。
+    barはmonitorいっぱいに広がっており、この値は幅やmarginと同じCSS pixelである。
+    `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
+  - 起動は`widgets/main/src/components/aiUsage/panel.ts`の1箇所に置く。どのwidgetを
+    どの大きさでどこへ開くかが2つのchipで割れないようにする。
 - **左右のblockは独立したgridで、同じtrack高さを共有する** (`panelLayout.ts`の
   `SECTION_GRID_ROWS`)。Claudeの7D cardはmodel別の枠を内側に持つぶん背が高く、
   高さを各blockに任せると左右で段の開始位置がずれる。
