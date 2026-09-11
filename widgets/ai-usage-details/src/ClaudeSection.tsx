@@ -17,6 +17,7 @@ import {
 import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
 import SectionHeader from './SectionHeader';
 import UsageCard from './UsageCard';
+import { usageProjection } from './usageProjection';
 import { CHART_WIDTH_HALF, SECTION_GRID_ROWS } from './panelLayout';
 import { hasModelWindow, useClaudeUsage } from './useClaudeUsage';
 import type {
@@ -230,6 +231,19 @@ export default function ClaudeSection({
   const dailyModelUsage = weekModel
     ? buildDailyUsage(weekModelSamples, historyRange)
     : undefined;
+  /* All models only. The scoped window is two views of one quantity, and the
+     chip leaves it out of its projection for that reason. */
+  const weekProjection = usageProjection(
+    {
+      usedPercent: data.current_week.used_percent,
+      resetsAt: data.current_week.resets_at
+        ? Date.parse(data.current_week.resets_at)
+        : Number.NaN,
+      windowSeconds: WEEK_WINDOW_SECONDS,
+    },
+    now,
+    data.current_week.timezone
+  );
   const sessionPeaks = buildWindowPeaks(sessionSamples, {
     ...historyRange,
     now: now / 1000,
@@ -258,6 +272,7 @@ export default function ClaudeSection({
         />
         <UsageCard
           label="7D week"
+          projection={weekProjection?.text}
           reset={`Resets ${formatResetDate(data.current_week)}`}
           scoped={
             weekModel && {
@@ -304,6 +319,7 @@ export default function ClaudeSection({
             paceGuide={weekRange.started}
             points={weekHistory}
             pointsLabel="all models"
+            projection={weekProjection}
             secondaryLabel={weekModel?.label}
             secondaryPoints={weekModelHistory}
             startAt={weekRange.startAt}

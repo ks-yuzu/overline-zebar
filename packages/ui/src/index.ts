@@ -20,6 +20,12 @@ export {
   selectScopedSamples,
   windowTrendRange,
 } from './utils/usageSeries';
+export {
+  projectWindowUsage,
+  windowExhaustionAt,
+  worstProjection,
+} from './utils/usageProjection';
+export type { UsageWindow } from './utils/usageProjection';
 export { usableTimeZone } from './utils/timeZone';
 export {
   formatRemaining,

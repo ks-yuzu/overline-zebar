@@ -24,6 +24,15 @@ type Props = {
   points: TrendPoint[];
   /** Legend text for `points`. */
   pointsLabel?: string;
+  /**
+   * Continues `points` at the pace so far, as a dashed line to the end of the
+   * axis. `exhaustsAt` is when that pace reaches 100%, in epoch seconds; the
+   * line stops there rather than running along the top of the plot.
+   *
+   * The moment is passed in rather than derived here, so the crossing drawn
+   * and the one named beside the chart cannot come out at different times.
+   */
+  projection?: { value: number; exhaustsAt?: number };
   /** A second quantity on the same axis, measured the same way. */
   secondaryPoints?: TrendPoint[];
   secondaryLabel?: string;
@@ -66,6 +75,7 @@ export default function UsageTrend({
   paceGuide = true,
   points,
   pointsLabel = 'usage',
+  projection,
   secondaryPoints,
   secondaryLabel,
   startAt,
@@ -97,6 +107,21 @@ export default function UsageTrend({
   const secondaryPath = pathOf(secondaryCoordinates);
   const lastCoordinate = coordinates.at(-1);
   const lastSecondaryCoordinate = secondaryCoordinates.at(-1);
+  const lastPoint = sampled.at(-1);
+  /* A series already at 100 has nowhere to run, and an exhaustion behind the
+     last sample would draw the line back into the window it has left. */
+  const projectionEnd =
+    projection && lastPoint && lastPoint.value < 100
+      ? projection.exhaustsAt !== undefined
+        ? { recordedAt: projection.exhaustsAt, value: 100 }
+        : { recordedAt: endAt, value: projection.value }
+      : undefined;
+  const projectionCoordinate =
+    projectionEnd &&
+    lastPoint &&
+    projectionEnd.recordedAt > lastPoint.recordedAt
+      ? project(projectionEnd)
+      : undefined;
 
   return (
     <div>
@@ -106,7 +131,7 @@ export default function UsageTrend({
             secondaryLabel && secondaryCoordinates.length > 0
               ? `, ${pointsLabel} and ${secondaryLabel}`
               : ''
-          }`}
+          }${projectionCoordinate ? ', with the pace so far carried on' : ''}`}
           className="w-full"
           style={{ height: HEIGHT }}
           role="img"
@@ -163,6 +188,29 @@ export default function UsageTrend({
             />
           )}
           <g clipPath={`url(#${clipId})`}>
+            {lastCoordinate && projectionCoordinate && (
+              <>
+                <path
+                  d={pathOf([lastCoordinate, projectionCoordinate])}
+                  fill="none"
+                  opacity="0.75"
+                  stroke={SERIES_PRIMARY}
+                  strokeDasharray="3 3"
+                  strokeLinecap="round"
+                  strokeWidth="1.5"
+                />
+                {projection?.exhaustsAt !== undefined && (
+                  <circle
+                    cx={projectionCoordinate.x}
+                    cy={projectionCoordinate.y}
+                    fill="none"
+                    r="2.5"
+                    stroke={SERIES_PRIMARY}
+                    strokeWidth="1.2"
+                  />
+                )}
+              </>
+            )}
             {coordinates.length >= 2 && (
               <path
                 d={linePath}

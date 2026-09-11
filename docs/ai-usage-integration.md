@@ -326,6 +326,22 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   片方にラベルとbaselineが無いと、同じ尺度でも別種のgraphに見える。
 - window開始時の0%からreset時刻の100%まで破線を引き、期間全体で線形消費した
   場合のpace guideとする。実績線が上なら速い消費、下なら遅い消費を示す。
+- **今のpaceが続いた場合の予測を、card下端の1行とwindow内graphの破線で示す。**
+  同じ`usageProjection`の1回の呼び出しが両方へ渡るため、**graphが100%を横切る
+  時刻とcardが述べる時刻は同じものになる。**
+  - 予測値そのものはchipの背景と同じ`projectWindowUsage`から得る。したがって
+    「cardが枯渇時刻を述べる」ことと「chipの塗りが100%を超える」ことは同値である。
+    片方だけが警告する状態を作らない。
+  - 100%へ達するなら`Runs out ~MM/DD HH:mm`、達しないなら`~N% left at reset`。
+    行を消さずに意味を切り替える。消すと、欠損なのか余裕があるのか読めない。
+  - **1日未満のwindowには出さない** (`MIN_PROJECTED_WINDOW_SECONDS`)。予測が
+    使える頃にはresetが近く、cardのreset行が既に残り時間を出している。
+  - **window開始直後は出さない** (`MIN_ELAPSED_FRACTION`)。経過割合が小さいほど
+    除算が暴れる。外れた予測は無表示より害が大きい。
+  - graphの破線は最後の実測点から伸ばし、100%に達する点で止める。上端を横に走らせると
+    「その水準を保つ」という別の意味に読める。
+  - **model別のweekly windowには出さない。**同じ消費を別の窓で見た量であり、
+    chipが`worstProjection`から除いているのと同じ理由による。
 - Claude詳細は3段構成とし、**全段で左を5H、右を7Dに固定する。**
   現在値、window内の推移、14日の推移が同じ列に並び、列が期間を表す。
   - この配置のため幅は920px、高さは650pxとする (Claudeの詳細view)。

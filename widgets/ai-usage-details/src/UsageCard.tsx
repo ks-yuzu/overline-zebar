@@ -15,6 +15,8 @@ type Scoped = {
 
 type Props = {
   label: string;
+  /** What the pace so far says about the rest of the window. */
+  projection?: string;
   reset: string;
   scoped?: Scoped;
   thresholds: Threshold[];
@@ -23,6 +25,7 @@ type Props = {
 
 export default function UsageCard({
   label,
+  projection,
   reset,
   scoped,
   thresholds,
@@ -88,9 +91,18 @@ export default function UsageCard({
       )}
       {/* Pushed to the bottom edge so that the line sits at the same height in
           every card, including the ones with no scoped quota above it. */}
-      <div className="mt-auto flex items-center gap-1.5 text-xs text-text-muted">
-        <Clock3 className="h-3 w-3" />
-        <span>{reset}</span>
+      <div className="mt-auto flex flex-col gap-0.5 text-text-muted">
+        <div className="flex items-center gap-1.5 text-xs">
+          <Clock3 className="h-3 w-3" />
+          <span>{reset}</span>
+        </div>
+        {/* Indented to the reset it qualifies, and only ever one line: the
+            card below it has no room to give. */}
+        {projection && (
+          <span className="truncate pl-[18px] text-[11px]" title={projection}>
+            {projection}
+          </span>
+        )}
       </div>
     </Card>
   );
