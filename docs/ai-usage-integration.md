@@ -53,8 +53,15 @@ endpointから受け取った有効なJSON応答は同じdirectoryの
 読み出し側にある可能性を潰せないためである。
 
 保持数は `CLAUDE_USAGE_API_RESPONSE_KEEP` で変えられる。上限の4032件で8.2MB、
-剪定の`glob`と整列は実測58ms (drvfs上)。これが走るのは`--force`の経路だけで、
-widgetが叩く`--cached-only`は触れない。
+剪定の`glob`と整列は実測58ms (drvfs上)。これが走るのはliveに取得した時、つまり
+`--force`か、cacheが`CLAUDE_USAGE_CACHE_TTL`を過ぎた素の実行である。**widgetが叩く
+`--cached-only`は触れない。**素の実行を繰り返すと保持枠を消費するため、疑わしい
+readingを追う時は`--cached-only`で読むこと。
+
+**名前が整列の鍵なので、直前に書いたfileは剪定の対象から外す。**ホストの復帰などで
+時計が巻き戻ると、その回のfileが最も古い名前になり、書いた直後に自分自身が
+消える。`api-response.json`は更新されるため、失われたことに気付く手段が無い。
+時計が乱れた直後こそreadingが疑われる場面である。
 
 開発時など通常のcacheを分離したい場合は、`CLAUDE_USAGE_CACHE_DIR` に別directoryを
 指定する。この指定だけでJSON cache、raw response、history、lockと、既定の作業directory

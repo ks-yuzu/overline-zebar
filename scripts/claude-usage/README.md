@@ -182,6 +182,7 @@ Environment variables provide optional overrides:
 - `CLAUDE_USAGE_API_TIMEOUT` (default: `15` seconds)
 - `CLAUDE_USAGE_TIMEOUT` (default: `45` seconds)
 - `CLAUDE_USAGE_CACHE_TTL` (default: `300` seconds)
+- `CLAUDE_USAGE_API_RESPONSE_KEEP` (default: `4032` retained responses)
 - `CLAUDE_USAGE_CACHE_DIR`
 - `CLAUDE_USAGE_CLAUDE_BIN`
 - `CLAUDE_USAGE_SESSION_ID`
