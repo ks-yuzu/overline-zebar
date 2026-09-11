@@ -196,11 +196,11 @@ export default function UsageTrend({
               <path
                 d={pathOf([lastCoordinate, projectionCoordinate])}
                 fill="none"
-                opacity="0.55"
+                opacity="0.45"
                 stroke={SERIES_PRIMARY}
-                strokeDasharray="2 4"
+                strokeDasharray="2 5"
                 strokeLinecap="round"
-                strokeWidth="1.25"
+                strokeWidth="1.1"
               />
             )}
             {lastSecondaryCoordinate && secondaryProjectionCoordinate && (
@@ -210,11 +210,11 @@ export default function UsageTrend({
                   secondaryProjectionCoordinate,
                 ])}
                 fill="none"
-                opacity="0.55"
+                opacity="0.45"
                 stroke={SERIES_SECONDARY}
-                strokeDasharray="2 4"
+                strokeDasharray="2 5"
                 strokeLinecap="round"
-                strokeWidth="1.25"
+                strokeWidth="1.1"
               />
             )}
             {coordinates.length >= 2 && (
