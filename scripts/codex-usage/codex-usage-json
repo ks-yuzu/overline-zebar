@@ -14,6 +14,14 @@ if [[ ! "$cache_ttl_seconds" =~ ^[1-9][0-9]*$ ]]; then
 	exit 64
 fi
 
+# A fortnight of five-minute runs: the same span the samples keep, so a
+# response is still there when its sample is questioned.
+api_response_keep="${CODEX_USAGE_API_RESPONSE_KEEP:-4032}"
+if [[ ! "$api_response_keep" =~ ^[1-9][0-9]*$ ]]; then
+	printf 'CODEX_USAGE_API_RESPONSE_KEEP must be a positive integer\n' >&2
+	exit 64
+fi
+
 force_refresh=false
 cached_only=false
 case "${1:-}" in
@@ -32,6 +40,9 @@ cache_file="$cache_dir/usage.json"
 # write, so without this the older history is gone for good and no later
 # rollup can be computed for it. The widget never reads this file.
 samples_file="$cache_dir/samples.ndjson"
+# Raw app-server replies, kept so that a reading questioned days later can be
+# traced back to what was actually said. The widget never reads these either.
+responses_dir="$cache_dir/api-responses"
 lock_file="$cache_dir/update.lock"
 mkdir -p -- "$cache_dir"
 chmod 700 -- "$cache_dir"
@@ -98,6 +109,69 @@ archive_sample() {
 		chmod 600 -- "$samples_file"
 	fi
 	jq -c '.history[-1]' -- "$result_file" >>"$samples_file" 2>/dev/null || return 0
+	return 0
+}
+
+record_api_response() {
+	# A reading that turns out to be wrong is only visible days later, as a
+	# shape in the fortnight chart. Keeping the reply it came from is what lets
+	# the question be answered then; the rollup alone cannot say where a value
+	# came from. Recorded verbatim apart from the newline `read` consumed,
+	# because a reading can be wrong in which part of a reply it was taken from.
+	local response="$1"
+	local dir="$responses_dir"
+
+	if ! mkdir -p -- "$dir" || ! chmod 700 -- "$dir"; then
+		printf 'codex usage: cannot retain the API response\n' >&2
+		return 0
+	fi
+
+	# The sequence leads the name so the archive orders by the order things
+	# were written. A clock can step backwards - a host waking from sleep is
+	# enough - and ordering by a clock reading would make every run during the
+	# lag look like the oldest entry, so each would be dropped by the next.
+	local -a existing=()
+	local path base
+	for path in "$dir"/*.json; do
+		[[ -f "$path" ]] || continue
+		base="${path##*/}"
+		[[ "$base" =~ ^[0-9]{9}-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z\.json$ ]] || continue
+		existing+=("$path")
+	done
+
+	local sequence=1
+	if ((${#existing[@]} > 0)); then
+		base="${existing[-1]##*/}"
+		# Base 10 outright: nine digits with leading zeros would read as octal.
+		sequence=$((10#${base%%-*} + 1))
+	fi
+
+	local stamp target tmp
+	stamp="$(date -u +%Y%m%dT%H%M%S.%6NZ)"
+	target="$(printf '%s/%09d-%s.json' "$dir" "$sequence" "$stamp")"
+	if ! tmp="$(mktemp "$dir/.api-response.XXXXXX")"; then
+		printf 'codex usage: cannot retain the API response\n' >&2
+		return 0
+	fi
+	if ! printf '%s\n' "$response" >"$tmp" || ! chmod 600 -- "$tmp" ||
+		! mv -f -- "$tmp" "$target"; then
+		rm -f -- "$tmp"
+		printf 'codex usage: cannot retain the API response\n' >&2
+		return 0
+	fi
+
+	# `existing` is what was there before this run wrote, so the reply just
+	# written is not among the candidates and needs no rule of its own.
+	local drop=$((${#existing[@]} - api_response_keep + 1))
+	local index
+	for ((index = 0; index < drop; index++)); do
+		# One entry that cannot go must not stop the ones that can. It is
+		# always the oldest, so it is always first, and a pass that stopped
+		# there would stop in the same place on every later run while the
+		# directory grew past the only bound it has.
+		rm -f -- "${existing[index]}" ||
+			printf 'codex usage: cannot prune %s\n' "${existing[index]##*/}" >&2
+	done
 	return 0
 }
 
@@ -179,6 +253,8 @@ refresh_usage() {
 	if ! read_response 2; then
 		return 1
 	fi
+
+	record_api_response "$response_line"
 
 	generated_epoch="$(date +%s)"
 	history_source='/dev/null'

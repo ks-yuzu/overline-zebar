@@ -15,6 +15,20 @@ model.
 Each successful live refresh also stores a usage sample for every reported
 rate-limit window. Samples are retained for 14 days in the existing cache.
 
+The app-server reply behind each refresh is kept too, in `api-responses/` — the
+newest 4032, which is a fortnight of five-minute runs, the span the samples
+themselves keep. A reading that turns out to be wrong shows up days later as a
+shape in the chart, and by then the rollup alone cannot say where the value came
+from. Set `CODEX_USAGE_API_RESPONSE_KEEP` to keep a different number. The files
+are mode `0600` in a `0700` directory, and the widget never reads them.
+
+`test-codex-usage-json` drives the helper end to end against a stand-in
+app-server (`CODEX_USAGE_CODEX_BIN`):
+
+```sh
+python3 scripts/codex-usage/test-codex-usage-json
+```
+
 ## WSL setup
 
 Install `jq` and `flock`, then install the helper:

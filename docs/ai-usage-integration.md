@@ -55,6 +55,16 @@ endpointから受け取った有効なJSON応答は同じdirectoryの
 **JSONとして読めなかった応答は残さない。**readingを生まないため、辿るべき
 readingが無い。endpointが壊れた理由を追うのは別の目的である。
 
+**Codex helperも同じ形で生応答を残す。**保持先は`$HOME/.cache/codex-usage-json/api-responses/`、
+保持数は `CODEX_USAGE_API_RESPONSE_KEEP` (既定4032)。**出所についてこれまで得られた
+唯一の手がかりはCodex側から出た**ため、ここで残らないと次の発生でも辿れない。
+
+- 残すのは`account/rateLimits/read`の応答行そのもの。`read`が取り込んだ改行だけが違う
+- 連番順・剪定・権限の規則はClaude helperと同じ
+- **名前がパターンに合わないfileは候補にしない。**連番は最新の名前から読むため、
+  手で置かれた`.json`が1つあると算術エラーで`set -e`が実行ごと落とす
+- 通常のfile以外 (同名のdirectoryなど) も候補にしない
+
 保持数は `CLAUDE_USAGE_API_RESPONSE_KEEP` で変えられる。上限の4032件で8.2MB、
 剪定の一覧取得と整列は実測58ms (drvfs上)。これが走るのはliveに取得した時、つまり
 `--force`か、cacheが`CLAUDE_USAGE_CACHE_TTL`を過ぎた素の実行である。**widgetが叩く
@@ -1080,6 +1090,7 @@ CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
+python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 node packages/ui/test-usage-series.mjs
 node packages/ui/test-usage-status.mjs
