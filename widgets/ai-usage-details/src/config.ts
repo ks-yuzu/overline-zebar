@@ -11,3 +11,10 @@ export const CLAUDE_USAGE_COMMAND: UsageCommand = {
   // Without this, `wsl.exe` reports a failed launch as UTF-16LE.
   env: { WSL_UTF8: '1' },
 };
+
+export const CODEX_USAGE_COMMAND: UsageCommand = {
+  program: 'wsl.exe',
+  args: ['--', 'sh', '-c', '$HOME/bin/codex-usage-json --cached-only'],
+  // Without this, `wsl.exe` reports a failed launch as UTF-16LE.
+  env: { WSL_UTF8: '1' },
+};

@@ -1,30 +1,35 @@
-import { useWidgetSetting } from '@overline-zebar/config';
 import type { Threshold } from '@overline-zebar/config';
 import {
   Card,
-  Progress,
   UsageHistory,
   UsageTrend,
   buildDailyUsage,
   buildWindowPeaks,
+  formatRemaining,
+  formatUpdatedAt,
   hasJustReset,
+  readUsageStatus,
   selectCurrentWindow,
   windowTrendRange,
-  clampPercentage,
-  getThresholdColor,
-  ServiceIcon,
 } from '@overline-zebar/ui';
-import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
-import { Clock3, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import * as zebar from 'zebar';
+import type {
+  TrendPoint,
+  UsageHistorySample,
+  UsageStatus,
+} from '@overline-zebar/ui';
+import SectionHeader from './SectionHeader';
+import UsageCard from './UsageCard';
+import {
+  CHART_WIDTH_FULL,
+  CHART_WIDTH_HALF,
+  SECTION_GRID_ROWS,
+} from './panelLayout';
 import { useCodexUsage } from './useCodexUsage';
 import type {
   CodexUsageHistorySample,
   CodexUsageWindow,
 } from './useCodexUsage';
 
-const HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 /**
  * A window that resets several times a day is read one window at a time; one
  * that spans days would leave only a handful of bars over the retained
@@ -41,21 +46,9 @@ function formatWindowDuration(minutes: number) {
   return `${minutes}M`;
 }
 
-function formatRemaining(resetsAt: number, now: number) {
-  const remainingMinutes = Math.max(
-    0,
-    Math.ceil((resetsAt * 1000 - now) / 60_000)
-  );
-  const hours = Math.floor(remainingMinutes / 60);
-  const minutes = remainingMinutes % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
-}
-
 function formatReset(window: CodexUsageWindow, now: number) {
   if (window.windowDurationMins < 24 * 60) {
-    return `Resets in ${formatRemaining(window.resetsAt, now)}`;
+    return `Resets in ${formatRemaining(window.resetsAt * 1000, now)}`;
   }
 
   return `Resets ${new Intl.DateTimeFormat('ja-JP', {
@@ -65,19 +58,6 @@ function formatReset(window: CodexUsageWindow, now: number) {
     minute: '2-digit',
     hour12: false,
   }).format(new Date(window.resetsAt * 1000))}`;
-}
-
-function formatUpdatedAt(generatedAt: string) {
-  const date = new Date(generatedAt);
-  if (Number.isNaN(date.getTime())) return generatedAt;
-  return new Intl.DateTimeFormat('ja-JP', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date);
 }
 
 /** Reads Codex's window shape into the shared range. */
@@ -141,7 +121,7 @@ function HistoryCard({
   if (perDay) {
     const daily = buildDailyUsage(samples, historyRange);
     return (
-      <Card className="shrink-0 p-2.5">
+      <Card className="p-2.5">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-text-muted">
             [14D] {label} usage trend and daily usage
@@ -172,7 +152,7 @@ function HistoryCard({
     windowSeconds: window.windowDurationMins * 60,
   });
   return (
-    <Card className="shrink-0 p-2.5">
+    <Card className="p-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-text-muted">
           [14D] {label} usage peak per window
@@ -192,163 +172,121 @@ function HistoryCard({
   );
 }
 
-function UsageCard({
-  now,
-  thresholds,
-  window,
-}: {
+type Props = {
+  className?: string;
+  historyRange: { startAt: number; endAt: number };
   now: number;
   thresholds: Threshold[];
-  window: CodexUsageWindow;
+};
+
+function Placeholder({
+  className,
+  message,
+  status,
+  subtitle,
+  updatedAt,
+}: {
+  className?: string;
+  message: string;
+  status?: UsageStatus;
+  subtitle: string;
+  updatedAt?: string;
 }) {
-  const label = formatWindowDuration(window.windowDurationMins);
-  const usage = Math.round(clampPercentage(window.usedPercent));
-  const thresholdColor = getThresholdColor(usage, thresholds);
-  const textColor = `var(${thresholdColor})`;
-  const indicatorColor =
-    thresholdColor === '--text' ? 'var(--success)' : textColor;
   return (
-    <Card className="gap-2 bg-background-deeper/60 p-3">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-medium text-text-muted">{label} window</p>
-          <p
-            className="text-2xl font-semibold tabular-nums"
-            style={{ color: textColor }}
-          >
-            {usage}%
-          </p>
-        </div>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-text-muted">
-          used
-        </span>
-      </div>
-      <Progress
-        aria-label={`${label} usage`}
-        indicatorColor={indicatorColor}
-        value={usage}
+    <section
+      className={`grid min-w-0 gap-2 ${className ?? ''}`}
+      style={{ gridTemplateRows: SECTION_GRID_ROWS }}
+    >
+      <SectionHeader
+        className="pr-7"
+        service="codex"
+        status={status}
+        subtitle={subtitle}
+        title="Codex usage"
+        updatedAt={updatedAt}
       />
-      <div className="flex items-center gap-1.5 text-xs text-text-muted">
-        <Clock3 className="h-3 w-3" />
-        <span>{formatReset(window, now)}</span>
-      </div>
-    </Card>
+      {/* Spans what the three rows of cards would have filled, so the block
+          beside it keeps its own rows where they were. */}
+      <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
+        {message}
+      </Card>
+    </section>
   );
 }
 
-export default function App() {
+export default function CodexSection({
+  className,
+  historyRange,
+  now,
+  thresholds,
+}: Props) {
   const { data, error, isPending } = useCodexUsage();
-  const [now, setNow] = useState(() => Date.now());
-  const [systemStatThresholds] = useWidgetSetting(
-    'main',
-    'systemStatThresholds'
-  );
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
-    let unlisten: (() => void) | undefined;
-    void zebar
-      .currentWidget()
-      .tauriWindow.listen('tauri://blur', () => {
-        void zebar.currentWidget().close();
-      })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      });
-
-    return () => {
-      window.clearInterval(interval);
-      unlisten?.();
-    };
-  }, []);
 
   if (!data) {
     return (
-      <div className="flex h-screen items-center justify-center rounded-lg border border-button-border/80 bg-background p-4 font-mono text-sm text-text shadow-sm backdrop-blur-xl">
-        {isPending
-          ? 'Loading Codex usage…'
-          : error?.message || 'Usage unavailable'}
-      </div>
+      <Placeholder
+        className={className}
+        message={
+          isPending
+            ? 'Loading Codex usage…'
+            : error?.message || 'Usage unavailable'
+        }
+        subtitle="Current plan windows"
+      />
     );
   }
 
+  const status = readUsageStatus(data.generated_at, now);
+  const subtitle = data.rate_limits.planType ?? 'Current plan windows';
+  const updatedAt = formatUpdatedAt(data.generated_at);
   const windows = [data.rate_limits.primary, data.rate_limits.secondary]
     .filter((window): window is CodexUsageWindow => window != null)
     .sort((a, b) => a.windowDurationMins - b.windowDurationMins);
 
   if (windows.length === 0) {
     return (
-      <div className="flex h-screen items-center justify-center rounded-lg border border-button-border/80 bg-background p-4 font-mono text-sm text-text shadow-sm backdrop-blur-xl">
-        Codex usage windows are unavailable
-      </div>
+      <Placeholder
+        className={className}
+        message="Codex usage windows are unavailable"
+        status={status}
+        subtitle={subtitle}
+        updatedAt={updatedAt}
+      />
     );
   }
 
   // One window fills the row, so the plots need a viewBox matching the wider
   // card or they letterbox away from their own axis labels.
-  const plotWidth = windows.length === 1 ? 860 : 420;
-  const historyRange = {
-    startAt: now / 1000 - HISTORY_WINDOW_SECONDS,
-    endAt: now / 1000,
-  };
-  const generatedAt = Date.parse(data.generated_at);
-  const ageMinutes = Number.isNaN(generatedAt)
-    ? null
-    : Math.max(0, Math.floor((now - generatedAt) / 60_000));
-  const isStale = (ageMinutes ?? 9) >= 8;
-  const statusLabel =
-    ageMinutes === null
-      ? 'Unknown'
-      : ageMinutes >= 8
-        ? `${ageMinutes}m old`
-        : 'Fresh';
+  const plotWidth = windows.length === 1 ? CHART_WIDTH_FULL : CHART_WIDTH_HALF;
+  const columns = windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2';
 
   return (
-    <div className="flex h-screen flex-col gap-3 overflow-y-auto rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
-      <header className="flex shrink-0 items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ServiceIcon className="text-xl" service="codex" />
-          <div>
-            <h1 className="text-sm font-semibold">Codex usage</h1>
-            <p className="text-[10px] text-text-muted">
-              {data.rate_limits.planType ?? 'Current plan windows'}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span
-            className={`flex items-center gap-1.5 text-xs ${isStale ? 'text-warning' : 'text-success'}`}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-current" />
-            {statusLabel}
-          </span>
-          <button
-            aria-label="Close Codex usage details"
-            className="rounded p-1 text-text-muted transition-colors hover:bg-background-deeper hover:text-text"
-            onClick={() => void zebar.currentWidget().close()}
-            type="button"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </header>
+    <section
+      className={`grid min-w-0 gap-2 ${className ?? ''}`}
+      style={{ gridTemplateRows: SECTION_GRID_ROWS }}
+    >
+      <SectionHeader
+        className="pr-7"
+        service="codex"
+        status={status}
+        subtitle={subtitle}
+        title="Codex usage"
+        updatedAt={updatedAt}
+      />
 
-      <section
-        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
-      >
+      <div className={`grid min-h-0 gap-2 ${columns}`}>
         {windows.map((window) => (
           <UsageCard
             key={`${window.windowDurationMins}-${window.resetsAt}`}
-            now={now}
-            thresholds={systemStatThresholds}
-            window={window}
+            label={`${formatWindowDuration(window.windowDurationMins)} window`}
+            reset={formatReset(window, now)}
+            thresholds={thresholds}
+            usedPercent={window.usedPercent}
           />
         ))}
-      </section>
+      </div>
 
-      <section
-        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
-      >
+      <div className={`grid min-h-0 gap-2 ${columns}`}>
         {windows.map((window) => {
           const label = formatWindowDuration(window.windowDurationMins);
           const samples = selectWindowSamples(
@@ -368,7 +306,7 @@ export default function App() {
           });
           return (
             <Card
-              className="shrink-0 p-2.5"
+              className="p-2.5"
               key={`${window.windowDurationMins}-${window.resetsAt}`}
             >
               <div className="flex items-center justify-between">
@@ -390,11 +328,9 @@ export default function App() {
             </Card>
           );
         })}
-      </section>
+      </div>
 
-      <section
-        className={`grid shrink-0 gap-2 ${windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
-      >
+      <div className={`grid min-h-0 gap-2 ${columns}`}>
         {windows.map((window) => (
           <HistoryCard
             historyRange={historyRange}
@@ -408,11 +344,7 @@ export default function App() {
             window={window}
           />
         ))}
-      </section>
-
-      <footer className="flex shrink-0 items-center justify-between text-[10px] text-text-muted">
-        <span>Updated {formatUpdatedAt(data.generated_at)}</span>
-      </footer>
-    </div>
+      </div>
+    </section>
   );
 }

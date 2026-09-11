@@ -52,3 +52,33 @@ export const calculateWidgetPlacementFromLeft = async (
     },
   } satisfies WidgetPlacement;
 };
+
+/**
+ * Where the AI usage panel opens.
+ *
+ * It is wider than the gap between either chip and the edge of the screen, so
+ * anchoring it to the chip that opened it would push it off the left of the
+ * monitor. Both chips open the same panel, and a panel that moved depending on
+ * which one was pressed would read as two. It sits against the bar's own right
+ * edge instead, which is inset by the bar's margin.
+ */
+export const calculateUsagePanelPlacement = async (
+  size: Size,
+  marginX: number
+) => {
+  const windowSize = await currentWidget().tauriWindow.outerSize();
+
+  return {
+    anchor: 'top_right',
+    offsetX: `-${marginX}px`,
+    offsetY: `${windowSize.height + 6}px`,
+    width: `${size.width}px`,
+    height: `${size.height}px`,
+    monitorSelection: { type: 'primary' },
+    dockToEdge: {
+      enabled: false,
+      edge: 'top',
+      windowMargin: `${windowSize.height}px`,
+    },
+  } satisfies WidgetPlacement;
+};
