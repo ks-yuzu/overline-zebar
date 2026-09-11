@@ -148,17 +148,19 @@ model名が増えた時はここを確かめる。
 
 - `widgets/main/src/components/aiUsage/`
   - Claude/Codexの配置、時刻更新、stale判定・表示を共有する。
+  - `panel.ts`が統合パネルの起動を持つ。どちらのchipもここを呼ぶため、
+    開く先とその大きさが2つに分かれない。
 - `widgets/main/src/components/claudeUsage/`
-  - Claude JSONの検証、取得、main bar表示、詳細widgetの起動を担当する。
+  - Claude JSONの検証、取得、main bar表示を担当する。
 - `widgets/main/src/components/codexUsage/`
   - Codex JSONの検証、取得、表示を担当する。
 - `widgets/ai-usage-details/`
-  - クリックで開くClaude詳細。左を5H、右を7Dとする3段構成で、
-    現在値・window内の推移・14日の推移を並べる。
+  - どちらのchipをクリックしても開く統合パネル。左にClaude、右にCodexを置き、
+    各blockが3段構成 (現在値・window内の推移・14日の推移) を持つ。
+  - `ClaudeSection.tsx` / `CodexSection.tsx`がprovider固有の読み替えを持ち、
+    `SectionHeader.tsx` `UsageCard.tsx` `usageStatus.ts` `panelLayout.ts`を共有する。
+  - window名と時間幅は、Codex側は`windowDurationMins`から動的に決める。
   - CPU/RAM詳細と同様、main bar直下へ配置し、focusを失うと閉じる。
-- `widgets/codex-usage-details/`
-  - クリックで開くCodex詳細、rate-limit windowの現在値と履歴グラフを表示する。
-  - window名と時間幅は`windowDurationMins`から動的に決める。
 
 ### WSL helpers
 
@@ -195,8 +197,9 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
   - ring設定: 割合を円形ゲージで表示する。
   - inline設定: 数値と`%`を表示する。
 - usageの色は既存の`systemStatThresholds`を使う。
-- Codex詳細もClaudeと同じ3段構成とし、列をwindowに対応させる (短い順)。
-  幅920px、高さ630px。3段目は14日を横軸とし、windowの長さで見方を変える。
+- **詳細はproviderごとのwidgetではなく、1枚の統合パネルである** (下記)。
+  どちらのblockも3段構成とし、列をwindowに対応させる (短い順)。
+  3段目は14日を横軸とし、windowの長さで見方を変える。
   Claude・Codexで扱いは同じである。
   - **1日未満のwindow**はwindowごとの到達点。1日に何度もresetするため、
     日へ畳むと複数のwindowが混ざる。
@@ -446,6 +449,46 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
 - Codexは`windowDurationMins`から`5H`や`7D`を動的に作る。
 - Codexの`primary`と`secondary`が両方ある場合は、短い期間から表示する。
 
+### 統合パネル
+
+**Claude詳細とCodex詳細は1枚のwidget (`ai-usage-details`、幅1700px・高さ650px) に
+統合する。**chipは2つのままで、どちらをクリックしても同じパネルが開く。
+
+- **統合の理由は、2つを並べて比べられないことにある。**詳細viewはfocusを失うと
+  閉じるため、Claudeを開いた状態でCodexのchipを押すとClaude側が閉じる。
+  「今どちらに余裕があるか」を読む操作が構造上存在しなかった。
+- **開く位置はchipではなくbarの右端を基準にする。**パネルはchipから画面端までの
+  余白より広く、chip基準で置くと画面左へはみ出す。加えて、押したchipで位置が
+  変わるパネルは2枚に見える。
+  - **幅はbarの幅で頭打ちにする。**1700pxは1366 / 1440のモニタより広く、click時の
+    placementはpresetを上書きするため、上限が無いと左側のproviderが画面外に開いて
+    手が届かない。グラフは自分のviewBoxを持つため縮んで収まる。
+  - 判定にはmonitorのpixelではなく`document.documentElement.scrollWidth`を使う。
+    barはmonitorいっぱいに広がっており、この値は幅やmarginと同じCSS pixelである。
+    `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
+  - 起動は`widgets/main/src/components/aiUsage/panel.ts`の1箇所に置く。どのwidgetを
+    どの大きさでどこへ開くかが2つのchipで割れないようにする。
+- **左右のblockは独立したgridで、同じtrack高さを共有する** (`panelLayout.ts`の
+  `SECTION_GRID_ROWS`)。Claudeの7D cardはmodel別の枠を内側に持つぶん背が高く、
+  高さを各blockに任せると左右で段の開始位置がずれる。
+  - **header行も固定trackにする。**取得に失敗したblockはplan名を持たないため、
+    `auto`だと隣のblockと段が揃わない。
+  - 高さは650pxのパネルに対する割り当てである。想定より背の高い内容が来た時に
+    黙って切らないよう、容器の`overflow-y-auto`は残す。
+- **取得はprovider単位で、失敗も単位ごとに閉じ込める。**片方のhelperが落ちても
+  もう片方のblockは残る。失敗したblockはheaderを保ったまま、cardの3段分を
+  1枚のメッセージで埋める。
+- **鮮度は1つにまとめない。**`generated_at`はproviderごとに別で、Claudeだけが
+  `last_known`という状態を持つ。各blockのheaderが自分の更新時刻と状態を出す。
+- グラフの`viewWidth`はcardの実寸に合わせる (`panelLayout.ts`)。svgは高さ132px
+  固定で縦横比を保つため、viewBoxがcardより狭いと図だけが中央に寄り、
+  その下のHTMLの軸ラベルと横幅が合わなくなる。
+  - **これは1700pxのパネルに対する固定値で、上限が効いた幅には追従しない。**
+    1366pxのモニタではcardが約305pxとなり、390pxのviewBoxが0.78倍に縮む。
+    軸の8px文字が約6pxになり、132pxの枠内で上下に余白が出る。実寸を測って渡す道も
+    あるが、計測後の再描画と未計測時の経路が増える。読めなくなるわけではないので、
+    既知の制限として残している。
+
 ## Stale判定
 
 `generated_at`とwidget内の現在時刻を比較し、プロバイダーごとに判定する。
@@ -609,7 +652,7 @@ chipの残り時間が「23h」と出たり、詳細viewの横軸が未来へ飛
 
 **window長は3箇所に重複している。** helperの`%window_seconds`、
 `widgets/main/src/components/claudeUsage/ClaudeUsage.tsx`と
-`widgets/ai-usage-details/src/App.tsx`の`SESSION_WINDOW_SECONDS` /
+`widgets/ai-usage-details/src/ClaudeSection.tsx`の`SESSION_WINDOW_SECONDS` /
 `WEEK_WINDOW_SECONDS`である。helper側は「公開するか否か」を決めるため、
 providerがwindow長を変えた場合は`resets_at`とhistory収集が止まる (手がかりは
 1 runあたりstderr 1行のみ)。変更時は3箇所を揃える。
@@ -751,13 +794,12 @@ install -Dm755 scripts/codex-usage/codex-usage-json \
 `"selectCurrentWindow" is not exported by "../../packages/ui/dist/index.js"`
 のようなrollupのexportエラーで落ちる。
 
-main barとクリック時の各詳細viewは別widgetなので、3つともbuildする。
+main barとクリックで開く統合パネルは別widgetなので、両方buildする。
 
 ```sh
 CI=1 corepack pnpm --filter @overline-zebar/ui build
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```
 
 `CI=1`はWSLでは必須である。各widgetのvite configはbuild後に`postbuild` hookで
@@ -800,7 +842,7 @@ packageのbinaryを使う)。placeholderを残したままcommitしないよう�
 ```sh
 ZEBAR_PACK_DIR="/mnt/c/Users/<windows-user>/.glzr/zebar/<pack>@<version>"
 
-for w in main ai-usage-details codex-usage-details; do
+for w in main ai-usage-details; do
   rsync -rt --delete --no-perms --no-owner --no-group \
     "widgets/$w/dist/" "$ZEBAR_PACK_DIR/widgets/$w/dist/"
 done
@@ -825,9 +867,11 @@ cmp widgets/main/dist/index.html \
   "$ZEBAR_PACK_DIR/widgets/main/dist/index.html"
 cmp widgets/ai-usage-details/dist/index.html \
   "$ZEBAR_PACK_DIR/widgets/ai-usage-details/dist/index.html"
-cmp widgets/codex-usage-details/dist/index.html \
-  "$ZEBAR_PACK_DIR/widgets/codex-usage-details/dist/index.html"
 ```
+
+**削除したwidgetのdirectoryはpack側に残る。**`zpack.json`から定義が消えても
+Zebarは既存のdirectoryを消さない。`codex-usage-details`から移行する場合は
+`$ZEBAR_PACK_DIR/widgets/codex-usage-details`を手で削除する。
 
 `index.html`内のasset名はcontent hashを含むため、同期前後でasset名が更新されて
 いることも反映確認の目安になる。
@@ -846,7 +890,9 @@ powershell.exe -NoProfile -Command \
 再起動後、`Get-Process zebar`のPIDが変わっていることを確認する。main barの
 Claude/Codex chipをクリックし、次を確認する。
 
-- `ai-usage-details`と`codex-usage-details`がmain bar直下に開く。
+- Claude chipとCodex chipのどちらからも同じ`ai-usage-details`が、
+  main bar直下の同じ位置に開く。
+- 左にClaude、右にCodexが並び、左右で各段の高さが揃っている。
 - 5H・7Dの現在値とreset時刻が表示される。
 - 取得済みの履歴がある場合、推移graphが表示される。
 - 詳細viewの外をクリックすると閉じる。
@@ -914,7 +960,6 @@ Widgetをbuild:
 ```sh
 corepack pnpm --filter @overline-zebar/main build
 corepack pnpm --filter @overline-zebar/ai-usage-details build
-corepack pnpm --filter @overline-zebar/codex-usage-details build
 ```
 
 ## Troubleshooting
@@ -999,16 +1044,20 @@ corepack pnpm exec eslint \
 corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-CI=1 corepack pnpm --filter @overline-zebar/codex-usage-details build
+corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 node packages/ui/test-usage-series.mjs
+node packages/ui/test-usage-status.mjs
 ```
 
-`test-usage-series.mjs`は**buildした`dist`に対して**動くので、`packages/ui`のbuildを
-先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が出るため目視で
-気付きにくい。
+`test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
+`packages/ui`のbuildを先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が
+出るため目視で気付きにくい。
+
+`test-usage-status.mjs`は鮮度判定を持つ。年齢とClaudeの`last_known`という
+一致しない2つの根拠を1つのlabelへ畳むため、パネルごとに書くと食い違う。
 
 `test-claude-usage-json`はAPIと画面のwindow対応、reset時刻、cache、raw response、
 collector出力、stale readingを同じ実装moduleに対して検証する。

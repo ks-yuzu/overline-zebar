@@ -22,6 +22,12 @@ export {
 } from './utils/usageSeries';
 export { usableTimeZone } from './utils/timeZone';
 export {
+  formatRemaining,
+  formatUpdatedAt,
+  readUsageStatus,
+} from './utils/usageStatus';
+export type { UsageStatus } from './utils/usageStatus';
+export {
   SERIES_PALETTE,
   SERIES_PRIMARY,
   SERIES_PRIMARY_MUTED,

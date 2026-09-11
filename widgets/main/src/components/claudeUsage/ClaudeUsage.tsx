@@ -2,17 +2,16 @@ import { useWidgetSetting } from '@overline-zebar/config';
 import {
   Chip,
   clampPercentage,
+  formatRemaining,
   ServiceIcon,
   usableTimeZone,
 } from '@overline-zebar/ui';
-import { useRef } from 'react';
-import * as zebar from 'zebar';
-import { calculateWidgetPlacementFromRight } from '../../utils/calculateWidgetPlacement';
 import { worstProjection } from '../../utils/projectWindowUsage';
+import { openUsagePanel } from '../aiUsage/panel';
 import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
 import { getUsageFreshness } from '../aiUsage/freshness';
-import { formatRemaining, useMinuteNow } from '../aiUsage/useMinuteNow';
+import { useMinuteNow } from '../aiUsage/useMinuteNow';
 import Stat from '../stat/Stat';
 import { useClaudeUsage } from './useClaudeUsage';
 import type { ClaudeUsagePeriod } from './useClaudeUsage';
@@ -38,8 +37,8 @@ function formatReset(period: ClaudeUsagePeriod, includeDate = false) {
 
 export default function ClaudeUsage() {
   const { data, error, isPending } = useClaudeUsage();
-  const chipRef = useRef<HTMLElement | null>(null);
   const now = useMinuteNow();
+  const [marginX] = useWidgetSetting('main', 'marginX');
   const [systemStatThresholds] = useWidgetSetting(
     'main',
     'systemStatThresholds'
@@ -99,7 +98,6 @@ export default function ClaudeUsage() {
 
   return (
     <Chip
-      ref={chipRef}
       aria-label={
         /* The rings inside are not announced - an explicit label on a button
            replaces them - so the scoped quota has to be named here. Its own
@@ -119,15 +117,7 @@ export default function ClaudeUsage() {
       }
       as="button"
       className="relative isolate flex items-center gap-2.5 h-full overflow-hidden px-3"
-      onClick={async () => {
-        const placement = await calculateWidgetPlacementFromRight(chipRef, {
-          width: 920,
-          // Keep in sync with the ai-usage-details preset in zpack.json: the
-          // size passed here overrides it.
-          height: 650,
-        });
-        await zebar.startWidget('ai-usage-details', placement, {});
-      }}
+      onClick={() => void openUsagePanel(marginX)}
     >
       <ProjectionFill projected={projected} thresholds={systemStatThresholds} />
       <ServiceIcon label="Claude usage" service="claude" />

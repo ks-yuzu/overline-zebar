@@ -1,8 +1,13 @@
 # AI usage details
 
-This widget is opened from the Claude usage chip in the main bar. It displays
-the current 5H and 7D usage windows and their retained history. The window
-closes when it loses focus.
+This widget is opened from either the Claude or the Codex usage chip in the
+main bar, and holds both: Claude on the left, Codex on the right. Each side
+shows its current windows, the trend within the window in progress, and the
+retained history. The window closes when it loses focus.
 
-History is collected by `scripts/claude-usage/claude-usage-json` every five
-minutes and retained for 14 days in the existing Claude usage cache.
+Each service is fetched on its own, so one whose helper fails leaves the other
+side standing.
+
+History is collected by `scripts/claude-usage/claude-usage-json` and
+`scripts/codex-usage/codex-usage-json` every five minutes, and retained for 14
+days in each service's own usage cache.
