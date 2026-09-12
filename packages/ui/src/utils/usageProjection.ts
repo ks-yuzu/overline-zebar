@@ -107,12 +107,19 @@ export function windowPace(
 
   const perSecond = consumed / frameSeconds;
   const valueAtReset = window.usedPercent + perSecond * remainingSeconds;
+  const remainingPercent = 100 - window.usedPercent;
+
+  /* A quota reported spent ran out at this reading, whatever the frame says.
+     Leaving it to the pace splits one state in two: a window filled within the
+     frame names a moment, and the same window filled an hour earlier reports
+     what is left at its reset - of a quota that has nothing left now. */
+  if (remainingPercent <= 0) return { valueAtReset, exhaustsAt: now };
 
   return {
     valueAtReset,
     exhaustsAt:
       perSecond > 0 && valueAtReset > 100
-        ? now + ((100 - window.usedPercent) / perSecond) * 1000
+        ? now + (remainingPercent / perSecond) * 1000
         : null,
   };
 }

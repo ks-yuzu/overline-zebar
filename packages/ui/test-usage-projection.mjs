@@ -109,6 +109,20 @@ const cases = [
     expect: [70, null],
   },
   {
+    // Spent is spent: a window filled an hour ago has no more left than one
+    // filled a minute ago, and must not be reported as having some.
+    name: 'a spent window names the reading, whether or not the frame saw it',
+    run: () =>
+      [
+        [[24, 100], [0, 100]],
+        [[24, 90], [0, 100]],
+      ].map((entries) => {
+        const pace = windowPace(week(100), series(entries), NOW);
+        return pace.exhaustsAt - NOW;
+      }),
+    expect: [0, 0],
+  },
+  {
     name: 'a window whose samples do not reach back over the frame is not read',
     run: () => windowPace(week(70), series([[12, 60], [0, 70]]), NOW),
     expect: null,
