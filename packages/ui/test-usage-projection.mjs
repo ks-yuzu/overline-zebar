@@ -102,7 +102,9 @@ const cases = [
     expect: null,
   },
   {
-    name: 'a span holding only its baseline is not measured',
+    // What stands in for counting the samples: one reading would have to sit
+    // within tolerance of both ends at once, and no frame here is that short.
+    name: 'a lone reading cannot cover both ends of the span',
     run: () => consumedOver(series([[24, 60]]), lastDay),
     expect: null,
   },
