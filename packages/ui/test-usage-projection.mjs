@@ -201,6 +201,21 @@ const cases = [
     expect: null,
   },
   {
+    // Codex carries its window length in the payload and the reader accepts
+    // any finite number, zero included. Dividing by that frame put NaN on the
+    // card and an unplottable coordinate on the chart.
+    name: 'a window of no length is not read',
+    run: () =>
+      [0, -60, Number.NaN].map((windowSeconds) =>
+        windowPace(
+          { usedPercent: 30, resetsAt: NOW + 48 * HOUR_MS, windowSeconds },
+          series([[24, 20], [0, 30]]),
+          NOW
+        )
+      ),
+    expect: [null, null, null],
+  },
+  {
     name: 'a window already past its reset is not read',
     run: () =>
       windowPace(

@@ -117,6 +117,13 @@ export function windowPace(
   const remainingSeconds = (window.resetsAt - now) / 1000;
   if (remainingSeconds <= 0) return null;
 
+  /* A window of no length gives a frame of no length to divide by, and NaN
+     reaches the card as "NaN% left at reset" and the chart as a coordinate it
+     cannot plot. Codex carries its window length in the payload, and the
+     reader there accepts any finite number - zero included - so this is a
+     shape that arrives rather than one that cannot. */
+  if (!(window.windowSeconds > 0)) return null;
+
   const frameSeconds = window.windowSeconds / PACE_FRAME_DIVISOR;
   const consumed = consumedOver(samples, {
     startAt: now / 1000 - frameSeconds,
