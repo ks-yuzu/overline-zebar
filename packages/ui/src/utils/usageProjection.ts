@@ -76,8 +76,7 @@ export function windowPace(
   samples: UsageHistorySample[],
   now: number
 ): WindowPace | null {
-  /* Neither the usage nor the window length is checked for being a usable
-     number: no producer emits a payload where they are not. */
+  // Neither number is checked for being usable; the readers hold that contract.
   if (window.usedPercent >= 100) return null;
   // The axis' own judgement, so the two cannot come apart on it.
   if (!windowStarted(window, hasJustReset(samples, now / 1000))) return null;

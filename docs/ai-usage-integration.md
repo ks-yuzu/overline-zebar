@@ -154,6 +154,13 @@ model名が増えた時はここを確かめる。
   - Claude JSONの検証、取得、main bar表示を担当する。
 - `widgets/main/src/components/codexUsage/`
   - Codex JSONの検証、取得、表示を担当する。
+- **読み取り側が契約を担保し、下流はそれを再検証しない。**`isUsagePeriod` /
+  `isUsageWindow`が型と有限性を見て、満たさないpayloadはそこで落ちる。したがって
+  使用率やwindow長がNaNのまま計算へ届くことはなく、**下流にそれを想定した防御を
+  置かない。**置いても本番の入力では到達せず、その分岐を支えられるのは
+  到達するよう仕込んだテストだけになる。
+  - 契約を緩める (新しいfieldを検証せずに通す等) なら、緩めた側がその影響を
+    引き受ける。下流を1つずつ固めて回るのは、規則だけが増えて担保は増えない。
 - `widgets/ai-usage-details/`
   - どちらのchipをクリックしても開く統合パネル。左にClaude、右にCodexを置き、
     各blockが3段構成 (現在値・window内の推移・14日の推移) を持つ。
