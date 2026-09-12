@@ -392,48 +392,46 @@ export function windowStarted(
 }
 
 /**
- * The axis a window's trend is drawn against.
+ * The axis a window's trend is drawn against: the window the provider reports,
+ * ending at the reset it names.
  *
- * A started window is pinned to its end, so the axis is the window itself. An
- * unstarted one has no end yet - the reported reset slides ahead of now - and
- * anchoring to it would put the whole axis in the future, so it falls back to
- * the hours just gone, which is all there is to show.
+ * Both providers report a reset that contains now, but they arrive at it
+ * differently. Claude counts a fixed boundary down and steps it on by a whole
+ * window once it passes, so an idle quota's window began hours ago and is
+ * genuinely part-way through. Codex slides its reset to now plus the window's
+ * length while nothing is spent, so an idle window begins at now and the
+ * reading sits at the axis' own origin. Either way `resetsAt - windowSeconds`
+ * is where the window on show starts, and the axis agrees with the reset the
+ * card states. Measured in docs/ai-usage-integration.md.
  *
- * `justReset` is what separates the reading taken seconds after a reset from a
- * quota that has sat idle: both report nothing spent, but the first names the
- * window now running. Without it that reading is drawn at the right edge of the
- * axis of the window that just ended - a window ending empty, next to a card
- * saying the reset is a whole window away.
- *
- * Both detail views derive their axis here rather than each keeping this
- * judgement: they had it twice, and the same fault with it.
+ * Falls back to the hours just gone only where the reset is unreadable. That
+ * is the absence of anything to anchor to, which is not the same as a quota
+ * that has yet to be spent from.
  *
  * `now` and `resetsAt` are epoch seconds, like every recordedAt here.
  */
 export function windowTrendRange(window: {
   resetsAt: number;
   windowSeconds: number;
-  usedPercent: number;
-  justReset: boolean;
   now: number;
 }) {
-  const started = windowStarted(window, window.justReset);
-  const endAt = started ? window.resetsAt : window.now;
-  return { startAt: endAt - window.windowSeconds, endAt, started };
+  const anchored = Number.isFinite(window.resetsAt);
+  const endAt = anchored ? window.resetsAt : window.now;
+  return { startAt: endAt - window.windowSeconds, endAt, anchored };
 }
 
 /**
- * The samples belonging to the window on show. A started window is pinned to
- * its end, so its samples are the ones reporting that end. An unstarted one
- * has no end yet - its reported reset slides - so it is the run of zeros since
- * the last window closed. Selecting by time range instead would carry the
- * previous window's climb into a card labelled as the current one.
+ * The samples belonging to the window on show: the ones reporting the end the
+ * axis is anchored to. Where the reset was unreadable there is no end to match
+ * on, and it falls back to the run since usage last fell. Selecting by time
+ * range instead would carry the previous window's climb into a card labelled
+ * as the current one.
  */
 export function selectCurrentWindow(
   samples: UsageHistorySample[],
   window: {
     endsAt: number | undefined;
-    started: boolean;
+    anchored: boolean;
     startAt: number;
     endAt: number;
   }
@@ -455,7 +453,7 @@ export function selectCurrentWindow(
   // `endsAt` is what the samples are matched against, and isSameWindow treats
   // an undefined end as matching anything, so without it here every retained
   // sample would be returned for a 5-hour axis.
-  if (window.started && window.endsAt !== undefined) {
+  if (window.anchored && window.endsAt !== undefined) {
     return sorted
       .filter(
         (sample) =>
@@ -470,10 +468,9 @@ export function selectCurrentWindow(
       sample.recordedAt >= window.startAt && sample.recordedAt <= window.endAt
   );
 
-  // No end to match on - either nothing has been spent yet, or the reading
-  // that would carry it was unreadable. Either way the run since usage last
-  // fell is this window's: for an unused quota that is the stretch of zeros
-  // since it reset, and for an unreadable one it is the climb so far.
+  // No end to match on: the reading that would carry it was unreadable. The
+  // run since usage last fell is the best that can be said - the climb so far,
+  // or the stretch of zeros if nothing has been spent.
   let windowStart = 0;
   for (let index = withinRange.length - 1; index > 0; index -= 1) {
     const value = withinRange[index]?.value ?? 0;
