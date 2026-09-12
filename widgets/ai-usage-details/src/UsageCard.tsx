@@ -89,11 +89,10 @@ export default function UsageCard({
           />
         </div>
       )}
-      {/* Pushed to the bottom edge so that the line sits at the same height in
-          every card, including the ones with no scoped quota above it. */}
       {/* Pushed to the bottom edge so that the reset sits at the same height in
-          every card - which is why the projection below keeps its line whether
-          or not there is one to show. See docs/ai-usage-integration.md. */}
+          every card, including the ones with no scoped quota above it - which
+          is why the projection below keeps its line whether or not there is one
+          to show. See docs/ai-usage-integration.md. */}
       <div className="mt-auto flex flex-col gap-0.5 text-text-muted">
         <div className="flex items-center gap-1.5 text-xs">
           <Clock3 className="h-3 w-3" />
