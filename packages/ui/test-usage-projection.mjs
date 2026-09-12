@@ -111,18 +111,20 @@ const cases = [
     expect: [70, null],
   },
   {
-    // Spent is spent: a window filled an hour ago has no more left than one
-    // filled a minute ago, and must not be reported as having some.
-    name: 'a spent window names the reading, whether or not the frame saw it',
+    // A quota with nothing left has no pace to carry and nothing to add: the
+    // card prints the 100% itself and the chart stops at the top of the plot.
+    // Answered here, the reading came out differently depending on the history
+    // behind it - twice, in two different ways - which a reading that says the
+    // quota is gone has no business depending on. The third entry is the one
+    // that got past both earlier attempts: spent, with no baseline in frame.
+    name: 'a spent window is not read',
     run: () =>
       [
         [[24, 100], [0, 100]],
         [[24, 90], [0, 100]],
-      ].map((entries) => {
-        const pace = windowPace(week(100), series(entries), NOW);
-        return pace.exhaustsAt - NOW;
-      }),
-    expect: [0, 0],
+        [[12, 90], [0, 100]],
+      ].map((entries) => windowPace(week(100), series(entries), NOW)),
+    expect: [null, null, null],
   },
   {
     // Nothing spent is no pace, and the reset such a window reports still

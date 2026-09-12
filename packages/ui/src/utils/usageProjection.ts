@@ -94,6 +94,14 @@ export function windowPace(
 ): WindowPace | null {
   if (!Number.isFinite(window.usedPercent)) return null;
 
+  /* Nothing to carry forward from a quota with nothing left, and nothing the
+     card would add by saying so: it prints the 100% itself, in the colour its
+     thresholds give it, and the chart stops drawing at the top of the plot.
+     Answering here as well took two attempts to get right, both times because
+     whether the window read as spent depended on the history behind it - which
+     has no bearing on a reading that says the quota is gone. */
+  if (window.usedPercent >= 100) return null;
+
   /* The same judgement the axis makes, so the two cannot disagree about
      whether there is a window here to project. An unstarted window's reset
      still slides, and the chart falls back to the hours just gone rather than
@@ -115,19 +123,12 @@ export function windowPace(
 
   const perSecond = consumed / frameSeconds;
   const valueAtReset = window.usedPercent + perSecond * remainingSeconds;
-  const remainingPercent = 100 - window.usedPercent;
-
-  /* A quota reported spent ran out at this reading, whatever the frame says.
-     Leaving it to the pace splits one state in two: a window filled within the
-     frame names a moment, and the same window filled an hour earlier reports
-     what is left at its reset - of a quota that has nothing left now. */
-  if (remainingPercent <= 0) return { valueAtReset, exhaustsAt: now };
 
   return {
     valueAtReset,
     exhaustsAt:
       perSecond > 0 && valueAtReset > 100
-        ? now + (remainingPercent / perSecond) * 1000
+        ? now + ((100 - window.usedPercent) / perSecond) * 1000
         : null,
   };
 }

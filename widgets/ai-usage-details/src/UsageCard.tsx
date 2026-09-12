@@ -91,6 +91,13 @@ export default function UsageCard({
       )}
       {/* Pushed to the bottom edge so that the line sits at the same height in
           every card, including the ones with no scoped quota above it. */}
+      {/* Pushed to the bottom edge so that the reset sits at the same height in
+          every card, including the ones with no scoped quota above it. The
+          projection below it keeps its line whether or not there is one to
+          show: a card that drops the line lifts its reset by that much, and
+          the resets stop lining up across the row. Its height and its leading
+          are set to the same step rather than left to `1lh`, which a webview
+          without the unit drops silently - taking the reserved line with it. */}
       <div className="mt-auto flex flex-col gap-0.5 text-text-muted">
         <div className="flex items-center gap-1.5 text-xs">
           <Clock3 className="h-3 w-3" />
@@ -99,11 +106,12 @@ export default function UsageCard({
         {/* Indented to the reset it qualifies, and set no larger than it: the
             theme's xs is 10px, so an arbitrary 11px reads as the louder of the
             two lines. Only ever one line, too - the card below has no room. */}
-        {projection && (
-          <span className="truncate pl-[18px] text-xs" title={projection}>
-            {projection}
-          </span>
-        )}
+        <span
+          className="h-3 truncate pl-[18px] text-xs leading-3"
+          title={projection}
+        >
+          {projection}
+        </span>
       </div>
     </Card>
   );
