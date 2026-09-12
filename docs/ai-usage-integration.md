@@ -1110,6 +1110,8 @@ def codex(sample):
         yield (f"{window['windowDurationMins']}m", window['usedPercent'],
                window['resetsAt'], window['windowDurationMins'] * 60)
 
+broken = []
+
 for label, path, windows in (
     ('claude', '~/.cache/claude-usage-json/usage.json', claude),
     ('codex', '~/.cache/codex-usage-json/usage.json', codex),
@@ -1129,19 +1131,28 @@ for label, path, windows in (
                 starts[name] = starts.get(name, 0) + 1
                 moved[name] = moved.get(name, 0) + (abs(reset - was[1]) > 300)
             previous[name] = (used, reset)
+    if not total:
+        broken.append(f'{label}: 未使用のwindowが1つも測れていない')
     for name in total:
         print(f'{label} {name}: 未使用sampleのwindowがnowを含む '
               f'{inside[name]}/{total[name]}, 使用開始でresetが動いた '
               f'{moved.get(name, 0)}/{starts.get(name, 0)}')
+        if inside[name] < total[name] or moved.get(name, 0):
+            broken.append(f'{label} {name}')
+
+if broken:
+    raise SystemExit('前提が崩れている: ' + ', '.join(broken))
 EOF
 ```
 
 **panelが描くwindowを1つ残らず見る。**`windows[0]`やsessionだけを見ると、週次だけが
-前提を破っていても健全と報告する。
+前提を破っていても健全と報告する。**崩れていれば非ゼロで終わる。**目視で5行を
+突き合わせる検査は、見落とした時に黙って通る。
 
-いずれかのwindowで「nowを含む」が総数を割り込んだら、軸をresetに合わせる前提が崩れている
+「nowを含む」が総数を割り込んだら、軸をresetに合わせる前提が崩れている
 (`packages/ui/src/utils/usageSeries.ts`の`windowTrendRange`)。
 「使用開始でresetが動いた」が立ったら、Claudeの境界が固定という前提が崩れている。
+per-modelの週次を持たないplanではその行が出ないだけで、失敗にはしない。
 
 最後に測った値 (2026-09-13):
 
