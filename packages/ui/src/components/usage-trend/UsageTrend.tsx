@@ -24,6 +24,10 @@ type Props = {
   points: TrendPoint[];
   /** Legend text for `points`. */
   pointsLabel?: string;
+  /** Where the pace so far leads, drawn as a dashed continuation. */
+  projection?: TrendPoint;
+  /** The same for `secondaryPoints`, which carries its own quota and pace. */
+  secondaryProjection?: TrendPoint;
   /** A second quantity on the same axis, measured the same way. */
   secondaryPoints?: TrendPoint[];
   secondaryLabel?: string;
@@ -66,8 +70,10 @@ export default function UsageTrend({
   paceGuide = true,
   points,
   pointsLabel = 'usage',
+  projection,
   secondaryPoints,
   secondaryLabel,
+  secondaryProjection,
   startAt,
   viewWidth = DEFAULT_WIDTH,
 }: Props) {
@@ -90,13 +96,26 @@ export default function UsageTrend({
       .map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
       .join(' ');
   const coordinates = sampled.map(project);
-  const secondaryCoordinates = secondaryPoints
-    ? downsample(secondaryPoints).map(project)
-    : [];
+  const sampledSecondary = secondaryPoints ? downsample(secondaryPoints) : [];
+  const secondaryCoordinates = sampledSecondary.map(project);
   const linePath = pathOf(coordinates);
   const secondaryPath = pathOf(secondaryCoordinates);
   const lastCoordinate = coordinates.at(-1);
   const lastSecondaryCoordinate = secondaryCoordinates.at(-1);
+  /* At 100 there is nowhere to run, and a point behind the last sample would
+     draw the line back into the window it has left. */
+  const carriedOn = (
+    from: TrendPoint | undefined,
+    to: TrendPoint | undefined
+  ) =>
+    from && to && from.value < 100 && to.recordedAt > from.recordedAt
+      ? project(to)
+      : undefined;
+  const projectionCoordinate = carriedOn(sampled.at(-1), projection);
+  const secondaryProjectionCoordinate = carriedOn(
+    sampledSecondary.at(-1),
+    secondaryProjection
+  );
 
   return (
     <div>
@@ -105,6 +124,10 @@ export default function UsageTrend({
           aria-label={`${label} usage as read, across the window on show${
             secondaryLabel && secondaryCoordinates.length > 0
               ? `, ${pointsLabel} and ${secondaryLabel}`
+              : ''
+          }${
+            projectionCoordinate || secondaryProjectionCoordinate
+              ? ', with the pace so far carried on'
               : ''
           }`}
           className="w-full"
@@ -163,6 +186,31 @@ export default function UsageTrend({
             />
           )}
           <g clipPath={`url(#${clipId})`}>
+            {lastCoordinate && projectionCoordinate && (
+              <path
+                d={pathOf([lastCoordinate, projectionCoordinate])}
+                fill="none"
+                opacity="0.5"
+                stroke={SERIES_PRIMARY}
+                strokeDasharray="2 5"
+                strokeLinecap="round"
+                strokeWidth="1.1"
+              />
+            )}
+            {lastSecondaryCoordinate && secondaryProjectionCoordinate && (
+              <path
+                d={pathOf([
+                  lastSecondaryCoordinate,
+                  secondaryProjectionCoordinate,
+                ])}
+                fill="none"
+                opacity="0.5"
+                stroke={SERIES_SECONDARY}
+                strokeDasharray="2 5"
+                strokeLinecap="round"
+                strokeWidth="1.1"
+              />
+            )}
             {coordinates.length >= 2 && (
               <path
                 d={linePath}

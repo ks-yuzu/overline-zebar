@@ -118,6 +118,59 @@ function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
  * both share one axis. For a rolling window the line also falls as usage ages
  * out, so the bars stay meaningful while that identity no longer holds.
  */
+/**
+ * How much of the quota was spent over a span, in percentage points, counted
+ * as the daily bars count it. Null where the span is not covered.
+ * See docs/ai-usage-integration.md.
+ */
+export function consumedOver(
+  samples: UsageHistorySample[],
+  range: { startAt: number; endAt: number }
+): number | null {
+  const sorted = samples
+    .slice()
+    .sort((a, b) => a.recordedAt - b.recordedAt)
+    .filter((sample) => sample.recordedAt <= range.endAt);
+
+  // Walked back by hand: the package compiles against es2022, which has no
+  // findLastIndex.
+  let baselineIndex = -1;
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    if ((sorted[index]?.recordedAt ?? Infinity) <= range.startAt) {
+      baselineIndex = index;
+      break;
+    }
+  }
+  const span = baselineIndex < 0 ? [] : sorted.slice(baselineIndex);
+
+  /* This also stands in for counting the samples: an empty span finds no
+     baseline, and a lone one would have to sit within tolerance of both ends
+     at once, which no frame here is short enough to allow. */
+  const baseline = span[0];
+  const newest = span[span.length - 1];
+  if (
+    !baseline ||
+    !newest ||
+    range.startAt - baseline.recordedAt > MISSING_SAMPLES_SECONDS ||
+    range.endAt - newest.recordedAt > MISSING_SAMPLES_SECONDS
+  ) {
+    return null;
+  }
+
+  let consumed = 0;
+  splitIntoWindows(span).forEach((usageWindow, index) => {
+    // A window opening inside the span opens empty, so its first reading is all
+    // consumption; the span's own baseline stands in for the window it starts in.
+    let previous = index === 0 ? (usageWindow.samples[0]?.value ?? 0) : 0;
+    for (const sample of usageWindow.samples) {
+      consumed += Math.max(0, sample.value - previous);
+      previous = sample.value;
+    }
+  });
+
+  return consumed;
+}
+
 export function buildDailyUsage(
   samples: UsageHistorySample[],
   range: { startAt: number; endAt: number }
@@ -325,6 +378,20 @@ export function hasJustReset(
 }
 
 /**
+ * Whether a window has begun, which is what fixes it to the reset it reports.
+ * `justReset` is the exception the caller has to supply: a reading taken
+ * seconds after a reset spends nothing yet still names the window now running.
+ */
+export function windowStarted(
+  window: { usedPercent: number; resetsAt: number },
+  justReset: boolean
+) {
+  return (
+    (window.usedPercent > 0 || justReset) && Number.isFinite(window.resetsAt)
+  );
+}
+
+/**
  * The axis a window's trend is drawn against.
  *
  * A started window is pinned to its end, so the axis is the window itself. An
@@ -350,9 +417,7 @@ export function windowTrendRange(window: {
   justReset: boolean;
   now: number;
 }) {
-  const started =
-    (window.usedPercent > 0 || window.justReset) &&
-    Number.isFinite(window.resetsAt);
+  const started = windowStarted(window, window.justReset);
   const endAt = started ? window.resetsAt : window.now;
   return { startAt: endAt - window.windowSeconds, endAt, started };
 }

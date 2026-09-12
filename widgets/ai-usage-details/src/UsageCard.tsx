@@ -15,6 +15,8 @@ type Scoped = {
 
 type Props = {
   label: string;
+  /** What the pace so far says about the rest of the window. */
+  projection?: string;
   reset: string;
   scoped?: Scoped;
   thresholds: Threshold[];
@@ -23,6 +25,7 @@ type Props = {
 
 export default function UsageCard({
   label,
+  projection,
   reset,
   scoped,
   thresholds,
@@ -88,9 +91,23 @@ export default function UsageCard({
       )}
       {/* Pushed to the bottom edge so that the line sits at the same height in
           every card, including the ones with no scoped quota above it. */}
-      <div className="mt-auto flex items-center gap-1.5 text-xs text-text-muted">
-        <Clock3 className="h-3 w-3" />
-        <span>{reset}</span>
+      {/* Pushed to the bottom edge so that the reset sits at the same height in
+          every card - which is why the projection below keeps its line whether
+          or not there is one to show. See docs/ai-usage-integration.md. */}
+      <div className="mt-auto flex flex-col gap-0.5 text-text-muted">
+        <div className="flex items-center gap-1.5 text-xs">
+          <Clock3 className="h-3 w-3" />
+          <span>{reset}</span>
+        </div>
+        {/* Height and leading are the same step rather than `1lh`, which a
+            webview without the unit drops silently, taking the reserved line
+            with it. */}
+        <span
+          className="h-3 truncate pl-[18px] text-xs leading-3"
+          title={projection}
+        >
+          {projection}
+        </span>
       </div>
     </Card>
   );

@@ -5,8 +5,8 @@ import {
   formatRemaining,
   ServiceIcon,
   usableTimeZone,
+  worstProjection,
 } from '@overline-zebar/ui';
-import { worstProjection } from '../../utils/projectWindowUsage';
 import { openUsagePanel } from '../aiUsage/panel';
 import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';

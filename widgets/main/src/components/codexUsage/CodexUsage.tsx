@@ -4,9 +4,9 @@ import {
   clampPercentage,
   formatRemaining,
   ServiceIcon,
+  worstProjection,
 } from '@overline-zebar/ui';
 import { Fragment } from 'react';
-import { worstProjection } from '../../utils/projectWindowUsage';
 import { openUsagePanel } from '../aiUsage/panel';
 import ProjectionFill from '../aiUsage/ProjectionFill';
 import FreshnessIndicator from '../aiUsage/FreshnessIndicator';
