@@ -57,7 +57,10 @@ export function usageProjection(
         recordedAt: window.resetsAt / 1000,
         value: pace.valueAtReset,
       },
-      text: `${Math.round(Math.max(0, 100 - pace.valueAtReset))}% left at reset`,
+      /* No floor under the subtraction: there is no exhaustion to name only
+         when the pace is flat - and then the window lands where it already is,
+         below 100 - or when it lands at or under 100 anyway. */
+      text: `${Math.round(100 - pace.valueAtReset)}% left at reset`,
     };
   }
 
