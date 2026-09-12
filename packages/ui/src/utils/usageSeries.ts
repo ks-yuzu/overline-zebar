@@ -149,24 +149,29 @@ export function consumedOver(
       break;
     }
   }
-  /* One guard, not two. `slice(-1)` would hand back the newest reading on its
-     own when no baseline was found, so a separate check for that could never
-     change the answer - and a rule that cannot change an answer cannot be
-     tested. A baseline and at least one reading after it, or there is nothing
-     to measure a rise from. */
   const span = baselineIndex < 0 ? [] : sorted.slice(baselineIndex);
-  if (span.length < 2) return null;
 
-  /* The baseline has to sit against the range's start, not merely before it.
-     A collection outage straddling that start leaves one rise spanning both
-     sides of it, and nothing in the samples says which part happened where -
-     so counting it whole would charge a week's work to the last day.
-     A gap wholly inside the range is not this: whenever the rise across it
-     happened, it happened here, and the total over the range still holds. */
+  /* The range has to be covered at both ends, within the tolerance the
+     collector is allowed.
+     At the start, because an outage straddling it leaves one rise spanning
+     both sides, and nothing in the samples says which part happened where -
+     counting it whole would charge a week's work to the last day.
+     At the end, because a total that stops hours short still gets divided by
+     the whole range, and the answer is then handed to a caller that measures
+     what is left from `now`: stale consumption against live time.
+     A gap wholly inside the range is neither: whenever the rise across it
+     happened, it happened here, and the total over the range still holds.
+     This is also what stands in for counting the samples. An empty span has
+     no baseline to find, and a lone one would have to sit within tolerance of
+     both ends at once - which no frame here is short enough to allow, the
+     smallest being a seventh of five hours against a quarter of an hour. */
   const baseline = span[0];
+  const newest = span[span.length - 1];
   if (
     !baseline ||
-    range.startAt - baseline.recordedAt > MISSING_SAMPLES_SECONDS
+    !newest ||
+    range.startAt - baseline.recordedAt > MISSING_SAMPLES_SECONDS ||
+    range.endAt - newest.recordedAt > MISSING_SAMPLES_SECONDS
   ) {
     return null;
   }

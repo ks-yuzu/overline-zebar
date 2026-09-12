@@ -81,6 +81,14 @@ const cases = [
     expect: 60,
   },
   {
+    // The other end of the same requirement. Collection that stopped hours ago
+    // still divides its total by the whole range, and the caller then measures
+    // what is left from now: stale consumption against live time.
+    name: 'a span whose newest reading stops short is not measured',
+    run: () => consumedOver(series([[24, 10], [6, 70]]), lastDay),
+    expect: null,
+  },
+  {
     // An outage wholly inside the range is not the same problem: whenever the
     // rise across it happened, it happened within the range.
     name: 'an outage inside the span still measures it',
