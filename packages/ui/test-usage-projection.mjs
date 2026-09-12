@@ -123,6 +123,23 @@ const cases = [
     expect: [0, 0],
   },
   {
+    // Nothing spent is no pace, and the reset such a window reports still
+    // slides, so there is no point on the axis to run a line to either.
+    name: 'an untouched window is not read',
+    run: () => windowPace(week(0), series([[24, 0], [0, 0]]), NOW),
+    expect: null,
+  },
+  {
+    // 30 points a day with 48 hours to run lands exactly on 100, and a reset
+    // is not an exhaustion: the quota lasted.
+    name: 'a pace landing on 100 at the reset names no exhaustion',
+    run: () => {
+      const pace = windowPace(week(40), series([[24, 10], [0, 40]]), NOW);
+      return [Math.round(pace.valueAtReset), pace.exhaustsAt];
+    },
+    expect: [100, null],
+  },
+  {
     name: 'a window whose samples do not reach back over the frame is not read',
     run: () => windowPace(week(70), series([[12, 60], [0, 70]]), NOW),
     expect: null,

@@ -98,6 +98,11 @@ export function windowPace(
   const remainingSeconds = (window.resetsAt - now) / 1000;
   if (remainingSeconds <= 0) return null;
 
+  /* An untouched window has no pace to carry forward, and the reset it reports
+     is still sliding - `windowTrendRange` refuses to pin its axis to one for
+     that reason - so a point placed there lands outside the axis on show. */
+  if (window.usedPercent <= 0) return null;
+
   const frameSeconds = window.windowSeconds / PACE_FRAME_DIVISOR;
   const consumed = consumedOver(samples, {
     startAt: now / 1000 - frameSeconds,
