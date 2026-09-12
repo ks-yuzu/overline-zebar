@@ -119,17 +119,9 @@ function splitIntoWindows(samples: UsageHistorySample[]): UsageWindow[] {
  * out, so the bars stay meaningful while that identity no longer holds.
  */
 /**
- * How much of the quota was spent over a span, in percentage points.
- *
- * Only rises count, and the first reading of a window that opens inside the
- * span counts whole: the same accounting as the daily bars, because it is the
- * same question asked of a different range. A span may cross a reset - a pace
- * is a property of the work, not of the quota it happens to be charged to -
- * which is why the windows have to be told apart rather than subtracted.
- *
- * Null where the span has no baseline: without a reading at or before its
- * start there is nothing to measure the first rise from, and a span that looks
- * quiet is indistinguishable from one the collector never covered.
+ * How much of the quota was spent over a span, in percentage points, counted
+ * as the daily bars count it. Null where the span is not covered.
+ * See docs/ai-usage-integration.md.
  */
 export function consumedOver(
   samples: UsageHistorySample[],
@@ -151,20 +143,9 @@ export function consumedOver(
   }
   const span = baselineIndex < 0 ? [] : sorted.slice(baselineIndex);
 
-  /* The range has to be covered at both ends, within the tolerance the
-     collector is allowed.
-     At the start, because an outage straddling it leaves one rise spanning
-     both sides, and nothing in the samples says which part happened where -
-     counting it whole would charge a week's work to the last day.
-     At the end, because a total that stops hours short still gets divided by
-     the whole range, and the answer is then handed to a caller that measures
-     what is left from `now`: stale consumption against live time.
-     A gap wholly inside the range is neither: whenever the rise across it
-     happened, it happened here, and the total over the range still holds.
-     This is also what stands in for counting the samples. An empty span has
-     no baseline to find, and a lone one would have to sit within tolerance of
-     both ends at once - which no frame here is short enough to allow, the
-     smallest being a seventh of five hours against a quarter of an hour. */
+  /* This also stands in for counting the samples: an empty span finds no
+     baseline, and a lone one would have to sit within tolerance of both ends
+     at once, which no frame here is short enough to allow. */
   const baseline = span[0];
   const newest = span[span.length - 1];
   if (
@@ -178,8 +159,8 @@ export function consumedOver(
 
   let consumed = 0;
   splitIntoWindows(span).forEach((usageWindow, index) => {
-    // The span's own baseline for the window it starts in; a window that opens
-    // inside the span opens empty, so its first reading is all consumption.
+    // A window opening inside the span opens empty, so its first reading is all
+    // consumption; the span's own baseline stands in for the window it starts in.
     let previous = index === 0 ? (usageWindow.samples[0]?.value ?? 0) : 0;
     for (const sample of usageWindow.samples) {
       consumed += Math.max(0, sample.value - previous);
@@ -397,13 +378,9 @@ export function hasJustReset(
 }
 
 /**
- * Whether a window has begun, which is what pins it to the reset it reports.
- * Until then that reset slides ahead of now, so nothing can be placed against
- * it - neither the axis nor a projection.
- *
- * A reading taken seconds after a reset is the exception the caller has to
- * supply: it reports nothing spent, like a quota that has sat idle, but it
- * names the window now running.
+ * Whether a window has begun, which is what fixes it to the reset it reports.
+ * `justReset` is the exception the caller has to supply: a reading taken
+ * seconds after a reset spends nothing yet still names the window now running.
  */
 export function windowStarted(
   window: { usedPercent: number; resetsAt: number },

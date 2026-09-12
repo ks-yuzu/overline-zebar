@@ -56,11 +56,7 @@ export function worstProjection(
   return projected.length > 0 ? Math.max(...projected) : null;
 }
 
-/**
- * The trailing part of a window whose consumption sets its pace: a seventh, so
- * a week is read from the last day and a five-hour window from the last three
- * quarters of an hour.
- */
+/** The trailing part of a window whose consumption sets its pace. */
 export const PACE_FRAME_DIVISOR = 7;
 
 export type WindowPace = {
@@ -71,56 +67,24 @@ export type WindowPace = {
 };
 
 /**
- * What the recent pace says about the rest of a window.
- *
- * Deliberately not `projectWindowUsage`, which the chip draws: that averages
- * the whole window, which is the right reading for one bar that has to stand
- * for everything, and the wrong one for a chart that can show the last day
- * against the days before it. The two surfaces answer with different paces on
- * purpose, so a card naming an exhaustion no longer implies the chip's fill
- * has passed 100.
- *
- * The frame is allowed to cross a reset. A pace is a property of the work, not
- * of the quota it is charged to, and clipping it to the window would leave a
- * freshly reset window with minutes of history to extrapolate from.
- *
- * Null where the samples do not cover the frame, or where the window has no
- * reset still ahead of it.
+ * What the recent pace says about the rest of a window, measured over the
+ * trailing `1 / PACE_FRAME_DIVISOR` of it. Null where there is nothing to say.
+ * See docs/ai-usage-integration.md.
  */
 export function windowPace(
   window: QuotaWindow,
   samples: UsageHistorySample[],
   now: number
 ): WindowPace | null {
-  /* No check that the usage is a finite number: both readers reject a payload
-     whose percentage is not one (`isUsagePeriod`, `isUsageWindow`), so nothing
-     that reaches here can carry NaN, and a guard no input can trip is a rule
-     no test can hold. */
-
-  /* Nothing to carry forward from a quota with nothing left, and nothing the
-     card would add by saying so: it prints the 100% itself, in the colour its
-     thresholds give it, and the chart stops drawing at the top of the plot.
-     Answering here as well took two attempts to get right, both times because
-     whether the window read as spent depended on the history behind it - which
-     has no bearing on a reading that says the quota is gone. */
+  /* Neither the usage nor the window length is checked for being a usable
+     number: no producer emits a payload where they are not. */
   if (window.usedPercent >= 100) return null;
-
-  /* The same judgement the axis makes, so the two cannot disagree about
-     whether there is a window here to project. An unstarted window's reset
-     still slides, and the chart falls back to the hours just gone rather than
-     pin to it, so a point anywhere near that reset would sit off the end of
-     the axis being drawn - while the card named a moment from it.
-     A window seconds past its reset is started, and carrying the pace that
-     emptied the last one into it is the most useful reading there is. */
+  // The axis' own judgement, so the two cannot come apart on it.
   if (!windowStarted(window, hasJustReset(samples, now / 1000))) return null;
 
   const remainingSeconds = (window.resetsAt - now) / 1000;
   if (remainingSeconds <= 0) return null;
 
-  /* No check that the window has a length. Nothing that reports a rate limit
-     reports one lasting no time, and neither the helper nor the reader has
-     ever had to turn such a payload away; a division guarded against a shape
-     no producer emits would be held up by a test written to emit it. */
   const frameSeconds = window.windowSeconds / PACE_FRAME_DIVISOR;
   const consumed = consumedOver(samples, {
     startAt: now / 1000 - frameSeconds,

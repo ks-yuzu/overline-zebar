@@ -24,13 +24,7 @@ type Props = {
   points: TrendPoint[];
   /** Legend text for `points`. */
   pointsLabel?: string;
-  /**
-   * Where the pace so far leads, drawn as a dashed continuation of the line:
-   * the point it reaches 100% at, or where it lands at the end of the axis.
-   *
-   * The point is passed in rather than derived here, so the crossing drawn and
-   * the one named beside the chart cannot come out at different times.
-   */
+  /** Where the pace so far leads, drawn as a dashed continuation. */
   projection?: TrendPoint;
   /** The same for `secondaryPoints`, which carries its own quota and pace. */
   secondaryProjection?: TrendPoint;
@@ -108,8 +102,8 @@ export default function UsageTrend({
   const secondaryPath = pathOf(secondaryCoordinates);
   const lastCoordinate = coordinates.at(-1);
   const lastSecondaryCoordinate = secondaryCoordinates.at(-1);
-  /* A series already at 100 has nowhere to run, and a point behind the last
-     sample would draw the line back into the window it has left. */
+  /* At 100 there is nowhere to run, and a point behind the last sample would
+     draw the line back into the window it has left. */
   const carriedOn = (
     from: TrendPoint | undefined,
     to: TrendPoint | undefined

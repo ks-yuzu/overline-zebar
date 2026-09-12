@@ -255,8 +255,6 @@ export default function ClaudeSection({
     now,
     data.current_week.timezone
   );
-  /* The chip folds this into the all-models projection because one bar cannot
-     say which quota it is following. A chart can draw both. */
   const weekModelProjection = weekModel
     ? usageProjection(
         {

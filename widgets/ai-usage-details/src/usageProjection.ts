@@ -5,11 +5,7 @@ import {
 } from '@overline-zebar/ui';
 import type { QuotaWindow, UsageHistorySample } from '@overline-zebar/ui';
 
-/**
- * A window this short carries its reset as a countdown rather than a date, and
- * the projection has to read the same way: a card that counts down to its
- * reset and names a date for running out is read as two different clocks.
- */
+/** Below this the card counts down rather than naming a date. */
 const RELATIVE_WINDOW_SECONDS = 24 * 60 * 60;
 
 function formatMoment(epochMs: number, timeZone: string | undefined) {
@@ -24,11 +20,7 @@ function formatMoment(epochMs: number, timeZone: string | undefined) {
 }
 
 export type UsageProjection = {
-  /**
-   * The point the chart runs its dashed line to, in epoch seconds as the
-   * axis reads them: where 100% is reached, or where the window lands at its
-   * reset when it is not.
-   */
+  /** The point the chart runs its dashed line to, in epoch seconds. */
   point: { recordedAt: number; value: number };
   /** The same projection as the card's second line. */
   text: string;
@@ -36,11 +28,8 @@ export type UsageProjection = {
 
 /**
  * What the recent pace says about the rest of the window, for both the card
- * and the chart. Undefined where there is nothing to say - the samples do not
- * cover the frame the pace is measured over, or the reset is already past.
- *
- * The two readings come from one call so that the moment the line crosses
- * 100% is the moment the card names.
+ * and the chart. One call rather than two, so the moment the line crosses 100%
+ * is the moment the card names.
  */
 export function usageProjection(
   window: QuotaWindow,
@@ -57,9 +46,8 @@ export function usageProjection(
         recordedAt: window.resetsAt / 1000,
         value: pace.valueAtReset,
       },
-      /* No floor under the subtraction: there is no exhaustion to name only
-         when the pace is flat - and then the window lands where it already is,
-         below 100 - or when it lands at or under 100 anyway. */
+      /* No floor: with no exhaustion to name, the window lands at or under
+         100 either way. */
       text: `${Math.round(100 - pace.valueAtReset)}% left at reset`,
     };
   }
