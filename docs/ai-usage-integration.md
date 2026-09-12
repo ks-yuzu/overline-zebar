@@ -1090,42 +1090,66 @@ corepack pnpm --filter @overline-zebar/ai-usage-details build
 
 ```sh
 python3 - <<'EOF'
-import json, datetime
-for name, path, pick in (
-    ('claude', '~/.cache/claude-usage-json/usage.json',
-     lambda s: (s['session_used_percent'], s.get('session_resets_at'), 5 * 3600)),
-    ('codex', '~/.cache/codex-usage-json/usage.json',
-     lambda s: (s['windows'][0]['usedPercent'],
-                s['windows'][0]['resetsAt'],
-                s['windows'][0]['windowDurationMins'] * 60)),
-):
-    import os
-    h = sorted(json.load(open(os.path.expanduser(path)))['history'],
-               key=lambda s: s['recorded_at'])
-    inside = total = moved = starts = 0
-    prev = None
-    for s in h:
-        used, reset, span = pick(s)
-        if reset is None:
+import json, datetime, os
+
+DAY = 24 * 3600
+
+def claude(sample):
+    for name, used, reset, span in (
+        ('5H', 'session_used_percent', 'session_resets_at', 5 * 3600),
+        ('7D', 'week_used_percent', 'week_resets_at', 7 * DAY),
+        ('7D model', 'week_model_used_percent', 'week_model_resets_at', 7 * DAY),
+    ):
+        if sample.get(reset) is None or sample.get(used) is None:
             continue
-        if isinstance(reset, str):
-            reset = datetime.datetime.fromisoformat(
-                reset.replace('Z', '+00:00')).timestamp()
-        if used == 0:
-            total += 1
-            inside += -60 <= reset - s['recorded_at'] <= span + 60
-        if prev and prev[0] == 0 and used > 0:
-            starts += 1
-            moved += abs(reset - prev[1]) > 300
-        prev = (used, reset)
-    print(f'{name}: 未使用sampleのwindowがnowを含む {inside}/{total}, '
-          f'使用開始でresetが動いた {moved}/{starts}')
+        yield name, sample[used], datetime.datetime.fromisoformat(
+            sample[reset].replace('Z', '+00:00')).timestamp(), span
+
+def codex(sample):
+    for window in sample['windows']:
+        yield (f"{window['windowDurationMins']}m", window['usedPercent'],
+               window['resetsAt'], window['windowDurationMins'] * 60)
+
+for label, path, windows in (
+    ('claude', '~/.cache/claude-usage-json/usage.json', claude),
+    ('codex', '~/.cache/codex-usage-json/usage.json', codex),
+):
+    history = sorted(json.load(open(os.path.expanduser(path)))['history'],
+                     key=lambda s: s['recorded_at'])
+    inside, total = {}, {}
+    moved, starts, previous = {}, {}, {}
+    for sample in history:
+        for name, used, reset, span in windows(sample):
+            if used == 0:
+                total[name] = total.get(name, 0) + 1
+                inside[name] = inside.get(name, 0) + (
+                    -60 <= reset - sample['recorded_at'] <= span + 60)
+            was = previous.get(name)
+            if was and was[0] == 0 and used > 0:
+                starts[name] = starts.get(name, 0) + 1
+                moved[name] = moved.get(name, 0) + (abs(reset - was[1]) > 300)
+            previous[name] = (used, reset)
+    for name in total:
+        print(f'{label} {name}: 未使用sampleのwindowがnowを含む '
+              f'{inside[name]}/{total[name]}, 使用開始でresetが動いた '
+              f'{moved.get(name, 0)}/{starts.get(name, 0)}')
 EOF
 ```
 
-`inside` が `total` を割り込んだら、軸をresetに合わせる前提が崩れている
+**panelが描くwindowを1つ残らず見る。**`windows[0]`やsessionだけを見ると、週次だけが
+前提を破っていても健全と報告する。
+
+いずれかのwindowで「nowを含む」が総数を割り込んだら、軸をresetに合わせる前提が崩れている
 (`packages/ui/src/utils/usageSeries.ts`の`windowTrendRange`)。
-`moved` が立ったら、Claudeの境界が固定という前提が崩れている。
+「使用開始でresetが動いた」が立ったら、Claudeの境界が固定という前提が崩れている。
+
+最後に測った値 (2026-09-13):
+
+```
+claude 5H:       997/997,  0/46      codex 300m:   2029/2029, 0/19
+claude 7D:        61/61,   0/3       codex 10080m:  127/127,  0/3
+claude 7D model:   2/2,    0/1
+```
 
 ## Troubleshooting
 
