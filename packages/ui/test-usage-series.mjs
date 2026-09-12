@@ -15,7 +15,6 @@
 import {
   buildDailyUsage,
   buildWindowPeaks,
-  hasJustReset,
   selectCurrentWindow,
   selectScopedSamples,
   windowTrendRange,
@@ -36,160 +35,29 @@ function series(entries) {
 
 const cases = [
   {
-    name: 'a reset the newest sample has just recorded',
-    run: () =>
-      hasJustReset(
-        series([
-          [10, 21, NOW + 300],
-          [5, 22, NOW + 300],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: true,
-  },
-  {
-    name: 'a quota that has been idle at zero',
-    run: () =>
-      hasJustReset(
-        series([
-          [10, 0, NOW + WINDOW - 600],
-          [5, 0, NOW + WINDOW - 300],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // While idle the reported reset slides with the clock, and a sampling gap
-    // makes consecutive readings name ends far enough apart to look like
-    // different windows. Nothing fell, so nothing reset.
-    name: 'a sampling gap in an idle run',
-    run: () =>
-      hasJustReset(
-        series([
-          [30, 0, NOW + WINDOW - 1800],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // The helper records nothing while Claude shows last-known values, and
-    // cron stops with the machine, so a fall can straddle hours of silence.
-    // The window may have reset and then sat unused, sliding its reset again.
-    name: 'a fall read across a gap in sampling',
-    run: () =>
-      hasJustReset(
-        series([
-          [140, 45, NOW - 3600],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // The reading is the one after a reset, but it is an hour old: whatever it
-    // says about the window ahead, "just" is no longer true.
-    name: 'a post-reset reading that has since gone stale',
-    run: () =>
-      hasJustReset(
-        series([
-          [65, 45, NOW - 3600],
-          [60, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    name: 'a window being spent',
-    run: () =>
-      hasJustReset(
-        series([
-          [5, 20, NOW + 3600],
-          [0, 22, NOW + 3600],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // A fall inside one window is a provider correction, not a reset. Reading
-    // it as one would move the axis onto a window that has not started.
-    name: 'a fall to zero reported for the same window',
-    run: () =>
-      hasJustReset(
-        series([
-          [5, 22, NOW + 3600],
-          [0, 0, NOW + 3600 + 60],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // Both widgets sort before calling, so nothing here depends on the sort
-    // inside - which is the reason to pin it: a caller that does not sort
-    // would otherwise read whichever two entries happen to be last.
-    name: 'samples handed over out of order',
-    run: () =>
-      hasJustReset(
-        [
-          { recordedAt: NOW, value: 0, windowEndsAt: NOW + WINDOW },
-          { recordedAt: NOW - 300, value: 22, windowEndsAt: NOW + 300 },
-        ],
-        NOW
-      ),
-    expect: true,
-  },
-  {
-    name: 'a history too short to compare',
-    run: () => hasJustReset(series([[0, 0, NOW + WINDOW]]), NOW),
-    expect: false,
-  },
-
-  {
-    name: 'axis: the reading just after a reset spans the new window',
-    run: () =>
-      windowTrendRange({
-        resetsAt: NOW + WINDOW,
-        windowSeconds: WINDOW,
-        usedPercent: 0,
-        justReset: true,
-        now: NOW,
-      }),
-    // The zero sits at the left edge: the window has just begun.
-    expect: { startAt: NOW, endAt: NOW + WINDOW, started: true },
-  },
-  {
-    name: 'axis: a window being spent spans the window',
+    // Claude counts a fixed boundary down while the quota sits unused, so an
+    // idle window is one already part-way through - not one waiting to begin.
+    // Anchoring anywhere else puts the axis where the card's reset is not.
+    name: 'axis: an idle window spans the window its reset belongs to',
     run: () =>
       windowTrendRange({
         resetsAt: NOW + 3600,
         windowSeconds: WINDOW,
-        usedPercent: 22,
-        justReset: false,
         now: NOW,
       }),
-    expect: { startAt: NOW + 3600 - WINDOW, endAt: NOW + 3600, started: true },
+    expect: { startAt: NOW + 3600 - WINDOW, endAt: NOW + 3600, anchored: true },
   },
   {
-    // Nothing spent and no reset in sight: the reported reset slides, so the
-    // axis would be all future. The hours just gone are what there is.
-    name: 'axis: an idle quota falls back to the hours just gone',
+    // Codex slides its reset to now plus the window while nothing is spent,
+    // which places the reading at the axis' own origin.
+    name: 'axis: a window whose reset is a full window away begins at now',
     run: () =>
       windowTrendRange({
         resetsAt: NOW + WINDOW,
         windowSeconds: WINDOW,
-        usedPercent: 0,
-        justReset: false,
         now: NOW,
       }),
-    expect: { startAt: NOW - WINDOW, endAt: NOW, started: false },
+    expect: { startAt: NOW, endAt: NOW + WINDOW, anchored: true },
   },
   {
     // An unreadable reset leaves nothing to anchor to.
@@ -198,11 +66,9 @@ const cases = [
       windowTrendRange({
         resetsAt: Number.NaN,
         windowSeconds: WINDOW,
-        usedPercent: 22,
-        justReset: false,
         now: NOW,
       }),
-    expect: { startAt: NOW - WINDOW, endAt: NOW, started: false },
+    expect: { startAt: NOW - WINDOW, endAt: NOW, anchored: false },
   },
   {
     // Providers derive the window end from a moment after the reading, so the
@@ -218,7 +84,7 @@ const cases = [
         ],
         {
           endsAt: NOW + WINDOW,
-          started: true,
+          anchored: true,
           startAt: NOW,
           endAt: NOW + WINDOW,
         }
@@ -238,7 +104,7 @@ const cases = [
         ],
         {
           endsAt: NOW + WINDOW,
-          started: true,
+          anchored: true,
           startAt: NOW,
           endAt: NOW + WINDOW,
         }
@@ -250,14 +116,14 @@ const cases = [
     // the guard a window with no end of its own takes every sample it is
     // handed - 14 days of them onto a five-hour axis. With it, the selection
     // falls back to the range, which keeps the one sample inside it.
-    name: 'window: a started window with no end of its own falls back to the range',
+    name: 'window: an anchored axis with no end of its own falls back to the range',
     run: () =>
       selectCurrentWindow(
         [
           { recordedAt: NOW - 600, value: 40, windowEndsAt: NOW - 300 },
           { recordedAt: NOW, value: 3, windowEndsAt: NOW + WINDOW },
         ],
-        { endsAt: undefined, started: true, startAt: NOW, endAt: NOW + WINDOW }
+        { endsAt: undefined, anchored: true, startAt: NOW, endAt: NOW + WINDOW }
       ).length,
     expect: 1,
   },
@@ -354,14 +220,14 @@ const cases = [
     expect: ['Asia/Tokyo', '(local)'],
   },
   {
-    // `started` chooses between matching on the window's end and taking a
+    // `anchored` chooses between matching on the window's end and taking a
     // run by time. The wrong one reads a spent window with the other's rule.
-    name: 'window selection: started reads by window end, unstarted by time',
+    name: 'window selection: an anchored axis reads by window end, otherwise by time',
     run: () => {
       const mine = NOW + 3 * 24 * 3600;
       const other = NOW + 9 * 24 * 3600;
       // The other window's reading is below the two that follow it, so the
-      // unstarted branch finds no fall to trim at and keeps all three.
+      // unanchored branch finds no fall to trim at and keeps all three.
       const samples = [
         { recordedAt: NOW - 2 * 3600, value: 2, windowEndsAt: other },
         { recordedAt: NOW - 3600, value: 4, windowEndsAt: mine },
@@ -372,12 +238,12 @@ const cases = [
         selectCurrentWindow(samples, {
           ...range,
           endsAt: mine,
-          started: true,
+          anchored: true,
         }).map((point) => point.value),
         selectCurrentWindow(samples, {
           ...range,
           endsAt: mine,
-          started: false,
+          anchored: false,
         }).map((point) => point.value),
       ];
     },

@@ -7,7 +7,6 @@ import {
   buildWindowPeaks,
   formatRemaining,
   formatUpdatedAt,
-  hasJustReset,
   readUsageStatus,
   selectCurrentWindow,
   windowTrendRange,
@@ -62,16 +61,10 @@ function formatReset(window: CodexUsageWindow, now: number) {
 }
 
 /** Reads Codex's window shape into the shared range. */
-function getTrendRange(
-  window: CodexUsageWindow,
-  now: number,
-  justReset: boolean
-) {
+function getTrendRange(window: CodexUsageWindow, now: number) {
   return windowTrendRange({
     resetsAt: window.resetsAt,
     windowSeconds: window.windowDurationMins * 60,
-    usedPercent: window.usedPercent,
-    justReset,
     now: now / 1000,
   });
 }
@@ -318,16 +311,12 @@ export default function CodexSection({
             data.history,
             window.windowDurationMins
           );
-          const range = getTrendRange(
-            window,
-            now,
-            hasJustReset(samples, now / 1000)
-          );
+          const range = getTrendRange(window, now);
           const history: TrendPoint[] = selectCurrentWindow(samples, {
             endAt: range.endAt,
             endsAt: window.resetsAt,
             startAt: range.startAt,
-            started: range.started,
+            anchored: range.anchored,
           });
           return (
             <Card
@@ -345,7 +334,7 @@ export default function CodexSection({
               <UsageTrend
                 endAt={range.endAt}
                 label={label}
-                paceGuide={range.started}
+                paceGuide={range.anchored}
                 points={history}
                 projection={getProjection(window, samples, now)?.point}
                 startAt={range.startAt}

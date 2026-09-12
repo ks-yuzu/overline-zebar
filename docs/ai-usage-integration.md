@@ -260,20 +260,33 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     そこでは`all models`とmodel名で呼び分ける (下記)。
   - **1日以上のwindow**は日次の消費量と累積。windowごとにすると14日で
     数本しか出ない。分母はその列のwindow自身のquotaで、横断的な基準は要らない。
-- **windowのrangeは利用開始時点で確定する。** 使っていない間、報告される
-  reset時刻は先送りされ続ける。Claude・Codexとも同じ挙動で、次で確認した。
-  - reset時刻が前進した瞬間の使用率は、Claudeで92.9%、Codexで95.5%が0%だった。
+- **報告されるresetは常にnowを含むwindowの終端である。到達の仕方はproviderで違う。**
+  片方の観察をもう片方へ敷かないこと。以前この節は「rangeは利用開始時点で確定し、
+  未使用の間resetは先送りされ続ける」を両者共通として書いていたが、**それはCodexにのみ
+  当てはまる。**再測の手順は「windowの挙動を測り直す」に置く。
+  - **Claude**: 固定された境界がカウントダウンし、境界を越える時だけ1 window分 (+5h)
+    跳ぶ (変化54件中52件が+5.0h)。使用率0%のsample 996/996で
+    `resets_at - 窓長 ≤ now ≤ resets_at`。**使用開始でresetは動かない**
+    (0%→>0%の遷移45/45でdelta 0.00h)。**未使用のwindowも既に走っていて経過している。**
+  - **Codex**: 未使用の間は`resetsAt = now + 窓長`へ滑り続ける (使用率0%のsample
+    2029/2029で比0.999-1.000)。最初の使用でそこに固定される (19/19)。
+    **未使用のwindowはnowに始まる。**
+  - **これが偽になる観測**: 使用率0%のsampleで`resets_at - 窓長 > now`が出れば、
+    「resetはnowを含むwindowの終端」は偽。Claudeで使用開始の前後に`resets_at`が動けば、
+    「境界は固定」は偽。
   - **途中の値へ下がる遷移が皆無**である (Claude 0件/2607、Codex 0件/2583)。
     使用率は必ず「0 → 上昇 → 一気に0」しか通らない。rolling windowなら
     古い使用分から順に落ちるため、必ず途中の値を通る。
   - reset時刻が滑ることだけを見てrolling windowと誤判定した経緯がある。
-    **滑るのは未使用の間だけ**であり、判別には減衰の有無を見る。
-- trendの横軸は、開始済みのwindowでは`resets_at`を終端とするそのwindowのrange、
-  未開始なら直近のwindow長とする。滑っている値を終端にすると軸のほとんどが
-  未来になる。pace guideも未開始のwindowでは出さない。
-  - **sampleは時間範囲ではなく、そのwindowのものを選ぶ。** 開始済みなら終端が
-    一致するsample、未開始ならresetからの0%の連なり。範囲で選ぶと、reset直後の
-    枠に前のwindowの登りが入る。
+    判別には減衰の有無を見る。**滑り方はproviderで違うので、判別の材料にしない。**
+- trendの横軸は`resets_at`を終端とするそのwindowのrangeとする。**開始済みかどうかで
+  分けない。**報告されたresetはnowを含むwindowの終端なので、Claudeの未使用windowでは
+  経過中のwindowが、Codexの未使用windowではnowに始まるwindowが軸になり、
+  どちらもcardが出すreset時刻と一致する。
+  - **`resets_at`が読めない時だけ直近のwindow長へ退避する。**錨が無いことと、
+    まだ使われていないことは別である。pace guideもこの時だけ出さない。
+  - **sampleは時間範囲ではなく、そのwindowのものを選ぶ。**終端が一致するsampleを採る。
+    範囲で選ぶと、前のwindowの登りが同じ枠に入る。
 - 長期graphの消費量は、reset時刻ではなく**値の上昇から求める**。
   - 下降は使い切ったのではなく返却されたもの (reset) なので数えない。
   - **provider側で定時外のquota resetが起きることがある。** `resets_at`は
@@ -333,21 +346,13 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
 - graphの横軸は履歴量にかかわらず、reset時刻を終端として各window時間幅に固定する。
   Claudeは5時間・7日間、Codexは`windowDurationMins`の時間幅を使う。
   履歴が0件でも時間軸を表示し、1件ならその時刻の点だけを表示する。
-- **windowが始まっていない間は、reset時刻ではなく直近の時間帯を軸にする。** rangeは
-  最初の使用時点で確定し、それまでreset時刻は滑り続けるため、軸がほぼ未来になる。
-  - **ただしreset直後の1読み取りは例外で、報告されたresetを軸にする。** 未使用と
-    「resetした直後」は使用率0で区別できないが、historyは区別できる (最新sampleが
-    0へ落ち、1つ前と異なるwindow endを報告している)。直近時間帯へ退避すると、
-    **1つ前のwindowの軸の右端に新windowの最初の0%を置く**ことになり、5時間残って
-    いるwindowが「空のまま終わった」ように読める。同じcardのtextは
-    "Resets in 4h 58m" と出るため、textとgraphが食い違う。
-  - **例外は「落下も読み取りも15分以内」の場合に限る。** historyは連続しない —
-    Claude helperはlast_known表示の間sampleを記録せず (数時間続き得る)、cronは
-    機械のスリープで止まる。そのgapをまたいだ落下は「今resetを観測した」ではなく、
-    resetの後に未使用のまま放置されreset時刻がまた滑っている可能性がある。15分は
-    このfileが既に「jitterかgapか」の境界として持つ値 (`MISSING_SAMPLES_SECONDS`)。
-  - この判定はClaude・Codexで共通なので`packages/ui`の`hasJustReset`と
-    `windowTrendRange`が持つ。両viewは自分のfield名を読み替えるだけにする。
+- **未使用のwindowでも軸はreset時刻に合わせる。**以前は「未開始なら直近の時間帯」へ
+  退避し、reset直後の1読み取りだけを例外にしていた (`hasJustReset`と15分の規定)。
+  退避の根拠は「未使用の間resetは滑り続けるため軸がほぼ未来になる」だったが、
+  **Claudeでは偽である** (上記の計測)。退避が無ければ例外も要らない。
+  - 退避していた間は、**軸が時間範囲・系列がwindow部分集合**という食い違いが出ていた。
+    軸の左側が「前のwindowで実際に使っていた時間帯」を指すのに線が無く、
+    使用が始まる瞬間に軸が過去1窓から未来1窓へ全幅で反転していた。
 - **panelの見出しは`[<軸の時間幅>] <系列の意味>`とする。** 「14D 5H peaks」は範囲
   (14D) とquota幅 (5H) を区切り無しに並べており、どちらがどちらの修飾か読めなかった。
   - 2段目: `[5H] usage trend`、`[7D] usage trend`
@@ -405,16 +410,20 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
     - **枠の内側の途切れは同じ問題ではない。**その上げ幅がいつ起きたにせよ、
       枠の中で起きている。枠全体の合計としては正しいので、拒否しない。
       実測では15分超の途切れは1日に0〜1回あり、内側まで拒否すると予測が定期的に消える。
-    - **未開始のwindowには出さない。**判定は軸と同じ`windowStarted`による。未開始の
-      windowが報告するresetは滑り続けるため、graphはそれを終端とせず直近のwindow長を
-      軸にする。予測の点はresetの側に置かれるので軸の終端より先になり、**cardだけが
-      graphに描けない時刻を述べる**状態になる。枠はresetを跨ぐため、使用率0%の
-      windowでも前のwindowの消費から「80時間後に尽きる」と述べうる。
-      これが塞ぐ経路である。
-    - **reset直後のwindowには出す。**`justReset`が真なら軸は報告されたresetを終端と
-      しており、**前のwindowを空にしたpaceをそのまま引き継いで描ける。**quotaが
-      配り直された直後は、その読みが最も有用である。使用率0%だけで黙らせると
-      ここまで巻き込む。
+    - **使用率0%のwindowにも出す。**枠は「時間の区間」であって「windowの一部」では
+      ないため、resetを跨いで直近の作業を読む。**「直近の作業ペースが続けば新しい
+      windowをこれだけ消費する」**が、この予測が見せたいものである。
+      - 枠が前のwindowに届いている間 (5Hなら43分、7Dなら1日) は、その作業を
+        引き継いだ値になる。**枠から抜ければ自走して0へ落ち**、`100% left at reset`
+        に変わる。出し続けるための規則は要らない。
+      - 以前は`windowStarted`で未開始のwindowを黙らせていた。理由は2つあり、
+        **「軸がwindowでないため予測点が軸外に出る」は軸の統一で消えた。**残る
+        「使用率0%でも前のwindowの消費から述べうる」は、上記のとおり**塞ぐべき
+        経路ではなく見せたいもの**だった。`hasJustReset`と15分の規定も、これに
+        伴って不要になった (reset直後だけ特別扱いする必要が無い)。
+      - **resetが読めないwindowには出さない。**`resets_at`が無い読み取りは`NaN`で
+        ここへ届き、`NaN% left at reset`として表示される。軸が錨を要求するのと
+        同じ条件である。
     - **使い切ったwindow (100%) には出さない。**運ぶpaceが無く、cardは大きな数字と
       閾値色で既にそれを言っており、graphも上端で描画を止めている。
       **ここで答えようとして2度失敗した。**どちらも「尽きているか」の判定が背後の
@@ -1072,6 +1081,85 @@ Widgetをbuild:
 ```sh
 corepack pnpm --filter @overline-zebar/main build
 corepack pnpm --filter @overline-zebar/ai-usage-details build
+```
+
+## windowの挙動を測り直す
+
+「報告されるresetは常にnowを含むwindowの終端」は**providerの挙動なので変わりうる。**
+主張を置いたまま古びさせないよう、同じ判定を`history`から測り直せるようにしておく。
+
+```sh
+python3 - <<'EOF'
+import json, datetime, os
+
+DAY = 24 * 3600
+
+def claude(sample):
+    for name, used, reset, span in (
+        ('5H', 'session_used_percent', 'session_resets_at', 5 * 3600),
+        ('7D', 'week_used_percent', 'week_resets_at', 7 * DAY),
+        ('7D model', 'week_model_used_percent', 'week_model_resets_at', 7 * DAY),
+    ):
+        if sample.get(reset) is None or sample.get(used) is None:
+            continue
+        yield name, sample[used], datetime.datetime.fromisoformat(
+            sample[reset].replace('Z', '+00:00')).timestamp(), span
+
+def codex(sample):
+    for window in sample['windows']:
+        yield (f"{window['windowDurationMins']}m", window['usedPercent'],
+               window['resetsAt'], window['windowDurationMins'] * 60)
+
+broken = []
+
+for label, path, windows in (
+    ('claude', '~/.cache/claude-usage-json/usage.json', claude),
+    ('codex', '~/.cache/codex-usage-json/usage.json', codex),
+):
+    history = sorted(json.load(open(os.path.expanduser(path)))['history'],
+                     key=lambda s: s['recorded_at'])
+    inside, total = {}, {}
+    moved, starts, previous = {}, {}, {}
+    for sample in history:
+        for name, used, reset, span in windows(sample):
+            if used == 0:
+                total[name] = total.get(name, 0) + 1
+                inside[name] = inside.get(name, 0) + (
+                    -60 <= reset - sample['recorded_at'] <= span + 60)
+            was = previous.get(name)
+            if was and was[0] == 0 and used > 0:
+                starts[name] = starts.get(name, 0) + 1
+                moved[name] = moved.get(name, 0) + (abs(reset - was[1]) > 300)
+            previous[name] = (used, reset)
+    if not total:
+        broken.append(f'{label}: 未使用のwindowが1つも測れていない')
+    for name in total:
+        print(f'{label} {name}: 未使用sampleのwindowがnowを含む '
+              f'{inside[name]}/{total[name]}, 使用開始でresetが動いた '
+              f'{moved.get(name, 0)}/{starts.get(name, 0)}')
+        if inside[name] < total[name] or moved.get(name, 0):
+            broken.append(f'{label} {name}')
+
+if broken:
+    raise SystemExit('前提が崩れている: ' + ', '.join(broken))
+EOF
+```
+
+**panelが描くwindowを1つ残らず見る。**`windows[0]`やsessionだけを見ると、週次だけが
+前提を破っていても健全と報告する。**崩れていれば非ゼロで終わる。**目視で5行を
+突き合わせる検査は、見落とした時に黙って通る。
+
+「nowを含む」が総数を割り込んだら、軸をresetに合わせる前提が崩れている
+(`packages/ui/src/utils/usageSeries.ts`の`windowTrendRange`)。
+「使用開始でresetが動いた」が立ったら、Claudeの境界が固定という前提が崩れている。
+per-modelの週次を持たないplanではその行が出ないだけで、失敗にはしない。
+
+最後に測った値 (2026-09-13):
+
+```
+claude 5H:       997/997,  0/46      codex 300m:   2029/2029, 0/19
+claude 7D:        61/61,   0/3       codex 10080m:  127/127,  0/3
+claude 7D model:   2/2,    0/1
 ```
 
 ## Troubleshooting

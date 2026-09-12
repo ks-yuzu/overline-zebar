@@ -159,28 +159,27 @@ const cases = [
     expect: [null, null, null],
   },
   {
-    // Nothing spent is no pace, and the reset such a window reports still
-    // slides, so there is no point on the axis to run a line to either. The
-    // frame may still hold the last window's spending, which without this
-    // would have an untouched quota naming a moment hours away - on a chart
-    // whose axis stops at now.
-    name: 'an untouched window is not read',
-    run: () =>
-      [
-        [[24, 0], [0, 0]],
-        [[24, 50, OLD_END], [12, 80, OLD_END], [1, 0], [0, 0]],
-      ].map((entries) => windowPace(week(0), series(entries), NOW)),
-    expect: [null, null],
+    // Nothing spent is not nothing to say: the window is running, and the
+    // frame holding no work is what "it lands where it is" means. Before, an
+    // untouched window was refused outright and the card's line vanished for
+    // as long as the quota sat unused.
+    name: 'an untouched window whose frame is quiet lands where it is',
+    run: () => {
+      const pace = windowPace(week(0), series([[24, 0], [0, 0]]), NOW);
+      return [pace.valueAtReset, pace.exhaustsAt];
+    },
+    expect: [0, null],
   },
   {
-    // Seconds past its reset the window is pinned to it, so the pace that
-    // emptied the last one can be carried into this one and drawn: 30 points
-    // over the frame's day, with 48 hours to run, is 60.
-    name: 'a window that has just reset carries the last pace forward',
+    // The frame is a span of time, so a quota handed back this recently is
+    // read against the work that emptied the last one: 30 points over the
+    // frame's day, with 48 hours to run, is 60. It decays on its own as the
+    // frame empties of that work.
+    name: 'an untouched window carries the pace still inside its frame',
     run: () => {
       const pace = windowPace(
         week(0),
-        series([[24, 50, OLD_END], [12, 80, OLD_END], [0.1, 80, OLD_END], [0, 0]]),
+        series([[24, 50, OLD_END], [12, 80, OLD_END], [1, 0], [0, 0]]),
         NOW
       );
       return Math.round(pace.valueAtReset);
