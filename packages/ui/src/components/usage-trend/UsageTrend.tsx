@@ -17,8 +17,9 @@ type Props = {
   endAt: number;
   label: string;
   /**
-   * Draws the line a window would follow consuming its quota evenly. Only
-   * meaningful for a window that starts empty and resets, not a rolling one.
+   * Draws the line a window would follow consuming its quota evenly, from
+   * empty at the axis' start to full at its end. Callers drop it where the
+   * reset was unreadable and the axis is only the hours just gone.
    */
   paceGuide?: boolean;
   points: TrendPoint[];
