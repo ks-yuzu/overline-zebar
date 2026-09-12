@@ -157,6 +157,20 @@ export function consumedOver(
   const span = baselineIndex < 0 ? [] : sorted.slice(baselineIndex);
   if (span.length < 2) return null;
 
+  /* The baseline has to sit against the range's start, not merely before it.
+     A collection outage straddling that start leaves one rise spanning both
+     sides of it, and nothing in the samples says which part happened where -
+     so counting it whole would charge a week's work to the last day.
+     A gap wholly inside the range is not this: whenever the rise across it
+     happened, it happened here, and the total over the range still holds. */
+  const baseline = span[0];
+  if (
+    !baseline ||
+    range.startAt - baseline.recordedAt > MISSING_SAMPLES_SECONDS
+  ) {
+    return null;
+  }
+
   let consumed = 0;
   splitIntoWindows(span).forEach((usageWindow, index) => {
     // The span's own baseline for the window it starts in; a window that opens

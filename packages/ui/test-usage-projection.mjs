@@ -67,6 +67,28 @@ const cases = [
     expect: 20,
   },
   {
+    // The rise from a baseline an hour the wrong side of the start spans time
+    // outside the range as well as inside it, and the samples do not say which
+    // part happened where. Counting it whole charged a week's work to a day.
+    name: 'a span whose baseline sits before an outage is not measured',
+    run: () => consumedOver(series([[25, 10], [0, 70]]), lastDay),
+    expect: null,
+  },
+  {
+    // Against the start, within the tolerance the collector is allowed.
+    name: 'a baseline a few minutes early still measures the span',
+    run: () => consumedOver(series([[24.2, 10], [0, 70]]), lastDay),
+    expect: 60,
+  },
+  {
+    // An outage wholly inside the range is not the same problem: whenever the
+    // rise across it happened, it happened within the range.
+    name: 'an outage inside the span still measures it',
+    run: () =>
+      consumedOver(series([[24, 10], [20, 20], [4, 60], [0, 70]]), lastDay),
+    expect: 60,
+  },
+  {
     name: 'a span with no reading at or before its start is not measured',
     run: () => consumedOver(series([[12, 40], [0, 50]]), lastDay),
     expect: null,
