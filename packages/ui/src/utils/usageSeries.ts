@@ -378,6 +378,24 @@ export function hasJustReset(
 }
 
 /**
+ * Whether a window has begun, which is what pins it to the reset it reports.
+ * Until then that reset slides ahead of now, so nothing can be placed against
+ * it - neither the axis nor a projection.
+ *
+ * A reading taken seconds after a reset is the exception the caller has to
+ * supply: it reports nothing spent, like a quota that has sat idle, but it
+ * names the window now running.
+ */
+export function windowStarted(
+  window: { usedPercent: number; resetsAt: number },
+  justReset: boolean
+) {
+  return (
+    (window.usedPercent > 0 || justReset) && Number.isFinite(window.resetsAt)
+  );
+}
+
+/**
  * The axis a window's trend is drawn against.
  *
  * A started window is pinned to its end, so the axis is the window itself. An
@@ -403,9 +421,7 @@ export function windowTrendRange(window: {
   justReset: boolean;
   now: number;
 }) {
-  const started =
-    (window.usedPercent > 0 || window.justReset) &&
-    Number.isFinite(window.resetsAt);
+  const started = windowStarted(window, window.justReset);
   const endAt = started ? window.resetsAt : window.now;
   return { startAt: endAt - window.windowSeconds, endAt, started };
 }

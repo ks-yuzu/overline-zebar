@@ -21,6 +21,8 @@ const NOW = 1_600_000_000_000;
 const NOW_SECONDS = NOW / 1000;
 /** The window every sample below belongs to, unless it says otherwise. */
 const END = NOW_SECONDS + 48 * HOUR;
+/** The window before it, whose spending the frame may still hold. */
+const OLD_END = NOW_SECONDS + HOUR;
 
 /** Readings at `[hoursAgo, value]`, oldest first. */
 function series(entries) {
@@ -124,10 +126,32 @@ const cases = [
   },
   {
     // Nothing spent is no pace, and the reset such a window reports still
-    // slides, so there is no point on the axis to run a line to either.
+    // slides, so there is no point on the axis to run a line to either. The
+    // frame may still hold the last window's spending, which without this
+    // would have an untouched quota naming a moment hours away - on a chart
+    // whose axis stops at now.
     name: 'an untouched window is not read',
-    run: () => windowPace(week(0), series([[24, 0], [0, 0]]), NOW),
-    expect: null,
+    run: () =>
+      [
+        [[24, 0], [0, 0]],
+        [[24, 50, OLD_END], [12, 80, OLD_END], [1, 0], [0, 0]],
+      ].map((entries) => windowPace(week(0), series(entries), NOW)),
+    expect: [null, null],
+  },
+  {
+    // Seconds past its reset the window is pinned to it, so the pace that
+    // emptied the last one can be carried into this one and drawn: 30 points
+    // over the frame's day, with 48 hours to run, is 60.
+    name: 'a window that has just reset carries the last pace forward',
+    run: () => {
+      const pace = windowPace(
+        week(0),
+        series([[24, 50, OLD_END], [12, 80, OLD_END], [0.1, 80, OLD_END], [0, 0]]),
+        NOW
+      );
+      return Math.round(pace.valueAtReset);
+    },
+    expect: 60,
   },
   {
     // 30 points a day with 48 hours to run lands exactly on 100, and a reset

@@ -1,7 +1,7 @@
 /* Spelt with the extension, unlike every other import here: tsc emits the
    specifier as written, and the projection tests load this file in Node, which
    will not resolve an extensionless relative path. */
-import { consumedOver } from './usageSeries.js';
+import { consumedOver, hasJustReset, windowStarted } from './usageSeries.js';
 import type { UsageHistorySample } from './usageSeries.js';
 
 export type QuotaWindow = {
@@ -92,16 +92,19 @@ export function windowPace(
   samples: UsageHistorySample[],
   now: number
 ): WindowPace | null {
-  if (!Number.isFinite(window.resetsAt) || !Number.isFinite(window.usedPercent))
-    return null;
+  if (!Number.isFinite(window.usedPercent)) return null;
+
+  /* The same judgement the axis makes, so the two cannot disagree about
+     whether there is a window here to project. An unstarted window's reset
+     still slides, and the chart falls back to the hours just gone rather than
+     pin to it, so a point anywhere near that reset would sit off the end of
+     the axis being drawn - while the card named a moment from it.
+     A window seconds past its reset is started, and carrying the pace that
+     emptied the last one into it is the most useful reading there is. */
+  if (!windowStarted(window, hasJustReset(samples, now / 1000))) return null;
 
   const remainingSeconds = (window.resetsAt - now) / 1000;
   if (remainingSeconds <= 0) return null;
-
-  /* An untouched window has no pace to carry forward, and the reset it reports
-     is still sliding - `windowTrendRange` refuses to pin its axis to one for
-     that reason - so a point placed there lands outside the axis on show. */
-  if (window.usedPercent <= 0) return null;
 
   const frameSeconds = window.windowSeconds / PACE_FRAME_DIVISOR;
   const consumed = consumedOver(samples, {
