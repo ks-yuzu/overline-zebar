@@ -92,7 +92,10 @@ export function windowPace(
   samples: UsageHistorySample[],
   now: number
 ): WindowPace | null {
-  if (!Number.isFinite(window.usedPercent)) return null;
+  /* No check that the usage is a finite number: both readers reject a payload
+     whose percentage is not one (`isUsagePeriod`, `isUsageWindow`), so nothing
+     that reaches here can carry NaN, and a guard no input can trip is a rule
+     no test can hold. */
 
   /* Nothing to carry forward from a quota with nothing left, and nothing the
      card would add by saying so: it prints the 100% itself, in the colour its
