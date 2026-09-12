@@ -15,7 +15,6 @@ export {
   buildDailyUsage,
   buildWindowPeaks,
   consumedOver,
-  hasJustReset,
   isSameWindow,
   selectCurrentWindow,
   selectScopedSamples,

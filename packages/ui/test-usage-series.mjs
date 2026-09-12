@@ -15,7 +15,6 @@
 import {
   buildDailyUsage,
   buildWindowPeaks,
-  hasJustReset,
   selectCurrentWindow,
   selectScopedSamples,
   windowTrendRange,
@@ -35,123 +34,6 @@ function series(entries) {
 }
 
 const cases = [
-  {
-    name: 'a reset the newest sample has just recorded',
-    run: () =>
-      hasJustReset(
-        series([
-          [10, 21, NOW + 300],
-          [5, 22, NOW + 300],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: true,
-  },
-  {
-    name: 'a quota that has been idle at zero',
-    run: () =>
-      hasJustReset(
-        series([
-          [10, 0, NOW + WINDOW - 600],
-          [5, 0, NOW + WINDOW - 300],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // While idle the reported reset slides with the clock, and a sampling gap
-    // makes consecutive readings name ends far enough apart to look like
-    // different windows. Nothing fell, so nothing reset.
-    name: 'a sampling gap in an idle run',
-    run: () =>
-      hasJustReset(
-        series([
-          [30, 0, NOW + WINDOW - 1800],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // The helper records nothing while Claude shows last-known values, and
-    // cron stops with the machine, so a fall can straddle hours of silence.
-    // The window may have reset and then sat unused, sliding its reset again.
-    name: 'a fall read across a gap in sampling',
-    run: () =>
-      hasJustReset(
-        series([
-          [140, 45, NOW - 3600],
-          [0, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // The reading is the one after a reset, but it is an hour old: whatever it
-    // says about the window ahead, "just" is no longer true.
-    name: 'a post-reset reading that has since gone stale',
-    run: () =>
-      hasJustReset(
-        series([
-          [65, 45, NOW - 3600],
-          [60, 0, NOW + WINDOW],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    name: 'a window being spent',
-    run: () =>
-      hasJustReset(
-        series([
-          [5, 20, NOW + 3600],
-          [0, 22, NOW + 3600],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // A fall inside one window is a provider correction, not a reset. Reading
-    // it as one would move the axis onto a window that has not started.
-    name: 'a fall to zero reported for the same window',
-    run: () =>
-      hasJustReset(
-        series([
-          [5, 22, NOW + 3600],
-          [0, 0, NOW + 3600 + 60],
-        ]),
-        NOW
-      ),
-    expect: false,
-  },
-  {
-    // Both widgets sort before calling, so nothing here depends on the sort
-    // inside - which is the reason to pin it: a caller that does not sort
-    // would otherwise read whichever two entries happen to be last.
-    name: 'samples handed over out of order',
-    run: () =>
-      hasJustReset(
-        [
-          { recordedAt: NOW, value: 0, windowEndsAt: NOW + WINDOW },
-          { recordedAt: NOW - 300, value: 22, windowEndsAt: NOW + 300 },
-        ],
-        NOW
-      ),
-    expect: true,
-  },
-  {
-    name: 'a history too short to compare',
-    run: () => hasJustReset(series([[0, 0, NOW + WINDOW]]), NOW),
-    expect: false,
-  },
-
   {
     // Claude counts a fixed boundary down while the quota sits unused, so an
     // idle window is one already part-way through - not one waiting to begin.

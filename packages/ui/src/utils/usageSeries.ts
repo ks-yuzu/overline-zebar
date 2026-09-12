@@ -336,62 +336,6 @@ export function buildWindowPeaks(
 }
 
 /**
- * Whether the newest reading is the first one taken after a reset.
- *
- * A window's range is pinned when usage starts, so before that the reported
- * reset slides and cannot be used as an axis. Zero usage alone does not say
- * which of the two we are in: it is equally the reading taken seconds after a
- * reset, whose window has begun. The history tells them apart - the newest
- * sample fell to nothing and reports a different window than the one before
- * it, which only happens on the reading that follows a reset.
- *
- * Both readings have to be recent for that to hold. History is not continuous:
- * the Claude helper records nothing while the screen shows last-known values,
- * which can run for hours, and cron does not run while the machine sleeps. A
- * fall read across a gap like that is not a reset just observed - the window
- * may have reset and then sat unused, and its reported reset is sliding again.
- * Anchoring to that would put the whole axis in the future, which is what the
- * unstarted fallback exists to avoid. So both the fall and the reading itself
- * must be inside the span a gap is still jitter.
- *
- * `now` is epoch seconds, like every recordedAt here. Milliseconds make the
- * age comparison enormous and this quietly answer false for good.
- */
-export function hasJustReset(
-  samples: UsageHistorySample[],
-  now: number
-): boolean {
-  // Sorted here rather than assumed: every other export in this file does the
-  // same, and reading the wrong two samples fails silently.
-  const sorted = samples.slice().sort((a, b) => a.recordedAt - b.recordedAt);
-  const previous = sorted.at(-2);
-  const latest = sorted.at(-1);
-  if (!previous || !latest) return false;
-
-  return (
-    latest.value === 0 &&
-    previous.value > 0 &&
-    !isSameWindow(previous.windowEndsAt, latest.windowEndsAt) &&
-    latest.recordedAt - previous.recordedAt <= MISSING_SAMPLES_SECONDS &&
-    now - latest.recordedAt <= MISSING_SAMPLES_SECONDS
-  );
-}
-
-/**
- * Whether a window has begun, which is what fixes it to the reset it reports.
- * `justReset` is the exception the caller has to supply: a reading taken
- * seconds after a reset spends nothing yet still names the window now running.
- */
-export function windowStarted(
-  window: { usedPercent: number; resetsAt: number },
-  justReset: boolean
-) {
-  return (
-    (window.usedPercent > 0 || justReset) && Number.isFinite(window.resetsAt)
-  );
-}
-
-/**
  * The axis a window's trend is drawn against: the window the provider reports,
  * ending at the reset it names.
  *
