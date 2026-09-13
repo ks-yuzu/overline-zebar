@@ -4,7 +4,7 @@ import { currentWidget, startWidget, WidgetPlacement } from 'zebar';
  * Keep in sync with the ai-usage-details preset in zpack.json: the placement
  * built here overrides it.
  */
-const PANEL_SIZE = { width: 1700, height: 650 };
+const PANEL_SIZE = { width: 1700, height: 854 };
 
 /**
  * Opens the panel that holds both services. Either chip opens it, and this is

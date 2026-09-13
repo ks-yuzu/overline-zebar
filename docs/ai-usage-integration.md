@@ -415,9 +415,12 @@ widgetのstale判定がそのまま効く。半分だけの答えは公開しな
     引き受ける。下流を1つずつ固めて回るのは、規則だけが増えて担保は増えない。
 - `widgets/ai-usage-details/`
   - どちらのchipをクリックしても開く統合パネル。左にClaude、右にCodexを置き、
-    各blockが3段構成 (現在値・window内の推移・14日の推移) を持つ。
+    各blockが4段構成 (現在値・window内の推移・14日の推移・消費の内訳) を持つ。
   - `ClaudeSection.tsx` / `CodexSection.tsx`がprovider固有の読み替えを持ち、
-    `SectionHeader.tsx` `UsageCard.tsx` `usageStatus.ts` `panelLayout.ts`を共有する。
+    `SectionHeader.tsx` `UsageCard.tsx` `CostBreakdown.tsx` `usageStatus.ts`
+    `panelLayout.ts`を共有する。
+  - **コストはusageとは別に取得する。**経路がGrafanaで、usage helperが動いていても
+    そちらだけ落ちることがあり、逆もある。片方が欠けてももう片方の段は残る。
   - window名と時間幅は、Codex側は`windowDurationMins`から動的に決める。
   - CPU/RAM詳細と同様、main bar直下へ配置し、focusを失うと閉じる。
 
@@ -785,7 +788,7 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
 
 ### 統合パネル
 
-**Claude詳細とCodex詳細は1枚のwidget (`ai-usage-details`、幅1700px・高さ650px) に
+**Claude詳細とCodex詳細は1枚のwidget (`ai-usage-details`、幅1700px・高さ854px) に
 統合する。**chipは2つのままで、どちらをクリックしても同じパネルが開く。
 
 - **統合の理由は、2つを並べて比べられないことにある。**詳細viewはfocusを失うと
@@ -802,12 +805,44 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
     `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
   - 起動は`widgets/main/src/components/aiUsage/panel.ts`の1箇所に置く。どのwidgetを
     どの大きさでどこへ開くかが2つのchipで割れないようにする。
+- **5段目は週と5Hの消費の内訳で、Claudeのblockだけが持つ。**Codexはusageのmetricを
+  1つも送っていないため割るものが無い。**trackは共有templateに残し、Codex側は
+  空にする。**左右のblockの高さを揃えるためと、出せるようになった時に段が既に
+  あるようにするためである。
+  - **上の段と同じ2列に割る。**列の位置が上の段のwindowと同じものを指す。
+  - **全件を出し、段の中をscrollさせる。**cacheは消費のあったsessionを全部持つ。
+    上位N件に切ると、切った分が`total`に現れず、行の合計と合わなくなる。
+  - **`unresolved`も1行として出す。**落とすと行が`total`に合わない。実測では
+    週の$1,329のうち$451 (34%) がこれで、別マシンのsessionである。
+  - **表示名は`custom_title`→(本文が無ければ`ai_title`を副題に足す)→`ai_title`
+    →`project`→`session_id`の先頭。**組み立てはここが持つ。helperは両方の題を
+    そのまま渡す。実データで`#102`が`#102 AI usage ポップアップパネル統合`になる。
+  - **合っているのは「行が欠けていないこと」であって、表示の桁ではない。**行と
+    `unresolved`は`total`をちょうど作るが、画面はそれぞれを2桁へ丸めるため、
+    見えている数字の合計は見えている`total`と最大で行あたり半セントずれる。
+    **列を合わせるために行の数字を調整しない。**その行はそのsessionの額でなくなる。
+  - **半セント未満は`$0.00`と出る。無ではない。**helperが落とすのは消費が厳密に0の
+    行だけなので、**行があること自体が「0ではない」を示している。**切り上げると、
+    `$0.004`の行が2つ並んだとき、合計1セントの下に1セントの行が2本出る。
+  - **鮮度はこの段が自分で持つ。**helperは引けなかった時に前回のcacheを出し直すので、
+    **数字は画面に残り、`generated_at`だけが止まる。**blockのheaderが出しているのは
+    usageの鮮度で、そちらは別に取得しているため、**usageが今のものでもコストが
+    数時間前ということがある。**古い時だけ、段の中にアイコンと経過時間を出す。
+  - **usageの取得が失敗しても、この段は残す。**取得が別である以上、片方に答えが
+    あってもう片方に無いことがある。失敗の表示で覆うと、届いた答えを隠すことになる。
+- **このpanelのCardはすべて同じ面 (`bg-background-deeper/60`) を使う。**取得に失敗した
+  ときの退避表示も含める。**面に意味を持たせない。**現在値のcardの強調は、文字サイズ・
+  progress bar・`used`のpill・paddingの4つが担っており、面はその4つ目ではなく5つ目で
+  あった。面を揃えると前景との対比が上がり、panel全体が読みやすくなる。
+  - **一部だけ既定の面に残すと、そこだけ明るい継ぎ接ぎに見える。**実際、複数行に
+    折り返された`<Card`を1行前提の置換が取りこぼし、Codexのwindow内の推移だけが
+    揃っていない状態になった。
 - **左右のblockは独立したgridで、同じtrack高さを共有する** (`panelLayout.ts`の
   `SECTION_GRID_ROWS`)。Claudeの7D cardはmodel別の枠を内側に持つぶん背が高く、
   高さを各blockに任せると左右で段の開始位置がずれる。
   - **header行も固定trackにする。**取得に失敗したblockはplan名を持たないため、
     `auto`だと隣のblockと段が揃わない。
-  - 高さは650pxのパネルに対する割り当てである。想定より背の高い内容が来た時に
+  - 高さは854pxのパネルに対する割り当てである。想定より背の高い内容が来た時に
     黙って切らないよう、容器の`overflow-y-auto`は残す。
 - **取得はprovider単位で、失敗も単位ごとに閉じ込める。**片方のhelperが落ちても
   もう片方のblockは残る。失敗したblockはheaderを保ったまま、cardの3段分を
@@ -1051,6 +1086,9 @@ distributionを既定のuserで起動する。
 ```text
 wsl.exe -- sh -c '$HOME/bin/<helper> --cached-only'
 ```
+
+統合パネルは`claude-cost-json`も同じ形で読む。main barのchipは読まないので、
+`zpack.json`の許可も`ai-usage-details`にだけ足す。
 
 `$HOME`はWSL側の`sh`が展開する。`--cached-only`はcacheを読むだけで、
 `jq`・`flock`・各CLIも`PATH`も必要としないため、cron以外の最小環境で動く。

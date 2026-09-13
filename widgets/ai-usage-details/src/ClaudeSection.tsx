@@ -14,10 +14,12 @@ import {
   windowTrendRange,
 } from '@overline-zebar/ui';
 import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
+import CostBreakdown from './CostBreakdown';
 import SectionHeader from './SectionHeader';
 import UsageCard from './UsageCard';
 import { usageProjection } from './usageProjection';
 import { CHART_WIDTH_HALF, SECTION_GRID_ROWS } from './panelLayout';
+import { useClaudeCost } from './useClaudeCost';
 import { hasModelWindow, useClaudeUsage } from './useClaudeUsage';
 import type {
   ClaudeUsageHistorySample,
@@ -153,6 +155,28 @@ export default function ClaudeSection({
   thresholds,
 }: Props) {
   const { data, error, isPending } = useClaudeUsage();
+  /* Fetched apart from the usage reading: the cost path runs through Grafana
+     and can be out when the usage helper is fine, and the other way round. */
+  const { data: cost } = useClaudeCost();
+  /* Its own staleness, for the same reason. The helper reprints its last cache
+     when a query fails, so the numbers stay and only `generated_at` stops. */
+  const costStatus = cost && readUsageStatus(cost.generated_at, now);
+  const costRow = (
+    /* Where the windows above went. Split the same way as the cards, so a
+       column here is the same window as the column above it. */
+    <div className="grid min-h-0 grid-cols-2 gap-2">
+      <CostBreakdown
+        label="5H session"
+        status={costStatus}
+        window={cost?.windows.session}
+      />
+      <CostBreakdown
+        label="7D week"
+        status={costStatus}
+        window={cost?.windows.week}
+      />
+    </div>
+  );
 
   if (!data) {
     return (
@@ -165,13 +189,15 @@ export default function ClaudeSection({
           subtitle="Current plan windows"
           title="Claude usage"
         />
-        {/* Spans what the three rows of cards would have filled, so the block
-            beside it keeps its own rows where they were. */}
-        <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
+        {/* Spans the three usage rows only. The cost row is fetched on its
+            own and can have an answer when this one does not, so covering it
+            here would hide a reading that arrived. */}
+        <Card className="bg-background-deeper/60 row-span-3 items-center justify-center text-sm text-text-muted">
           {isPending
             ? 'Loading Claude usage…'
             : error?.message || 'Usage unavailable'}
         </Card>
+        {costRow}
       </section>
     );
   }
@@ -302,7 +328,7 @@ export default function ClaudeSection({
       </div>
 
       <div className="grid min-h-0 grid-cols-2 gap-2">
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [5H] usage trend
@@ -321,7 +347,7 @@ export default function ClaudeSection({
             viewWidth={CHART_WIDTH_HALF}
           />
         </Card>
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [7D] usage trend
@@ -347,7 +373,7 @@ export default function ClaudeSection({
       </div>
 
       <div className="grid min-h-0 grid-cols-2 gap-2">
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [14D] 5H usage peak per window
@@ -366,7 +392,7 @@ export default function ClaudeSection({
             viewWidth={CHART_WIDTH_HALF}
           />
         </Card>
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [14D] 7D usage trend and daily usage
@@ -391,6 +417,8 @@ export default function ClaudeSection({
           />
         </Card>
       </div>
+
+      {costRow}
     </section>
   );
 }

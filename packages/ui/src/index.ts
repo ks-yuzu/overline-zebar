@@ -6,6 +6,8 @@ export { Card, CardTitle } from './components/card/Card';
 export { Chip, chipStyles } from './components/chip';
 export { Progress, ProgressValue } from './components/progress';
 export { clampPercentage } from './utils/clampPercentage';
+export { formatCost, sessionDisplayName } from './utils/costRows';
+export type { CostSession } from './utils/costRows';
 export { getThresholdColor } from './utils/thresholds';
 export { default as UsageTrend } from './components/usage-trend/UsageTrend';
 export type { TrendPoint } from './components/usage-trend/UsageTrend';
