@@ -199,8 +199,11 @@ node_exporter textfile collector向けに`claude_session_info`を出す。
 ```text
 claude_session_info{session_id="…",session_name="#104 …",custom_title="#104 …",
   ai_title="…",task_id="104",project="overline-zebar",cwd="/home/…"} 1
-claude_session_last_activity_timestamp_seconds{session_id="…"} 1789243502
 ```
+
+**transcriptの最終更新は出さない。**emitterが止まったかどうかは、node_exporterが
+このfileに対して既に出している`node_textfile_mtime_seconds`が答える。session
+ごとの時刻を読む利用者は無い。
 
 **読み出す側でtranscriptを引かないのは、別マシンのsessionを名前にできないため
 である。**同じGrafana stackへ送っている別のマシンでこのemitterも動かせば、そちらの

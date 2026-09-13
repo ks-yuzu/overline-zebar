@@ -201,17 +201,6 @@ def prometheus_text(sessions):
     ]
     for session in sessions:
         rows.append(f"claude_session_info{labels(session.labels())} 1")
-    rows += [
-        "# HELP claude_session_last_activity_timestamp_seconds"
-        " Unix timestamp of the last write to a Claude Code session transcript.",
-        "# TYPE claude_session_last_activity_timestamp_seconds gauge",
-    ]
-    for session in sessions:
-        pairs = [("session_id", session.session_id)]
-        rows.append(
-            f"claude_session_last_activity_timestamp_seconds{labels(pairs)}"
-            f" {session.last_activity:.0f}"
-        )
     return ("\n".join(rows) + "\n").encode()
 
 

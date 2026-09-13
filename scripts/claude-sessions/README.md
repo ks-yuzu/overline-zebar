@@ -19,8 +19,12 @@ its sessions gain names in the same query.
 ```text
 claude_session_info{session_id="…",session_name="#104 …",custom_title="#104 …",
   ai_title="…",task_id="104",project="overline-zebar",cwd="/home/…"} 1
-claude_session_last_activity_timestamp_seconds{session_id="…"} 1789243502
 ```
+
+The transcript's last write is not published. node_exporter already exposes
+`node_textfile_mtime_seconds` for the file this writes, which is what says
+whether the emitter is still running, and nothing reads a per-session
+timestamp.
 
 | Label | Source |
 | --- | --- |
