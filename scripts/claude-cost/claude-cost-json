@@ -13,7 +13,14 @@ from pathlib import Path
 
 COST_METRIC = "claude_code_cost_usage_USD_total"
 INFO_METRIC = "claude_session_info"
-WEEK_SECONDS = 7 * 86400
+
+# 名前・窓の長さ・usage cache内のkey。**window長はhelperの外にも写しがある**
+# (docs/ai-usage-integration.md「window長は複数箇所に重複している」)。
+# providerが変えた時は揃える。
+WINDOWS = (
+    ("session", 5 * 3600, "current_session"),
+    ("week", 7 * 86400, "current_week"),
+)
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TOP = 20
@@ -55,33 +62,40 @@ def parse_iso8601(value):
         return None
 
 
-def window_bounds(usage_cache, now):
-    """週windowの起点と終端を返す。
+def read_usage_cache(path):
+    try:
+        payload = json.loads(Path(path).read_bytes())
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
-    起点はusage helperが報告するresetから7日戻して求める。読めない場合は
-    素の7日に落とす。**どちらで求めたかを出力に残す。**同じ形の数字が
-    別の窓から来ていることが、後から見て分からなくなる。
+
+def window_bounds(payload, key, length, now):
+    """windowの起点と終端を返す。
+
+    起点はusage helperが報告するresetからwindow長だけ戻して求める。読めない
+    場合は今からwindow長だけ戻した窓に落とす。**どちらで求めたかを出力に
+    残す。**同じ形の数字が別の窓から来ていることが、後から見て分からなくなる。
     """
     try:
-        payload = json.loads(Path(usage_cache).read_bytes())
-        reset = parse_iso8601(payload["current_week"]["resets_at"])
-    except (OSError, ValueError, KeyError, TypeError):
+        reset = parse_iso8601(payload[key]["resets_at"])
+    except (KeyError, TypeError):
         reset = None
     if reset is None:
-        return now - dt.timedelta(seconds=WEEK_SECONDS), None, "fallback_7d"
+        return now - dt.timedelta(seconds=length), None, "fallback_length"
     source = "usage_cache"
     if reset <= now:
-        # usage cacheがresetをまたいで止まっていると、報告されたresetは前の週の
-        # ものになる。そのまま使うと窓が7日より長くなり、**7日でない期間を
-        # 「今週」として公開する。**週の長さは既に`reset - 7d`で前提にしている
-        # ので、同じ前提で今の窓へ送る。
-        # **この規則が偽になる観測:** providerが週の長さを変えると、ここが出す
+        # usage cacheがresetをまたいで止まっていると、報告されたresetは前の窓の
+        # ものになる。そのまま使うと窓がwindow長より長くなり、**window長でない
+        # 期間を「今の窓」として公開する。**window長は既に`reset - 長さ`で前提に
+        # しているので、同じ前提で今の窓へ送る。
+        # **この規則が偽になる観測:** providerがwindow長を変えると、ここが出す
         # 窓は静かにずれる。chipのcount downと`window.resets_at`が食い違う。
         elapsed = (now - reset).total_seconds()
-        periods = int(elapsed // WEEK_SECONDS) + 1
-        reset += dt.timedelta(seconds=periods * WEEK_SECONDS)
+        periods = int(elapsed // length) + 1
+        reset += dt.timedelta(seconds=periods * length)
         source = "usage_cache_rolled"
-    return reset - dt.timedelta(seconds=WEEK_SECONDS), reset, source
+    return reset - dt.timedelta(seconds=length), reset, source
 
 
 def parse_vector(payload):
@@ -228,29 +242,40 @@ def build_rows(costs, info, top):
 
 
 def build_output(config, now):
-    start, reset, source = window_bounds(config["usage_cache"], now)
-    # 3本とも同じ瞬間で評価する。emitterがこの間に題を書き換えると、
-    # 別の瞬間のlabelを凍らせたコストへ付けることになる。
-    costs = window_cost(config, start.timestamp(), now.timestamp())
-    rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
-        costs, session_info(config, now.timestamp()), config["top"])
-    # **`total`は報告する値から積む。**生の合計を別に丸めると、行ごとの丸めとの
-    # 差が残り、「行と不明と打ち切りの合計がtotalに一致する」という書いた規則が
-    # 偽になる。差は表示の2桁には出ないが、真でない規則を書かない。
-    sessions = [dict(row, cost=round(row["cost"], 6)) for row in rows]
-    unresolved, truncated = round(unresolved, 6), round(truncated, 6)
-    return {
-        "generated_at": now.isoformat(timespec="seconds"),
-        "currency": "USD",
-        "window": {
+    """5Hと7Dの両方について、その窓の消費をsessionごとに返す。
+
+    panelは他のすべての段で2つのwindowを対称に扱う。片方だけ出すと、
+    そこだけ別の問いに答える段になる。
+    """
+    payload = read_usage_cache(config["usage_cache"])
+    # 名前は3本のqueryで共有する。**同じ瞬間で評価する**ため、1回だけ引く。
+    info = session_info(config, now.timestamp())
+    windows = {}
+    for name, length, key in WINDOWS:
+        start, reset, source = window_bounds(payload, key, length, now)
+        costs = window_cost(config, start.timestamp(), now.timestamp())
+        rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
+            costs, info, config["top"])
+        # **`total`は報告する値から積む。**生の合計を別に丸めると、行ごとの丸めとの
+        # 差が残り、内訳と合計を突き合わせられない。
+        # **一致するのは6桁に丸めた上での話である。**2進浮動小数では、6桁の値を
+        # 足した結果がその桁で表せるとは限らない (0.1 + 0.2 が 0.30000000000000004
+        # になる類)。読む側も足してから丸める。
+        sessions = [dict(row, cost=round(row["cost"], 6)) for row in rows]
+        unresolved, truncated = round(unresolved, 6), round(truncated, 6)
+        windows[name] = {
             "starts_at": start.isoformat(timespec="seconds"),
             "resets_at": reset.isoformat(timespec="seconds") if reset else None,
             "source": source,
-        },
-        "total": round(sum(row["cost"] for row in sessions) + unresolved + truncated, 6),
-        "sessions": sessions,
-        "unresolved": {"cost": unresolved, "sessions": unresolved_count},
-        "truncated": {"cost": truncated, "sessions": truncated_count},
+            "total": round(sum(row["cost"] for row in sessions) + unresolved + truncated, 6),
+            "sessions": sessions,
+            "unresolved": {"cost": unresolved, "sessions": unresolved_count},
+            "truncated": {"cost": truncated, "sessions": truncated_count},
+        }
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "currency": "USD",
+        "windows": windows,
     }
 
 

@@ -272,20 +272,25 @@ Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカ�
 
 ## 週の消費の内訳
 
-`scripts/claude-cost/claude-cost-json`が、その週のコストをsessionごとに引いて
-JSON cacheへ書く。widgetは`--cached-only`で読むだけで、既存の2つのhelperと
+`scripts/claude-cost/claude-cost-json`が、5Hと7Dそれぞれの窓のコストをsessionごとに
+引いてJSON cacheへ書く。**両方を出すのは、panelの他のすべての段が2つのwindowを
+並べて出すためである。**片方だけの段は、そこだけ別の問いに答えることになる。
+**このcacheを読むwidgetは別の変更で入る。**widgetは`--cached-only`で読むだけで、既存の2つのhelperと
 同じ形である。読み出しは`gcx`に任せ、HTTPとtokenの扱いを自前で持たない。
 
-**窓はusage helperが報告するresetから7日戻して求める。**読めない場合は素の7日に
-落とし、**どちらで求めたかを`window.source`に残す。**同じ形の数字が別の窓から来て
-いることは、後から見て分からない。
+**窓はusage helperが報告するresetからwindow長だけ戻して求める。**5Hは
+`current_session.resets_at`、7Dは`current_week.resets_at`である。読めない場合は
+今からwindow長だけ戻した窓に落とし、**どちらで求めたかを`source`に残す。**同じ形の
+数字が別の窓から来ていることは、後から見て分からない。
 
-**既に過ぎたresetは、週単位で今の窓へ送る。**usage cacheがresetをまたいで止まって
-いると、`resets_at`は読めるが前の週のものになる。そのまま使うと窓が7日より長くなり、
-**7日でない期間を「今週」として公開する。**週の長さは`reset - 7d`で既に前提にして
-いるので、同じ前提で送り、`window.source`を`usage_cache_rolled`にする。
-**この規則が偽になる観測:** providerが週の長さを変えると窓は静かにずれる。
-chipのcount downと`window.resets_at`が食い違う。
+**既に過ぎたresetは、window単位で今の窓へ送る。**usage cacheがresetをまたいで
+止まっていると、`resets_at`は読めるが前の窓のものになる。そのまま使うと窓が
+window長より長くなり、**window長でない期間を「今の窓」として公開する。**
+window長は`reset - 長さ`で既に前提にしているので、同じ前提で送り、`source`を
+`usage_cache_rolled`にする。
+**この規則が偽になる観測:** providerがwindow長を変えると窓は静かにずれる。
+chipのcount downと`resets_at`が食い違う。**ここのwindow長は、既に複数箇所に
+ある写しがもう1つ増えたものである。変更時は揃える。**
 
 **3本のqueryは同じ瞬間で評価する。**コストの2本も、名前を読む1本もである。
 `--time`でhelperが捕まえた時刻へ固定する。渡さないとgcxがサーバへ届いた時刻で
@@ -320,17 +325,23 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 
 ```json
 {"generated_at":"…","currency":"USD",
- "window":{"starts_at":"…","resets_at":"…","source":"usage_cache"},
- "total":1240.45,
- "sessions":[{"session_name":"#46","custom_title":"#46","ai_title":"ツール仕様まとめ",
-              "task_id":"46","project":"…","session_id":"…","cost":123.92}],
- "unresolved":{"cost":451.61,"sessions":11},
- "truncated":{"cost":283.62,"sessions":13}}
+ "windows":{
+   "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
+              "sessions":[…],"unresolved":{…},"truncated":{…}},
+   "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
+           "sessions":[{"session_name":"#46","custom_title":"#46",
+                        "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
+                        "session_id":"…","cost":123.92}],
+           "unresolved":{"cost":451.61,"sessions":11},
+           "truncated":{"cost":283.62,"sessions":13}}}}
 ```
 
-**行と`unresolved`と`truncated`の合計が`total`に厳密に一致する。**`total`は
-報告する値から積む。生の合計を別に丸めると行ごとの丸めとの差が残り、この規則が
-偽になる。差は表示の2桁には出ないが、**書いた規則は真であるべきである。**`CLAUDE_COST_TOP`に
+**行と`unresolved`と`truncated`の合計が`total`に、6桁の上で一致する。**`total`は
+報告する値から積む。生の合計を別に丸めると行ごとの丸めとの差が残る。
+**一致するのは6桁に丸めた上での話である。**2進浮動小数では、6桁の値を足した結果が
+その桁で表せるとは限らない (0.1 + 0.2 が 0.30000000000000004 になる類) 。実際に
+実データで行の合計 20.099999999999998 と `total` 20.1 が食い違った。
+**読む側も足してから丸める。**`CLAUDE_COST_TOP`に
 入らなかったsessionは、行から落とすだけでなく数える。`total`に含まれる額が
 どこにも現れないと、内訳と合計を突き合わせられない。名前が付かないことと、
 画面に入らないことは別の事実なので別々に数える。

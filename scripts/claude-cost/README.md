@@ -11,24 +11,30 @@ widget reads with `--cached-only`.
 See [`docs/ai-usage-integration.md`](../../docs/ai-usage-integration.md) for the
 shared architecture, stale detection, and operations runbook.
 
-## What the window is
+## What the windows are
 
-The week, anchored to the reset the usage helper reports: seven days back from
-`current_week.resets_at` in `$HOME/.cache/claude-usage-json/usage.json`. When
-that cannot be read it falls back to a plain seven days, and `window.source`
-says which produced the number — the same shape of figure from a different
+Both of them — the five-hour session window and the seven-day week — because
+every other row of the panel shows the two side by side, and a row that answers
+only one of them is answering a different question than the rest.
+
+Each is anchored to the reset the usage helper reports, in
+`$HOME/.cache/claude-usage-json/usage.json`: `current_session.resets_at` less
+five hours, `current_week.resets_at` less seven days. When one cannot be read it
+falls back to that length back from now, and `source` says which produced the
+number — the same shape of figure from a different
 window is otherwise indistinguishable afterwards.
 
-**A reset that has already passed is carried forward by whole weeks.** A usage
+**A reset that has already passed is carried forward in whole windows.** A usage
 cache that stopped across a reset still reads, but its `resets_at` belongs to
-the previous week; used as it stands, the window grows past seven days and
-publishes a period that is not a week as "this week". Seven days is already
-assumed by deriving the start from the reset, so the same assumption carries it
-to the current window, and `window.source` becomes `usage_cache_rolled`.
+the previous window; used as it stands, the window grows past its length and
+publishes a longer period as "this one". The length is already assumed by
+deriving the start from the reset, so the same assumption carries it forward,
+and `source` becomes `usage_cache_rolled`.
 
-**That rule is false if the provider changes the length of the week.** The
-window would then drift silently; the giveaway is `window.resets_at`
-disagreeing with the countdown on the chip.
+**That rule is false if the provider changes a window's length.** The window
+would then drift silently; the giveaway is `resets_at` disagreeing with the
+countdown on the chip. The lengths here are one more copy of a number the spec
+already lists in several places — change them together.
 
 ## How the amount is computed
 
@@ -68,19 +74,23 @@ addition is done in the helper.
 
 ```json
 {"generated_at":"2026-09-14T00:07:35+09:00","currency":"USD",
- "window":{"starts_at":"…","resets_at":"…","source":"usage_cache"},
- "total":1240.45,
- "sessions":[{"session_name":"#46","custom_title":"#46","ai_title":"ツール仕様まとめ",
-              "task_id":"46","project":"…","session_id":"…","cost":123.92}],
- "unresolved":{"cost":451.61,"sessions":11},
- "truncated":{"cost":283.62,"sessions":13}}
+ "windows":{
+   "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
+              "sessions":[…],"unresolved":{…},"truncated":{…}},
+   "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
+           "sessions":[{"session_name":"#46","custom_title":"#46",
+                        "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
+                        "session_id":"…","cost":123.92}],
+           "unresolved":{"cost":451.61,"sessions":11},
+           "truncated":{"cost":283.62,"sessions":13}}}}
 ```
 
-**The rows, `unresolved` and `truncated` add up to `total` exactly.** The total
-is summed from the reported amounts rather than rounded separately from the raw
-aggregate, which would leave a residual and make the sentence above false. The
-residual never reaches the two decimals on screen, but a rule that is written
-down should be true. Sessions past
+**The rows, `unresolved` and `truncated` add up to `total`, at six decimals.**
+The total is summed from the reported amounts rather than rounded separately
+from the raw aggregate, which would leave a residual. Agreement is at that
+decimal and not in binary: adding numbers rounded to six places does not
+generally land on a six-place number (0.1 + 0.2 is 0.30000000000000004), and a
+live reading disagreed in exactly that way. Add the parts, then round. Sessions past
 `CLAUDE_COST_TOP` are counted rather than dropped, because an amount inside
 `total` that appears nowhere else cannot be reconciled with the breakdown.
 Being unnameable and not fitting on screen are different facts, so they are
@@ -89,6 +99,9 @@ counted separately.
 **Sessions with no name are kept, not dropped.** They are sessions from another
 machine, or ones whose transcript is gone, and leaving them out would make the
 rows stop adding up to the total. They are summed into `unresolved` instead.
+
+**The panel reader lands separately.** This change writes the cache; nothing
+reads it yet.
 
 **The display name is not composed here.** `session_name` is a plain coalesce of
 the two titles; a title that is only `#102` reads better with the generated

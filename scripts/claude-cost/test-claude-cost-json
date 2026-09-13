@@ -33,13 +33,19 @@ def vector(samples):
     })
 
 
+WEEK_SECONDS = 7 * 86400
+SESSION_SECONDS = 5 * 3600
+
+
 class WindowTests(unittest.TestCase):
-    def bounds(self, payload, now="2026-09-13T12:00:00+09:00"):
+    def bounds(self, payload, now="2026-09-13T12:00:00+09:00",
+               key="current_week", length=WEEK_SECONDS):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "usage.json"
             if payload is not None:
                 path.write_text(payload)
-            return cost.window_bounds(path, dt.datetime.fromisoformat(now))
+            return cost.window_bounds(cost.read_usage_cache(path), key, length,
+                                      dt.datetime.fromisoformat(now))
 
     def test_the_window_starts_seven_days_before_the_reported_reset(self):
         start, reset, source = self.bounds(json.dumps(
@@ -65,20 +71,41 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(reset.isoformat(), "2026-09-14T09:00:00+09:00")
         self.assertEqual(source, "usage_cache_rolled")
 
-    def test_the_window_is_never_longer_than_a_week(self):
+    def test_the_window_is_never_longer_than_its_length(self):
         now = dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00")
         for days in range(0, 40):
             reset = now - dt.timedelta(days=days, hours=3)
             start, rolled, _ = self.bounds(
                 json.dumps({"current_week": {"resets_at": reset.isoformat()}}))
-            self.assertLessEqual((now - start).total_seconds(), cost.WEEK_SECONDS, days)
+            self.assertLessEqual((now - start).total_seconds(), WEEK_SECONDS, days)
             self.assertGreater(rolled, now, days)
+
+    def test_the_session_window_is_five_hours_from_its_own_reset(self):
+        start, reset, source = self.bounds(
+            json.dumps({"current_session": {"resets_at": "2026-09-13T14:10:00+09:00"},
+                        "current_week": {"resets_at": "2026-09-14T09:00:00+09:00"}}),
+            key="current_session", length=SESSION_SECONDS)
+        self.assertEqual(start.isoformat(), "2026-09-13T09:10:00+09:00")
+        self.assertEqual(reset.isoformat(), "2026-09-13T14:10:00+09:00")
+        self.assertEqual(source, "usage_cache")
+
+    def test_a_passed_session_reset_is_carried_in_five_hour_steps(self):
+        start, reset, source = self.bounds(
+            json.dumps({"current_session": {"resets_at": "2026-09-13T04:10:00+09:00"}}),
+            key="current_session", length=SESSION_SECONDS)
+        self.assertEqual(reset.isoformat(), "2026-09-13T14:10:00+09:00")
+        self.assertEqual(source, "usage_cache_rolled")
+
+    def test_the_helper_asks_for_both_windows(self):
+        self.assertEqual([name for name, _, _ in cost.WINDOWS], ["session", "week"])
+        lengths = {name: length for name, length, _ in cost.WINDOWS}
+        self.assertEqual(lengths, {"session": SESSION_SECONDS, "week": WEEK_SECONDS})
 
     def test_an_unreadable_usage_cache_falls_back_to_a_plain_week(self):
         for payload in (None, "{", "{}", json.dumps({"current_week": {}}),
                         json.dumps({"current_week": {"resets_at": "tomorrow"}})):
             start, reset, source = self.bounds(payload)
-            self.assertEqual(source, "fallback_7d", payload)
+            self.assertEqual(source, "fallback_length", payload)
             self.assertIsNone(reset)
             self.assertEqual(start.isoformat(), "2026-09-06T12:00:00+09:00")
 
@@ -265,31 +292,60 @@ class OutputTests(unittest.TestCase):
         with mock.patch.object(cost, "run_query", side_effect=fake):
             return cost.build_output(
                 {"top": top, "usage_cache": usage_cache},
-                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
+                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))["windows"]["week"]
 
-    def test_the_reported_parts_add_up_to_the_reported_total_exactly(self):
-        # 行ごとの丸めと生の合計の丸めがずれると、書いた規則が偽になる。
-        # 表示の 2 桁には出ないが、真でない規則は書かない。
+    def parts(self, built):
+        return (sum(row["cost"] for row in built["sessions"])
+                + built["unresolved"]["cost"] + built["truncated"]["cost"])
+
+    def test_the_reported_parts_add_up_to_the_reported_total(self):
+        # 行ごとの丸めと生の合計の丸めがずれると、内訳と合計を突き合わせられない。
         built = self.output({"s1": 0.0050004, "s2": 0.0050004, "elsewhere": 0.0050004},
                             {"s1": {"session_name": "一番"}, "s2": {"session_name": "二番"}})
-        parts = (sum(row["cost"] for row in built["sessions"])
-                 + built["unresolved"]["cost"] + built["truncated"]["cost"])
-        self.assertEqual(built["total"], parts)
+        self.assertEqual(built["total"], round(self.parts(built), 6))
+
+    def test_the_agreement_is_at_six_decimals_not_in_binary(self):
+        # 6 桁の値を足した結果がその桁で表せるとは限らない。実データで
+        # 行の合計 20.099999999999998 と total 20.1 が食い違った。
+        built = self.output({"s1": 0.1, "s2": 0.2},
+                            {"s1": {"session_name": "一番"}, "s2": {"session_name": "二番"}})
+        self.assertNotEqual(built["total"], self.parts(built))
+        self.assertEqual(built["total"], round(self.parts(built), 6))
 
     def test_every_query_is_evaluated_at_the_same_instant(self):
         # 題が書き換わる瞬間をまたぐと、別の瞬間の label を凍らせたコストへ付ける。
         seen = []
         self.output({"s1": 1.0}, {"s1": {"session_name": "一番"}}, seen=seen)
-        self.assertEqual(len(seen), 3)
+        # 窓 2 つ × コスト 2 本 + 名前 1 本。名前は窓ごとに引き直さない。
+        self.assertEqual(len(seen), 5)
         self.assertEqual(len(set(seen)), 1)
         self.assertIsNotNone(seen[0])
+
+    def test_both_windows_are_reported(self):
+        def fake(config, expression, at=None):
+            if expression.startswith(cost.INFO_METRIC):
+                return [({"session_id": "s1", "session_name": "一番"}, 1.0)]
+            if "increase" in expression:
+                return [({"session_id": "s1"}, 1.0)]
+            return []
+
+        with mock.patch.object(cost, "run_query", side_effect=fake):
+            built = cost.build_output(
+                {"top": 20, "usage_cache": "absent.json"},
+                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
+        self.assertEqual(sorted(built["windows"]), ["session", "week"])
+        session, week = built["windows"]["session"], built["windows"]["week"]
+        self.assertEqual((dt.datetime.fromisoformat(session["starts_at"])
+                          - dt.datetime.fromisoformat(built["generated_at"])).total_seconds(),
+                         -SESSION_SECONDS)
+        self.assertEqual((dt.datetime.fromisoformat(week["starts_at"])
+                          - dt.datetime.fromisoformat(built["generated_at"])).total_seconds(),
+                         -WEEK_SECONDS)
 
     def test_the_identity_holds_when_rows_are_truncated(self):
         built = self.output({f"s{n}": 1.0 / 3 for n in range(9)},
                             {f"s{n}": {"session_name": str(n)} for n in range(9)}, top=2)
-        parts = (sum(row["cost"] for row in built["sessions"])
-                 + built["unresolved"]["cost"] + built["truncated"]["cost"])
-        self.assertEqual(built["total"], parts)
+        self.assertEqual(built["total"], round(self.parts(built), 6))
         self.assertEqual(built["truncated"]["sessions"], 7)
 
 
