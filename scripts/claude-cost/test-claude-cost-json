@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+
+import contextlib
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE / "claude-cost-json"
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("claude_cost_json", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+cost = importlib.util.module_from_spec(spec)
+loader.exec_module(cost)
+
+
+def vector(samples):
+    return json.dumps({
+        "status": "success",
+        "data": {"resultType": "vector", "result": [
+            {"metric": metric, "value": [1789000000.0, str(value)]}
+            for metric, value in samples
+        ]},
+    })
+
+
+class WindowTests(unittest.TestCase):
+    def bounds(self, payload, now="2026-09-13T12:00:00+09:00"):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "usage.json"
+            if payload is not None:
+                path.write_text(payload)
+            return cost.window_bounds(path, dt.datetime.fromisoformat(now))
+
+    def test_the_window_starts_seven_days_before_the_reported_reset(self):
+        start, reset, source = self.bounds(json.dumps(
+            {"current_week": {"resets_at": "2026-09-14T09:00:00+09:00"}}))
+        self.assertEqual(start.isoformat(), "2026-09-07T09:00:00+09:00")
+        self.assertEqual(reset.isoformat(), "2026-09-14T09:00:00+09:00")
+        self.assertEqual(source, "usage_cache")
+
+    def test_an_unreadable_usage_cache_falls_back_to_a_plain_week(self):
+        for payload in (None, "{", "{}", json.dumps({"current_week": {}}),
+                        json.dumps({"current_week": {"resets_at": "tomorrow"}})):
+            start, reset, source = self.bounds(payload)
+            self.assertEqual(source, "fallback_7d", payload)
+            self.assertIsNone(reset)
+            self.assertEqual(start.isoformat(), "2026-09-06T12:00:00+09:00")
+
+
+class ParseTests(unittest.TestCase):
+    def test_a_vector_is_read_into_label_sets_and_values(self):
+        parsed = cost.parse_vector(vector([({"session_id": "s1"}, 1.5)]))
+        self.assertEqual(parsed, [({"session_id": "s1"}, 1.5)])
+
+    def test_a_response_that_cannot_be_read_is_not_an_empty_result(self):
+        # 引けなかったことと 1 件も無かったことを混ぜると、Grafana が答えなく
+        # なった時に空の画面を正しい答えとして公開してしまう。
+        for payload in ("", "{", "[]", json.dumps({"status": "error", "error": "boom"}),
+                        json.dumps({"status": "success", "data": {"resultType": "matrix",
+                                                                  "result": []}}),
+                        json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                                  "result": [{"metric": {}}]}}),
+                        json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                                  "result": [{"metric": {},
+                                                                              "value": [1, "x"]}]}})):
+            with self.assertRaises(cost.CostError, msg=payload):
+                cost.parse_vector(payload)
+
+    def test_an_empty_vector_is_an_answer(self):
+        self.assertEqual(cost.parse_vector(vector([])), [])
+
+
+class FailureDetailTests(unittest.TestCase):
+    """gcx は失敗の詳細を stdout へ書き、stderr は空のまま終了する (実測)。"""
+
+    ENVELOPE = json.dumps({
+        "type": "gcx.error", "schema_version": "1",
+        "error": {"summary": "Invalid PromQL query", "exitCode": 1,
+                  "details": "bad_data: invalid parameter \"query\":\n1:9: parse error",
+                  "suggestions": ["Run 'gcx metrics query --help'"]},
+    })
+
+    def test_the_detail_comes_from_the_error_envelope_on_stdout(self):
+        line = cost.failure_detail(self.ENVELOPE, "", 1)
+        self.assertIn("Invalid PromQL query", line)
+        self.assertIn("1:9: parse error", line)
+        self.assertNotIn("\n", line)
+
+    def test_stderr_is_used_when_there_is_no_envelope(self):
+        self.assertEqual(cost.failure_detail("", "boom\n", 3), "boom")
+
+    def test_an_unparsable_stdout_is_reported_as_it_stands(self):
+        self.assertEqual(cost.failure_detail("panic: nil map\n", "", 2), "panic: nil map")
+
+    def test_a_silent_failure_still_names_the_exit_status(self):
+        self.assertEqual(cost.failure_detail("", "", 137), "exit status 137")
+
+    def test_a_query_failure_carries_the_detail(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake = Path(root) / "gcx"
+            fake.write_text("#!/bin/sh\ncat <<'JSON'\n" + self.ENVELOPE + "\nJSON\nexit 1\n")
+            fake.chmod(0o755)
+            with self.assertRaises(cost.CostError) as raised:
+                cost.run_query({"gcx": str(fake), "context": "", "datasource": "d",
+                                "timeout": 10}, "up")
+            self.assertIn("Invalid PromQL query", str(raised.exception))
+
+
+class RowTests(unittest.TestCase):
+    def info(self):
+        return {"s1": {"session_name": "#1 一番", "project": "p"},
+                "s2": {"session_name": "#2 二番", "project": "p"}}
+
+    def test_rows_are_sorted_by_cost_and_capped(self):
+        rows, _, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, self.info(), 1)
+        self.assertEqual([row["session_name"] for row in rows], ["#2 二番"])
+
+    def test_a_session_without_a_name_becomes_unresolved(self):
+        # 落とすと合計が合わなくなる。別マシンから送られた session が該当する。
+        rows, unresolved, count = cost.build_rows(
+            {"s1": 1.0, "elsewhere": 9.0}, self.info(), 10)
+        self.assertEqual([row["session_id"] for row in rows], ["s1"])
+        self.assertEqual((unresolved, count), (9.0, 1))
+
+    def test_amounts_that_would_render_as_zero_are_dropped(self):
+        rows, unresolved, count = cost.build_rows(
+            {"s1": 0.001, "gone": 0.001}, self.info(), 10)
+        self.assertEqual(rows, [])
+        self.assertEqual((unresolved, count), (0.0, 0))
+
+    def test_the_order_does_not_depend_on_dictionary_order(self):
+        rows, _, _ = cost.build_rows({"s2": 5.0, "s1": 5.0}, self.info(), 10)
+        self.assertEqual([row["session_id"] for row in rows], ["s1", "s2"])
+
+
+class SessionInfoTests(unittest.TestCase):
+    def info_from(self, samples):
+        with mock.patch.object(cost, "run_query", return_value=samples):
+            return cost.session_info({})
+
+    def test_labels_are_copied_from_the_series(self):
+        found = self.info_from([({"session_id": "s1", "session_name": "#1 一番",
+                                 "project": "p", "instance": "host"}, 1.0)])
+        self.assertEqual(found["s1"], {"session_name": "#1 一番", "project": "p"})
+
+    def test_two_series_for_one_session_yield_no_name(self):
+        # どちらが正かを決める情報が無い。名前を付けずに「不明」へ送る方が、
+        # 別の session の名前を出すより軽い。
+        found = self.info_from([({"session_id": "s1", "session_name": "古い"}, 1.0),
+                                ({"session_id": "s1", "session_name": "新しい"}, 1.0)])
+        self.assertIsNone(found["s1"])
+        rows, unresolved, count = cost.build_rows({"s1": 3.0}, found, 10)
+        self.assertEqual((rows, unresolved, count), ([], 3.0, 1))
+
+
+class WindowCostTests(unittest.TestCase):
+    def test_the_first_sample_is_added_back_per_session(self):
+        queries = []
+
+        def fake(config, expression):
+            queries.append(expression)
+            if expression.startswith("sum by (session_id) (increase"):
+                return [({"session_id": "s1"}, 10.0), ({"session_id": "s2"}, 4.0)]
+            return [({"session_id": "s1"}, 2.0)]
+
+        with mock.patch.object(cost, "run_query", side_effect=fake):
+            totals = cost.window_cost({}, 1000.0, 4600.0)
+        self.assertEqual(totals, {"s1": 12.0, "s2": 4.0})
+        self.assertIn("[3600s]", queries[0])
+        # 窓の起点に在った系列を外すのは `unless` の側で、加算は helper が行う。
+        # PromQL の `+` は内部結合で、`unless` が除いた系列を加算ごと落とす。
+        self.assertIn("unless", queries[1])
+        self.assertNotIn("+", queries[1])
+
+    def test_the_addback_is_anchored_at_the_window_start(self):
+        with mock.patch.object(cost, "run_query", return_value=[]) as query:
+            cost.window_cost({}, 1788739200.0, 1789304700.0)
+        self.assertIn("@ 1788739200", query.call_args_list[1].args[1])
+
+
+class CacheTests(unittest.TestCase):
+    def helper(self, root, argv, gcx="true"):
+        environment = {
+            "CLAUDE_COST_CACHE_DIR": str(root),
+            "CLAUDE_COST_GCX_BIN": gcx,
+            "CLAUDE_COST_USAGE_CACHE": str(Path(root) / "absent.json"),
+        }
+        with mock.patch.dict(os.environ, environment), \
+                contextlib.redirect_stderr(io.StringIO()) as complaint:
+            stream = io.BytesIO()
+            with mock.patch.object(sys, "stdout", mock.Mock(buffer=stream)):
+                code = cost.main(argv)
+        return code, stream.getvalue().decode(), complaint.getvalue()
+
+    def test_a_failed_query_keeps_the_previous_reading(self):
+        # `generated_at` が動かないことで、読む側から停止が見える。
+        with tempfile.TemporaryDirectory() as root:
+            previous = '{"generated_at":"2026-09-01T00:00:00+09:00","total":1}'
+            (Path(root) / "cost.json").write_text(previous)
+            code, printed, complaint = self.helper(root, ["--force"], gcx="false")
+            self.assertEqual(code, 0)
+            self.assertEqual(printed, previous)
+            self.assertEqual((Path(root) / "cost.json").read_text(), previous)
+            self.assertIn("claude cost:", complaint)
+
+    def test_a_failed_query_without_a_previous_reading_says_so(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, printed, _ = self.helper(root, ["--force"], gcx="false")
+            self.assertEqual(code, 69)
+            self.assertEqual(printed, "")
+
+    def test_cached_only_never_runs_a_query(self):
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "cost.json").write_text('{"total":1}')
+            code, printed, _ = self.helper(
+                root, ["--cached-only"], gcx="/nonexistent/gcx")
+            self.assertEqual(code, 0)
+            self.assertEqual(printed, '{"total":1}')
+
+    def test_cached_only_reports_a_missing_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, printed, complaint = self.helper(root, ["--cached-only"])
+            self.assertEqual(code, 66)
+            self.assertEqual(printed, "")
+            self.assertIn("not available yet", complaint)
+
+
+if __name__ == "__main__":
+    unittest.main()

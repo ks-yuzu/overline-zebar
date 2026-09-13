@@ -270,6 +270,72 @@ publishするものが無いことは 1 つの答えである。
 Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカウント情報として
 扱う。
 
+## 週の消費の内訳
+
+`scripts/claude-cost/claude-cost-json`が、その週のコストをsessionごとに引いて
+JSON cacheへ書く。widgetは`--cached-only`で読むだけで、既存の2つのhelperと
+同じ形である。読み出しは`gcx`に任せ、HTTPとtokenの扱いを自前で持たない。
+
+**窓はusage helperが報告するresetから7日戻して求める。**読めない場合は素の7日に
+落とし、**どちらで求めたかを`window.source`に残す。**同じ形の数字が別の窓から来て
+いることは、後から見て分からない。
+
+### 窓の消費の求め方
+
+```text
+session ごとに:  sum(increase(cost[窓]))
+               + sum(first_over_time(cost[窓]) unless (cost @ 窓の起点))
+```
+
+**`increase()`だけでは、系列ごとに最初のsample 1回分が落ちる。**counterはsession
+開始時の暗黙の0から始まるが、Prometheusはその0を見ない。系列が窓の内側で始まると
+外挿も効かないため、最初のexportがそのまま失われる。実測 (2026-09-13) で週合計の
+9%、最悪のsessionで21%だった。
+
+**窓の起点に在った系列には足し戻さない。**そこにある値は前の窓の残高であって、
+この窓の消費ではない。
+
+**`last_over_time()`では代えられない。**同じ`session_id`のままresumeすると
+counterがリセットされ、リセット前の分が丸ごと落ちる (実測で5 sessionに発生)。
+
+**この2本を1本のPromQLにまとめない。**`A + (B unless C)`は内部結合で、`unless`が
+除いた系列を加算ごと落とす (実測$49.04→$4.46)。**窓をまたぐ系列が1つも無い週では
+この誤りが再現しない。**`unless`が何も除かないためで、次の週次resetで初めて
+本番に出る。足し算はhelper側で行う。
+
+### 出力
+
+```json
+{"generated_at":"…","currency":"USD",
+ "window":{"starts_at":"…","resets_at":"…","source":"usage_cache"},
+ "total":1234.69,
+ "sessions":[{"session_name":"#46","custom_title":"#46","ai_title":"ツール仕様まとめ",
+              "task_id":"46","project":"…","session_id":"…","cost":123.92}],
+ "unresolved":{"cost":451.61,"sessions":11}}
+```
+
+**名前の付かないsessionを落とさない。**別マシンから送られたsessionと、transcriptを
+消した後のsessionが該当する。落とすと行の合計がtotalに合わなくなるため、
+`unresolved`にまとめる。
+
+**表示名はここで組み立てない。**`session_name`は2つの題の単純な合成で、`#102`の
+ように本文を持たない題は`ai_title`を副題として足した方が読める。それは読む側の
+判断なので、両方の題をそのまま渡す。
+
+**同じ`session_id`に`claude_session_info`が2本来たら、名前を付けない。**どちらが
+正かを決める情報が無く、あるsessionを別のsessionの名前で出すより、「不明」に
+送る方が軽い。
+
+**引けなかった時は前回のcacheをそのまま返す。**`generated_at`が動かないので、
+widgetのstale判定がそのまま効く。半分だけの答えは公開しない。
+
+**失敗の理由は`gcx`のstdoutから採る。**gcxは失敗の詳細をstdoutへ書き、stderrは
+空のまま終了する。stderrだけを見ると、cronのlogに残るのは終了コードだけになる。
+
+**生応答は残さない。**usage helperが残すのは、歪んだreadingが数日後に14日graphの
+形として現れるためである。この出力は背後にhistoryを持たず、誤った数字は次の更新で
+消える。
+
 ## ファイル配置
 
 ### Widget
@@ -305,6 +371,8 @@ Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカ�
   - Codex app-serverのusage取得、cache更新、cron例。
 - `scripts/claude-sessions/`
   - transcriptからの`claude_session_info`の生成、走査cache、cron例。
+- `scripts/claude-cost/`
+  - `gcx`経由での週の消費の取得、JSON cache更新、cron例。
 
 ## 表示仕様
 
