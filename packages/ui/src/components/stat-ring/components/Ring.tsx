@@ -5,7 +5,7 @@ const Ring = ({
   percentage,
   className,
   strokeColor = 'stroke-green-500',
-  backgroundColor = 'stroke-background',
+  backgroundColor = 'stroke-border',
   strokeWidth = 14,
 }: {
   percentage: number;
