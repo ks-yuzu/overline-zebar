@@ -216,9 +216,9 @@ function Placeholder({
         title="Codex usage"
         updatedAt={updatedAt}
       />
-      {/* Spans what the three rows of cards would have filled, so the block
+      {/* Spans what the four rows of cards would have filled, so the block
           beside it keeps its own rows where they were. */}
-      <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
+      <Card className="row-span-4 items-center justify-center text-sm text-text-muted">
         {message}
       </Card>
     </section>
@@ -360,6 +360,12 @@ export default function CodexSection({
           />
         ))}
       </div>
+
+      {/* The cost row is left empty here. Codex sends no usage metrics at all,
+          so there is nothing to break down - the track is held so that both
+          blocks keep the same heights, and so that the row is already in place
+          when there is something to put in it. */}
+      <div aria-hidden className="min-h-0" />
     </section>
   );
 }

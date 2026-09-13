@@ -14,10 +14,12 @@ import {
   windowTrendRange,
 } from '@overline-zebar/ui';
 import type { TrendPoint, UsageHistorySample } from '@overline-zebar/ui';
+import CostBreakdown from './CostBreakdown';
 import SectionHeader from './SectionHeader';
 import UsageCard from './UsageCard';
 import { usageProjection } from './usageProjection';
 import { CHART_WIDTH_HALF, SECTION_GRID_ROWS } from './panelLayout';
+import { useClaudeCost } from './useClaudeCost';
 import { hasModelWindow, useClaudeUsage } from './useClaudeUsage';
 import type {
   ClaudeUsageHistorySample,
@@ -153,6 +155,9 @@ export default function ClaudeSection({
   thresholds,
 }: Props) {
   const { data, error, isPending } = useClaudeUsage();
+  /* Fetched apart from the usage reading: the cost path runs through Grafana
+     and can be out when the usage helper is fine, and the other way round. */
+  const { data: cost } = useClaudeCost();
 
   if (!data) {
     return (
@@ -165,9 +170,9 @@ export default function ClaudeSection({
           subtitle="Current plan windows"
           title="Claude usage"
         />
-        {/* Spans what the three rows of cards would have filled, so the block
+        {/* Spans what the four rows of cards would have filled, so the block
             beside it keeps its own rows where they were. */}
-        <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
+        <Card className="row-span-4 items-center justify-center text-sm text-text-muted">
           {isPending
             ? 'Loading Claude usage…'
             : error?.message || 'Usage unavailable'}
@@ -390,6 +395,13 @@ export default function ClaudeSection({
             viewWidth={CHART_WIDTH_HALF}
           />
         </Card>
+      </div>
+
+      {/* Where the windows above went. Split the same way as the cards, so a
+          column here is the same window as the column above it. */}
+      <div className="grid min-h-0 grid-cols-2 gap-2">
+        <CostBreakdown label="5H session" window={cost?.windows.session} />
+        <CostBreakdown label="7D week" window={cost?.windows.week} />
       </div>
     </section>
   );

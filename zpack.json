@@ -133,6 +133,10 @@
           {
             "program": "wsl.exe",
             "argsRegex": "^-- sh -c [\"']?\\$HOME/bin/codex-usage-json --cached-only[\"']?$"
+          },
+          {
+            "program": "wsl.exe",
+            "argsRegex": "^-- sh -c [\"']?\\$HOME/bin/claude-cost-json --cached-only[\"']?$"
           }
         ]
       },
