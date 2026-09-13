@@ -336,6 +336,19 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
            "truncated":{"cost":283.62,"sessions":13}}}}
 ```
 
+**emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
+**scrapeが付けるlabel (`agent_hostname` `instance` `job`) は写さない。**sessionの
+属性ではなく収集側の設定で変わるもので、設定が変われば黙って消える。
+
+**`CLAUDE_COST_TOP`はfileの大きさを抑えるためにあり、一覧を短くするためではない。**
+widgetはこのfileをmonitorごとに60秒間隔で読む。既定の200は、ここで実測した最も広い
+窓 (20日で28 session) の約7倍で、通常は掛からない。1行293 byteなので、満杯の窓でも
+30KBである。
+
+**読む側がlabelで絞るなら、`truncated`が0であることがその結果の条件になる。**
+上限に掛かった行はfileに無く、`truncated`はlabelごとに分かれていないため、
+絞り込んだ画面は少なく出て、**どれだけ少ないかも言えない。**
+
 **行と`unresolved`と`truncated`の合計が`total`である。**`total`は報告する値から
 積むので、数えた額が内訳から欠けることはない。
 

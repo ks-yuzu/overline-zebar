@@ -240,8 +240,19 @@ class SessionInfoTests(unittest.TestCase):
 
     def test_labels_are_copied_from_the_series(self):
         found = self.info_from([({"session_id": "s1", "session_name": "#1 一番",
-                                 "project": "p", "instance": "host"}, 1.0)])
-        self.assertEqual(found["s1"], {"session_name": "#1 一番", "project": "p"})
+                                  "custom_title": "#1 一番", "ai_title": "生成された題",
+                                  "task_id": "1", "project": "p", "cwd": "/home/u/p"}, 1.0)])
+        self.assertEqual(found["s1"], {"session_name": "#1 一番", "custom_title": "#1 一番",
+                                       "ai_title": "生成された題", "task_id": "1",
+                                       "project": "p", "cwd": "/home/u/p"})
+
+    def test_collector_labels_are_not_copied(self):
+        # session の属性ではなく、収集側の設定で変わる。読む側の絞り込みの
+        # 語彙に入れると、scrape の設定変更で黙って消える。
+        found = self.info_from([({"session_id": "s1", "project": "p", "instance": "host",
+                                  "job": "integrations/node_exporter",
+                                  "agent_hostname": "box", "__name__": "claude_session_info"}, 1.0)])
+        self.assertEqual(found["s1"], {"project": "p"})
 
     def test_two_series_for_one_session_yield_no_name(self):
         # どちらが正かを決める情報が無い。名前を付けずに「不明」へ送る方が、

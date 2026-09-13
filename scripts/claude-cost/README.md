@@ -85,6 +85,21 @@ addition is done in the helper.
            "truncated":{"cost":283.62,"sessions":13}}}}
 ```
 
+**Every label the emitter publishes is carried through**, so the reader can
+filter on any of them. The ones the scrape adds — `agent_hostname`, `instance`,
+`job` — are not: they describe the collector rather than the session, and a
+change to the scrape configuration would take them away without notice.
+
+**`CLAUDE_COST_TOP` bounds the file, it does not shorten the list.** The widget
+reads this every 60 seconds on every monitor. The default of 200 is about seven
+times the widest window ever measured here (28 sessions over 20 days), so it
+should never bite; at 293 bytes a row, a window that did fill it would be 30KB.
+
+**A reader filtering by label is only exact while `truncated` is zero.** Rows
+past the cap are not in the file, and `truncated` is one number rather than one
+per label, so a filtered view built from a truncated list under-reports and
+cannot say by how much.
+
 **The rows, `unresolved` and `truncated` add up to `total`.** The total is
 summed from the reported amounts, so nothing counted can be missing from the
 breakdown.
@@ -142,7 +157,7 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_GCX_BIN` | `gcx` |
 | `CLAUDE_COST_GCX_CONTEXT` | unset — the current context |
 | `CLAUDE_COST_DATASOURCE` | `grafanacloud-prom` |
-| `CLAUDE_COST_TOP` | `20` |
+| `CLAUDE_COST_TOP` | `200` |
 | `CLAUDE_COST_TIMEOUT` | `30` seconds per query |
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
 

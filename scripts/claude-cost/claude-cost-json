@@ -23,14 +23,16 @@ WINDOWS = (
 )
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
-DEFAULT_TOP = 20
+DEFAULT_TOP = 200
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_TTL = 240.0
 # $0.005 未満は表示上 $0.00 になる。行を占めるだけなので落とす。
 COST_FLOOR = 0.005
 
-# infoから写すlabel。表示名の組み立ては読む側が持つ。
-INFO_LABELS = ("session_name", "custom_title", "ai_title", "task_id", "project")
+# infoから写すlabel。表示名の組み立ても絞り込みも読む側が持つ。emitterが出す
+# labelはすべて写す。**scrapeが付けるlabel (`agent_hostname` `instance` `job`) は
+# 写さない。**sessionの属性ではなく、収集側の設定で変わる。
+INFO_LABELS = ("session_name", "custom_title", "ai_title", "task_id", "project", "cwd")
 
 
 class CostError(Exception):
@@ -232,6 +234,12 @@ def build_rows(costs, info, top):
     **入らなかった分を数える。**行だけを切り落とすと、`total`に含まれる額が
     どこにも現れず、内訳と合計が突き合わせられなくなる。名前が付かない分と
     上位に入らなかった分は別の事実なので、別々に返す。
+
+    **上限はfileの大きさを抑えるためにあり、一覧を短くするためではない。**
+    widgetはこのfileをmonitorごとに60秒間隔で読む。既定の200は、実測で最も
+    広い窓 (20日で28 session) の約7倍である。**読む側がlabelで絞るなら、
+    `truncated`が0であることがその結果が正しい条件になる。**上限に掛かった
+    行はここに無く、`truncated`はlabelごとに分かれていない。
     """
     rows, unresolved, unresolved_count = [], 0.0, 0
     for session_id, cost in costs.items():
