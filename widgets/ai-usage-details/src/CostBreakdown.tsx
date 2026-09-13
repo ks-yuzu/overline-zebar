@@ -45,7 +45,7 @@ export default function CostBreakdown({
 }: Props) {
   if (!costWindow) {
     return (
-      <Card className="min-h-0 gap-2 bg-background-deeper/60 p-3">
+      <Card className="bg-background-deeper/60 min-h-0 p-2.5">
         <div className="flex items-center gap-2">
           <p className="text-xs font-medium text-text-muted">{label}</p>
           <StaleMark status={status} />
@@ -58,7 +58,7 @@ export default function CostBreakdown({
   const { sessions, total, unresolved } = costWindow;
 
   return (
-    <Card className="min-h-0 gap-2 bg-background-deeper/60 p-3">
+    <Card className="bg-background-deeper/60 min-h-0 p-2.5">
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <p className="shrink-0 text-xs font-medium text-text-muted">{label}</p>

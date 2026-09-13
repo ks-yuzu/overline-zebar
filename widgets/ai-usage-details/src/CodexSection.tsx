@@ -132,7 +132,7 @@ function HistoryCard({
   if (perDay) {
     const daily = buildDailyUsage(samples, historyRange);
     return (
-      <Card className="p-2.5">
+      <Card className="bg-background-deeper/60 p-2.5">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-text-muted">
             [14D] {label} usage trend and daily usage
@@ -163,7 +163,7 @@ function HistoryCard({
     windowSeconds: window.windowDurationMins * 60,
   });
   return (
-    <Card className="p-2.5">
+    <Card className="bg-background-deeper/60 p-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-text-muted">
           [14D] {label} usage peak per window
@@ -218,7 +218,7 @@ function Placeholder({
       />
       {/* Spans what the four rows of cards would have filled, so the block
           beside it keeps its own rows where they were. */}
-      <Card className="row-span-4 items-center justify-center text-sm text-text-muted">
+      <Card className="bg-background-deeper/60 row-span-4 items-center justify-center text-sm text-text-muted">
         {message}
       </Card>
     </section>
@@ -320,7 +320,7 @@ export default function CodexSection({
           });
           return (
             <Card
-              className="p-2.5"
+              className="bg-background-deeper/60 p-2.5"
               key={`${window.windowDurationMins}-${window.resetsAt}`}
             >
               <div className="flex items-center justify-between">

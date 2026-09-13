@@ -192,7 +192,7 @@ export default function ClaudeSection({
         {/* Spans the three usage rows only. The cost row is fetched on its
             own and can have an answer when this one does not, so covering it
             here would hide a reading that arrived. */}
-        <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
+        <Card className="bg-background-deeper/60 row-span-3 items-center justify-center text-sm text-text-muted">
           {isPending
             ? 'Loading Claude usage…'
             : error?.message || 'Usage unavailable'}
@@ -328,7 +328,7 @@ export default function ClaudeSection({
       </div>
 
       <div className="grid min-h-0 grid-cols-2 gap-2">
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [5H] usage trend
@@ -347,7 +347,7 @@ export default function ClaudeSection({
             viewWidth={CHART_WIDTH_HALF}
           />
         </Card>
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [7D] usage trend
@@ -373,7 +373,7 @@ export default function ClaudeSection({
       </div>
 
       <div className="grid min-h-0 grid-cols-2 gap-2">
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [14D] 5H usage peak per window
@@ -392,7 +392,7 @@ export default function ClaudeSection({
             viewWidth={CHART_WIDTH_HALF}
           />
         </Card>
-        <Card className="p-2.5">
+        <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
               [14D] 7D usage trend and daily usage
