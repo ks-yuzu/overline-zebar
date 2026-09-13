@@ -104,9 +104,11 @@ mean untitled.** A session that has not been titled yet still has info, carrying
 
 **The reader takes the display name in order:** `custom_title` (with `ai_title`
 appended when the custom title carries no text of its own), then `ai_title`,
-then `project`, then the head of `session_id`. A row can never have none of
-them: any info series carries `project` or `cwd`, and a session with neither is
-a session with no info series, which went to `unresolved`.
+then `project`, then the head of `session_id`. **That last one is not
+decoration.** The emitter makes every label but `session_id` optional, so a
+session whose `cwd` is `/` arrives carrying nothing else. It is still a session
+we know about, so it gets a row; only a missing or ambiguous mapping goes to
+`unresolved`.
 
 **The display name is not composed here.** `session_name` is a plain coalesce of
 the two titles; a title that is only `#102` reads better with the generated

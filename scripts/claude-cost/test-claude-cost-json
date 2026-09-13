@@ -194,6 +194,13 @@ class RowTests(unittest.TestCase):
         self.assertEqual([row["project"] for row in rows], ["overline-zebar"])
         self.assertEqual((unresolved, count), (0.0, 0))
 
+    def test_a_session_whose_info_carries_no_labels_still_gets_a_row(self):
+        # emitter は session_id 以外を任意にしている。cwd が "/" の session は
+        # project が空になり、写せる label が 1 つも無い形で届く。
+        rows, unresolved, count, _, _ = cost.build_rows({"s1": 5.0}, {"s1": {}}, 10)
+        self.assertEqual([row["session_id"] for row in rows], ["s1"])
+        self.assertEqual((unresolved, count), (0.0, 0))
+
     def test_a_session_without_a_name_becomes_unresolved(self):
         # 落とすと合計が合わなくなる。別マシンから送られた session が該当する。
         rows, unresolved, count, _, _ = cost.build_rows(

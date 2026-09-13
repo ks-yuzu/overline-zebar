@@ -353,9 +353,10 @@ totalに合わなくなるため、まとめて数える。**題を持たない�
 情報があるので、行として出す。
 
 **表示名は上から順に採る。**`custom_title` (本文を持たなければ`ai_title`を副題に
-足す) → `ai_title` → `project` → `session_id`の先頭。**どれも無い行は出ない。**
-infoの系列があれば`project`か`cwd`のどちらかは必ず入っており、両方欠けるのは
-infoの系列自体が無い場合だけで、それは`unresolved`へ行く。
+足す) → `ai_title` → `project` → `session_id`の先頭。**最後の1つは飾りではない。**
+emitterは`session_id`以外のlabelを任意にしているため、cwdが`/`のsessionのように
+1つもlabelを持たない行が来る。既知のsessionなので行として出し、`session_id`の
+先頭で示す。
 
 **表示名はここで組み立てない。**`session_name`は2つの題の単純な合成で、`#102`の
 ように本文を持たない題は`ai_title`を副題として足した方が読める。それは読む側の

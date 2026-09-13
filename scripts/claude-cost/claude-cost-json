@@ -238,7 +238,11 @@ def build_rows(costs, info, top):
         if cost < COST_FLOOR:
             continue
         labels = info.get(session_id)
-        if not labels:
+        # **対応表が無いことと、対応表に写せるlabelが無いことを混ぜない。**
+        # emitterは`session_id`以外を任意にしているので、cwdが`/`のsessionは
+        # `{}`で届く。それは既知のsessionであり、読む側は`session_id`の先頭で
+        # 出せる。`None`は系列が無いか、2本来て決められなかった場合である。
+        if labels is None:
             unresolved += cost
             unresolved_count += 1
             continue
