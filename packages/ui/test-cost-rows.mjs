@@ -85,11 +85,12 @@ const cases = [
     expect: ['$1,294.87', '$94.60', '$0.00'],
   },
   {
-    // The helper drops only what is exactly zero, so a row under a cent is
-    // real spend; rounding it to $0.00 would read as the row that was dropped.
-    name: 'spend under a cent is not shown as nothing',
-    run: () => [formatCost(0.004), formatCost(0.0001)],
-    expect: ['$0.01', '$0.01'],
+    // Rounding these up would put a cent on each row under a total of one
+    // cent. A row being present is already what says the spend was not zero:
+    // the helper leaves out only what is exactly that.
+    name: 'sub-cent rows do not add up to more than their total',
+    run: () => [formatCost(0.004), formatCost(0.004), formatCost(0.008)],
+    expect: ['$0.00', '$0.00', '$0.01'],
   },
 ];
 

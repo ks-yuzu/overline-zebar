@@ -47,10 +47,16 @@ export function sessionDisplayName(session: CostSession): string {
   );
 }
 
-/** `$1,234.57`, or `$0.01` for anything a cent or under that is not nothing. */
+/**
+ * `$1,234.57`.
+ *
+ * Spend under half a cent reads as `$0.00`, which is not the same as nothing:
+ * the helper leaves out only what is exactly zero, so a row being there is
+ * already what says the session spent something. Rounding those up instead
+ * would let two `$0.004` rows show a cent each under a total of one cent.
+ */
 export function formatCost(cost: number): string {
-  const shown = cost > 0 && cost < 0.01 ? 0.01 : cost;
-  return `$${shown.toLocaleString('en-US', {
+  return `$${cost.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
