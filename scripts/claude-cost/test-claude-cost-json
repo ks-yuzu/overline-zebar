@@ -101,6 +101,14 @@ class WindowTests(unittest.TestCase):
         lengths = {name: length for name, length, _ in cost.WINDOWS}
         self.assertEqual(lengths, {"session": SESSION_SECONDS, "week": WEEK_SECONDS})
 
+    def test_a_reset_without_an_offset_is_unreadable(self):
+        # parse はできるが aware な now と比べた瞬間に TypeError になり、
+        # cache を読めなかった時の退避経路を通らずに実行ごと落ちる。
+        start, reset, source = self.bounds(
+            json.dumps({"current_week": {"resets_at": "2026-09-14T09:00:00"}}))
+        self.assertEqual(source, "fallback_length")
+        self.assertIsNone(reset)
+
     def test_an_unreadable_usage_cache_falls_back_to_a_plain_week(self):
         for payload in (None, "{", "{}", json.dumps({"current_week": {}}),
                         json.dumps({"current_week": {"resets_at": "tomorrow"}})):
@@ -177,6 +185,14 @@ class RowTests(unittest.TestCase):
     def test_rows_are_sorted_by_cost_and_capped(self):
         rows, _, _, _, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, self.info(), 1)
         self.assertEqual([row["session_name"] for row in rows], ["#2 二番"])
+
+    def test_a_session_known_only_by_its_project_still_gets_a_row(self):
+        # 題がまだ付いていない session も info は持ち、project が入る。
+        # project の分かる行は「不明」より情報がある。
+        rows, unresolved, count, _, _ = cost.build_rows(
+            {"s1": 1.0}, {"s1": {"project": "overline-zebar"}}, 10)
+        self.assertEqual([row["project"] for row in rows], ["overline-zebar"])
+        self.assertEqual((unresolved, count), (0.0, 0))
 
     def test_a_session_without_a_name_becomes_unresolved(self):
         # 落とすと合計が合わなくなる。別マシンから送られた session が該当する。

@@ -5,7 +5,9 @@
 # job, so name a context backed by a service-account or access-policy token
 # with CLAUDE_COST_GCX_CONTEXT.
 #
-# Three queries at a few seconds each, so the timeout is well above the
-# per-query CLAUDE_COST_TIMEOUT.
-@reboot     CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 120s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
-*/5 * * * * CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 120s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
+# Five queries per refresh - one for the names, two for each of the two windows
+# - at a few seconds each in practice. The outer timeout has to cover all five
+# at their own budget (5 x CLAUDE_COST_TIMEOUT) plus start-up, or it kills the
+# helper before it can log why it gave up and the refresh goes quiet.
+@reboot     CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
+*/5 * * * * CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron

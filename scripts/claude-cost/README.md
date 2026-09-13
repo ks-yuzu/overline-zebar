@@ -96,9 +96,17 @@ live reading disagreed in exactly that way. Add the parts, then round. Sessions 
 Being unnameable and not fitting on screen are different facts, so they are
 counted separately.
 
-**Sessions with no name are kept, not dropped.** They are sessions from another
-machine, or ones whose transcript is gone, and leaving them out would make the
-rows stop adding up to the total. They are summed into `unresolved` instead.
+**`unresolved` means no `claude_session_info` series at all** — a session from
+another machine, or one whose transcript is gone. Leaving those out would make
+the rows stop adding up to the total, so they are counted instead. **It does not
+mean untitled.** A session that has not been titled yet still has info, carrying
+`project`, and a row that names a project says more than "unknown" does.
+
+**The reader takes the display name in order:** `custom_title` (with `ai_title`
+appended when the custom title carries no text of its own), then `ai_title`,
+then `project`, then the head of `session_id`. A row can never have none of
+them: any info series carries `project` or `cwd`, and a session with neither is
+a session with no info series, which went to `unresolved`.
 
 **The display name is not composed here.** `session_name` is a plain coalesce of
 the two titles; a title that is only `#102` reads better with the generated
@@ -131,6 +139,10 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_TOP` | `20` |
 | `CLAUDE_COST_TIMEOUT` | `30` seconds per query |
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
+
+Each refresh makes five queries — one for the names, two for each window — so
+an outer timeout has to cover five times `CLAUDE_COST_TIMEOUT` plus start-up, or
+it kills the helper before it can say why it gave up.
 
 `gcx` must be authenticated for the user that runs this. Browser OAuth cannot
 carry a cron job — its refresh token expires in a month and the job then stops

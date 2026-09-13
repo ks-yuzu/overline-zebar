@@ -346,9 +346,16 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 どこにも現れないと、内訳と合計を突き合わせられない。名前が付かないことと、
 画面に入らないことは別の事実なので別々に数える。
 
-**名前の付かないsessionを落とさない。**別マシンから送られたsessionと、transcriptを
-消した後のsessionが該当する。落とすと行の合計がtotalに合わなくなるため、
-`unresolved`にまとめる。
+**`unresolved`は「`claude_session_info`の系列が1本も無いsession」である。**別マシンから
+送られたsessionと、transcriptを消した後のsessionが該当する。落とすと行の合計が
+totalに合わなくなるため、まとめて数える。**題を持たないことではない。**titleがまだ
+付いていないsessionもinfoは持ち、`project`が入る。projectの分かる行は「不明」より
+情報があるので、行として出す。
+
+**表示名は上から順に採る。**`custom_title` (本文を持たなければ`ai_title`を副題に
+足す) → `ai_title` → `project` → `session_id`の先頭。**どれも無い行は出ない。**
+infoの系列があれば`project`か`cwd`のどちらかは必ず入っており、両方欠けるのは
+infoの系列自体が無い場合だけで、それは`unresolved`へ行く。
 
 **表示名はここで組み立てない。**`session_name`は2つの題の単純な合成で、`#102`の
 ように本文を持たない題は`ai_title`を副題として足した方が読める。それは読む側の
@@ -357,6 +364,10 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 **同じ`session_id`に`claude_session_info`が2本来たら、名前を付けない。**どちらが
 正かを決める情報が無く、あるsessionを別のsessionの名前で出すより、「不明」に
 送る方が軽い。
+
+**resetがoffsetを持たなければ、読めない値として扱う。**offsetの無い日時もparseは
+できるが、awareな現在時刻と比べた瞬間にTypeErrorになり、**cacheを読めなかった時の
+退避経路を通らずに実行ごと落ちる。**窓の側のfallbackに載せる。
 
 **引けなかった時は前回のcacheをそのまま返す。**`generated_at`が動かないので、
 widgetのstale判定がそのまま効く。半分だけの答えは公開しない。

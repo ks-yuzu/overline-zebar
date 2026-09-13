@@ -54,12 +54,20 @@ def positive_env(name, default):
 
 
 def parse_iso8601(value):
+    """offsetを持つ日時だけを受ける。
+
+    offsetの無い日時もparseはできるが、awareな`now`と比べた瞬間にTypeErrorに
+    なる。`main`はCostErrorしか捕まえないため、**cacheを読めなかった時の
+    退避経路を通らずに実行ごと落ちる。**読めない値として扱い、窓の側の
+    fallbackに載せる。
+    """
     if not isinstance(value, str) or not value:
         return None
     try:
-        return dt.datetime.fromisoformat(value)
+        moment = dt.datetime.fromisoformat(value)
     except ValueError:
         return None
+    return moment if moment.tzinfo is not None else None
 
 
 def read_usage_cache(path):
