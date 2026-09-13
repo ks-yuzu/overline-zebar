@@ -95,6 +95,13 @@ transcripts (186MB on drvfs) took 12.3s; reading only the ones that changed
 takes 2.0s, most of which is interpreter startup. Losing the cache costs one
 slow run, not a wrong answer.
 
+**A scan that could not run leaves the previous output in place.** `Path.glob`
+returns nothing whether the projects directory is absent, is a regular file, or
+cannot be read, so the emitter opens it with `iterdir` and lets those raise
+instead. Writing a header-only file in that case would turn every session that
+used to resolve into an unknown one. An empty but readable directory is a
+different thing and does replace the output: nothing to publish is an answer.
+
 **The published titles come from conversations.** They reach Grafana alongside
 the account labels the usage helper already sends, so treat the collector file
 and the Prometheus instance as account information.

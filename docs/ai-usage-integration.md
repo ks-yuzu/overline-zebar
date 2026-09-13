@@ -256,6 +256,13 @@ sizeが変わらなければ中身も同じである。手元の53本 (drvfs上1
 12.3秒、変わったものだけなら2.0秒で、後者の大半はinterpreterの起動である。
 cacheを失っても、遅い実行が1回増えるだけで答えは変わらない。
 
+**走査が立たなかった時は、既にある出力を置き換えない。**`Path.glob`は走査元が
+無くても、通常のfileでも、読めなくても、例外を上げずに空を返す。emitterは
+`iterdir`で開き、その 3 つを例外として受け取る。**読めなかったことと、1 つも
+無かったことを混ぜない。**headerだけのfileを書くと、解決できていたsessionが
+一斉に「不明」へ落ちる。**空だが読めるdirectoryは別で、出力を置き換える。**
+publishするものが無いことは 1 つの答えである。
+
 **出力にはconversation由来の題が入る。**usage helperが送るaccount labelと同じ
 Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカウント情報として
 扱う。

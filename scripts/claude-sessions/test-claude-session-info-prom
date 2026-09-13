@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
@@ -133,6 +134,75 @@ class CollectTests(unittest.TestCase):
             path.write_text('{"cwd": "/a/b"\n' + path.read_text())
             found = emitter.collect(root, 30)
             self.assertEqual(found[0].custom_title, "題")
+
+
+class ScanFailureTests(unittest.TestCase):
+    """走査が立たなかった時に、既にある出力を置き換えないこと。
+
+    この規則は `main` でしか落ちない。`collect` が例外を上げても、出力を
+    書くかどうかを決めているのは `main` である。
+    """
+
+    def run_main(self, projects_dir, output, cache):
+        environment = {
+            "CLAUDE_SESSION_INFO_PROJECTS_DIR": str(projects_dir),
+            "CLAUDE_SESSION_INFO_CACHE": str(cache),
+        }
+        with mock.patch.dict(os.environ, environment), \
+                contextlib.redirect_stderr(io.StringIO()) as complaint:
+            code = emitter.main(["--output", str(output)])
+        return code, complaint.getvalue()
+
+    def existing_output(self, root):
+        output = Path(root) / "claude-sessions.prom"
+        output.write_text('claude_session_info{session_id="s1"} 1\n')
+        return output
+
+    def test_a_missing_projects_directory_leaves_the_output_alone(self):
+        # `glob` は走査元が無くても空を返すだけで、header だけの file を書いて
+        # しまう。解決できていた session が一斉に「不明」へ落ちる。
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            code, complaint = self.run_main(
+                Path(root) / "absent", output, Path(root) / "scan.json")
+            self.assertEqual(code, 73)
+            self.assertIn("cannot scan", complaint)
+            self.assertEqual(output.read_text(), 'claude_session_info{session_id="s1"} 1\n')
+
+    def test_a_projects_path_that_is_a_file_leaves_the_output_alone(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            plain = Path(root) / "plain"
+            plain.write_text("not a directory")
+            code, _ = self.run_main(plain, output, Path(root) / "scan.json")
+            self.assertEqual(code, 73)
+            self.assertEqual(output.read_text(), 'claude_session_info{session_id="s1"} 1\n')
+
+    def test_an_empty_projects_directory_does_replace_the_output(self):
+        # 読めなかったことと、1 つも無かったことは別である。
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            projects = Path(root) / "projects"
+            projects.mkdir()
+            code, _ = self.run_main(projects, output, Path(root) / "scan.json")
+            self.assertEqual(code, 0)
+            self.assertNotIn("session_id=", output.read_text())
+
+    def test_one_unreadable_project_directory_does_not_hide_the_others(self):
+        with tempfile.TemporaryDirectory() as root:
+            projects = Path(root) / "projects"
+            transcript(projects, "-a", "s1", [{"customTitle": "読める"}])
+            closed = projects / "-0"
+            closed.mkdir()
+            (closed / "s0.jsonl").write_text("{}\n")
+            closed.chmod(0o000)
+            try:
+                with contextlib.redirect_stderr(io.StringIO()) as complaint:
+                    found = emitter.collect(projects, 30)
+            finally:
+                closed.chmod(0o700)
+            self.assertEqual([item.session_id for item in found], ["s1"])
+            self.assertIn("cannot list", complaint.getvalue())
 
 
 class CacheTests(unittest.TestCase):

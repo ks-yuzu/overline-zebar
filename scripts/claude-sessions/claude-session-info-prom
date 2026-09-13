@@ -144,28 +144,47 @@ def collect(projects_dir, max_age_days, cache=None, now=None):
     if cache is not None:
         cache.clear()
     sessions = {}
-    for path in sorted(Path(projects_dir).glob("*/*.jsonl")):
+    # `iterdir` を使うのは、読めなかったことを例外として受け取るためである。
+    # `glob` は走査元が無くても、通常の file でも、読めなくても、例外を上げずに
+    # 空を返す。空を「1 つも無かった」として出力を置き換えると、解決できていた
+    # session が一斉に「不明」へ落ちる。
+    for project in sorted(Path(projects_dir).iterdir()):
         try:
-            stat = path.stat()
-            if not path.is_file() or stat.st_mtime < cutoff:
+            if not project.is_dir():
                 continue
-            session = cached_session(last_scan.get(str(path)), path.stem, stat)
-            if session is None:
-                session = read_session(path)
-            if cache is not None:
-                cache[str(path)] = session.as_cache(stat.st_size)
+            children = sorted(project.iterdir())
         except OSError as error:
-            # 1 本で走査を止めない。止めると、詰まった transcript より後ろの
-            # セッションが恒久的に出なくなる。
-            print(f"claude sessions: cannot read {path}: {error}", file=sys.stderr)
+            # 1 つのdirectoryで走査を止めない。読めないのはそこだけである。
+            print(f"claude sessions: cannot list {project}: {error}", file=sys.stderr)
             continue
-        # 同じ session_id が 2 つの directory に出ることがある (別の cwd から
-        # resume した場合)。2 本出すと join が duplicate series で落ちるため、
-        # 新しい方だけを残す。
-        existing = sessions.get(session.session_id)
-        if existing is None or existing.last_activity < session.last_activity:
-            sessions[session.session_id] = session
+        for path in children:
+            if path.suffix != ".jsonl":
+                continue
+            collect_one(path, sessions, cache, last_scan, cutoff)
     return [sessions[key] for key in sorted(sessions)]
+
+
+def collect_one(path, sessions, cache, last_scan, cutoff):
+    try:
+        stat = path.stat()
+        if not path.is_file() or stat.st_mtime < cutoff:
+            return
+        session = cached_session(last_scan.get(str(path)), path.stem, stat)
+        if session is None:
+            session = read_session(path)
+        if cache is not None:
+            cache[str(path)] = session.as_cache(stat.st_size)
+    except OSError as error:
+        # 1 本で走査を止めない。止めると、詰まった transcript より後ろの
+        # セッションが恒久的に出なくなる。
+        print(f"claude sessions: cannot read {path}: {error}", file=sys.stderr)
+        return
+    # 同じ session_id が 2 つの directory に出ることがある (別の cwd から
+    # resume した場合)。2 本出すと join が duplicate series で落ちるため、
+    # 新しい方だけを残す。
+    existing = sessions.get(session.session_id)
+    if existing is None or existing.last_activity < session.last_activity:
+        sessions[session.session_id] = session
 
 
 def prometheus_text(sessions):
