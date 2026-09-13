@@ -1,8 +1,18 @@
 import { Card, formatCost, sessionDisplayName } from '@overline-zebar/ui';
+import { ClockAlert } from 'lucide-react';
+import type { UsageStatus } from '@overline-zebar/ui';
 import type { ClaudeCostWindow } from './useClaudeCost';
 
 type Props = {
   label: string;
+  /**
+   * How current the cost reading is. It has its own, because the helper
+   * reprints its last cache when Grafana cannot be reached - the numbers stay
+   * on screen and only `generated_at` stops moving - and the header above
+   * reports the usage reading, which is fetched separately and can be current
+   * while this one is hours old.
+   */
+  status: UsageStatus | undefined;
   window: ClaudeCostWindow | undefined;
 };
 
@@ -18,11 +28,28 @@ function share(cost: number, total: number) {
  * the list scrolls rather than being cut to a length that would make the rows
  * stop adding up to the total above them.
  */
-export default function CostBreakdown({ label, window: costWindow }: Props) {
+function StaleMark({ status }: { status: UsageStatus | undefined }) {
+  if (!status?.isStale) return null;
+  return (
+    <span className="flex items-center gap-1 text-[10px] text-warning">
+      <ClockAlert className="h-3 w-3" />
+      {status.label}
+    </span>
+  );
+}
+
+export default function CostBreakdown({
+  label,
+  status,
+  window: costWindow,
+}: Props) {
   if (!costWindow) {
     return (
       <Card className="min-h-0 gap-2 bg-background-deeper/60 p-3">
-        <p className="text-xs font-medium text-text-muted">{label}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-medium text-text-muted">{label}</p>
+          <StaleMark status={status} />
+        </div>
         <p className="text-xs text-text-muted">No breakdown yet</p>
       </Card>
     );
@@ -32,8 +59,11 @@ export default function CostBreakdown({ label, window: costWindow }: Props) {
 
   return (
     <Card className="min-h-0 gap-2 bg-background-deeper/60 p-3">
-      <div className="flex items-baseline justify-between">
-        <p className="text-xs font-medium text-text-muted">{label}</p>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="shrink-0 text-xs font-medium text-text-muted">{label}</p>
+          <StaleMark status={status} />
+        </div>
         <p className="text-base font-semibold tabular-nums">
           {formatCost(total)}
         </p>

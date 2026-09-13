@@ -158,6 +158,25 @@ export default function ClaudeSection({
   /* Fetched apart from the usage reading: the cost path runs through Grafana
      and can be out when the usage helper is fine, and the other way round. */
   const { data: cost } = useClaudeCost();
+  /* Its own staleness, for the same reason. The helper reprints its last cache
+     when a query fails, so the numbers stay and only `generated_at` stops. */
+  const costStatus = cost && readUsageStatus(cost.generated_at, now);
+  const costRow = (
+    /* Where the windows above went. Split the same way as the cards, so a
+       column here is the same window as the column above it. */
+    <div className="grid min-h-0 grid-cols-2 gap-2">
+      <CostBreakdown
+        label="5H session"
+        status={costStatus}
+        window={cost?.windows.session}
+      />
+      <CostBreakdown
+        label="7D week"
+        status={costStatus}
+        window={cost?.windows.week}
+      />
+    </div>
+  );
 
   if (!data) {
     return (
@@ -170,13 +189,15 @@ export default function ClaudeSection({
           subtitle="Current plan windows"
           title="Claude usage"
         />
-        {/* Spans what the four rows of cards would have filled, so the block
-            beside it keeps its own rows where they were. */}
-        <Card className="row-span-4 items-center justify-center text-sm text-text-muted">
+        {/* Spans the three usage rows only. The cost row is fetched on its
+            own and can have an answer when this one does not, so covering it
+            here would hide a reading that arrived. */}
+        <Card className="row-span-3 items-center justify-center text-sm text-text-muted">
           {isPending
             ? 'Loading Claude usage…'
             : error?.message || 'Usage unavailable'}
         </Card>
+        {costRow}
       </section>
     );
   }
@@ -397,12 +418,7 @@ export default function ClaudeSection({
         </Card>
       </div>
 
-      {/* Where the windows above went. Split the same way as the cards, so a
-          column here is the same window as the column above it. */}
-      <div className="grid min-h-0 grid-cols-2 gap-2">
-        <CostBreakdown label="5H session" window={cost?.windows.session} />
-        <CostBreakdown label="7D week" window={cost?.windows.week} />
-      </div>
+      {costRow}
     </section>
   );
 }
