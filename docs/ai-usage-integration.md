@@ -270,6 +270,130 @@ publishするものが無いことは 1 つの答えである。
 Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカウント情報として
 扱う。
 
+## 週の消費の内訳
+
+`scripts/claude-cost/claude-cost-json`が、5Hと7Dそれぞれの窓のコストをsessionごとに
+引いてJSON cacheへ書く。**両方を出すのは、panelの他のすべての段が2つのwindowを
+並べて出すためである。**片方だけの段は、そこだけ別の問いに答えることになる。
+widgetは`--cached-only`で読むだけで、既存の2つのhelperと同じ形である。読み出しは
+`gcx`に任せ、HTTPとtokenの扱いを自前で持たない。
+
+**窓はusage helperが報告するresetからwindow長だけ戻して求める。**5Hは
+`current_session.resets_at`、7Dは`current_week.resets_at`である。読めない場合は
+今からwindow長だけ戻した窓に落とし、**どちらで求めたかを`source`に残す。**同じ形の
+数字が別の窓から来ていることは、後から見て分からない。
+
+**既に過ぎたresetは、window単位で今の窓へ送る。**usage cacheがresetをまたいで
+止まっていると、`resets_at`は読めるが前の窓のものになる。そのまま使うと窓が
+window長より長くなり、**window長でない期間を「今の窓」として公開する。**
+window長は`reset - 長さ`で既に前提にしているので、同じ前提で送り、`source`を
+`usage_cache_rolled`にする。
+**この規則が偽になる観測:** providerがwindow長を変えると窓は静かにずれる。
+chipのcount downと`resets_at`が食い違う。**ここのwindow長は、既に複数箇所に
+ある写しがもう1つ増えたものである。変更時は揃える。**
+
+**3本のqueryは同じ瞬間で評価する。**コストの2本も、名前を読む1本もである。
+`--time`でhelperが捕まえた時刻へ固定する。渡さないとgcxがサーバへ届いた時刻で
+個別に評価するため、rangeの起点が窓の起点より後ろへずれる。名前の側を固定し
+損ねると、その間に題が書き換わった時、**別の瞬間のlabelを別の瞬間のコストへ
+付ける。**
+
+### 窓の消費の求め方
+
+```text
+session ごとに:  sum(increase(cost[窓]))
+               + sum(first_over_time(cost[窓]) unless (cost @ 窓の起点))
+```
+
+**`increase()`だけでは、系列ごとに最初のsample 1回分が落ちる。**counterはsession
+開始時の暗黙の0から始まるが、Prometheusはその0を見ない。系列が窓の内側で始まると
+外挿も効かないため、最初のexportがそのまま失われる。実測 (2026-09-13) で週合計の
+9%、最悪のsessionで21%だった。
+
+**窓の起点に在った系列には足し戻さない。**そこにある値は前の窓の残高であって、
+この窓の消費ではない。
+
+**`last_over_time()`では代えられない。**同じ`session_id`のままresumeすると
+counterがリセットされ、リセット前の分が丸ごと落ちる (実測で5 sessionに発生)。
+
+**この2本を1本のPromQLにまとめない。**`A + (B unless C)`は内部結合で、`unless`が
+除いた系列を加算ごと落とす (実測$49.04→$4.46)。**窓をまたぐ系列が1つも無い週では
+この誤りが再現しない。**`unless`が何も除かないためで、次の週次resetで初めて
+本番に出る。足し算はhelper側で行う。
+
+### 出力
+
+```json
+{"generated_at":"…","currency":"USD",
+ "windows":{
+   "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
+              "sessions":[…],"unresolved":{…}},
+   "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
+           "sessions":[{"session_name":"#46","custom_title":"#46",
+                        "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
+                        "session_id":"…","cost":123.92}],
+           "unresolved":{"cost":451.61,"sessions":11}}}}
+```
+
+**emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
+**scrapeが付けるlabel (`agent_hostname` `instance` `job`) は写さない。**sessionの
+属性ではなく収集側の設定で変わるもので、設定が変われば黙って消える。
+
+**消費のあったsessionはすべて行にする。上限を置かない。**行を切ると、切った分が
+`total`にだけ残って内訳と突き合わせられず、読む側がlabelで絞った画面も黙って
+少なく出る。**要求が定まっていない利用者のために、不完全なcacheを作らない。**
+抑えるべき増え方も無い。窓に入るsession数は現実の側で頭打ちで、実測ではPrometheusが
+保持する20日いっぱいでも29件だった。
+
+**消費が厳密に0のsessionは行にしない。閾値では落とさない。**窓の中に居ただけで
+使っていないsessionがあり、実測で5H窓の10系列中7件がこれだった。`increase()`は
+それを厳密に0として返す。**$0.004も消費である。**閾値で落とすと、その額が`total`から
+消えるか、消えないなら内訳と合わなくなる。実測でも、0と$0.005の間の値はどの窓にも
+1件も無かった。
+
+**行と`unresolved`の合計が`total`である。**`total`は報告する値から
+積むので、数えた額が内訳から欠けることはない。
+
+**金額を丸めない。**何桁を見せるかは読む側の判断である。ここで丸めると、行ごとに
+丸めた値と別に丸めた合計が食い違い、上の1行に但し書きが要る (実際に一度足した)。
+読む側が別の順で足し直せばdoubleの最下位桁は動きうるが、それは浮動小数の性質で
+あって、この出力の性質ではなく、表示する桁のはるか下である。`total`は報告する値から
+積むので、数えた額が内訳から欠けることはない。
+
+**`unresolved`は「`claude_session_info`の系列が1本も無いsession」である。**別マシンから
+送られたsessionと、transcriptを消した後のsessionが該当する。落とすと行の合計が
+totalに合わなくなるため、まとめて数える。**題を持たないことではない。**titleがまだ
+付いていないsessionもinfoは持ち、`project`が入る。projectの分かる行は「不明」より
+情報があるので、行として出す。
+
+**表示名は上から順に採る。**`custom_title` (本文を持たなければ`ai_title`を副題に
+足す) → `ai_title` → `project` → `session_id`の先頭。**最後の1つは飾りではない。**
+emitterは`session_id`以外のlabelを任意にしているため、cwdが`/`のsessionのように
+1つもlabelを持たない行が来る。既知のsessionなので行として出し、`session_id`の
+先頭で示す。
+
+**表示名はここで組み立てない。**`session_name`は2つの題の単純な合成で、`#102`の
+ように本文を持たない題は`ai_title`を副題として足した方が読める。それは読む側の
+判断なので、両方の題をそのまま渡す。
+
+**同じ`session_id`に`claude_session_info`が2本来たら、名前を付けない。**どちらが
+正かを決める情報が無く、あるsessionを別のsessionの名前で出すより、「不明」に
+送る方が軽い。
+
+**resetがoffsetを持たなければ、読めない値として扱う。**offsetの無い日時もparseは
+できるが、awareな現在時刻と比べた瞬間にTypeErrorになり、**cacheを読めなかった時の
+退避経路を通らずに実行ごと落ちる。**窓の側のfallbackに載せる。
+
+**引けなかった時は前回のcacheをそのまま返す。**`generated_at`が動かないので、
+widgetのstale判定がそのまま効く。半分だけの答えは公開しない。
+
+**失敗の理由は`gcx`のstdoutから採る。**gcxは失敗の詳細をstdoutへ書き、stderrは
+空のまま終了する。stderrだけを見ると、cronのlogに残るのは終了コードだけになる。
+
+**生応答は残さない。**usage helperが残すのは、歪んだreadingが数日後に14日graphの
+形として現れるためである。この出力は背後にhistoryを持たず、誤った数字は次の更新で
+消える。
+
 ## ファイル配置
 
 ### Widget
@@ -305,6 +429,8 @@ Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカ�
   - Codex app-serverのusage取得、cache更新、cron例。
 - `scripts/claude-sessions/`
   - transcriptからの`claude_session_info`の生成、走査cache、cron例。
+- `scripts/claude-cost/`
+  - `gcx`経由での週の消費の取得、JSON cache更新、cron例。
 
 ## 表示仕様
 

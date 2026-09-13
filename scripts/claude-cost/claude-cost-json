@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+
+import datetime as dt
+import fcntl
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+COST_METRIC = "claude_code_cost_usage_USD_total"
+INFO_METRIC = "claude_session_info"
+
+# 名前・窓の長さ・usage cache内のkey。**window長はhelperの外にも写しがある**
+# (docs/ai-usage-integration.md「window長は複数箇所に重複している」)。
+# providerが変えた時は揃える。
+WINDOWS = (
+    ("session", 5 * 3600, "current_session"),
+    ("week", 7 * 86400, "current_week"),
+)
+
+DEFAULT_DATASOURCE = "grafanacloud-prom"
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_TTL = 240.0
+# infoから写すlabel。表示名の組み立ても絞り込みも読む側が持つ。emitterが出す
+# labelはすべて写す。**scrapeが付けるlabel (`agent_hostname` `instance` `job`) は
+# 写さない。**sessionの属性ではなく、収集側の設定で変わる。
+INFO_LABELS = ("session_name", "custom_title", "ai_title", "task_id", "project", "cwd")
+
+
+class CostError(Exception):
+    pass
+
+
+def env_value(name, default):
+    value = os.environ.get(name, "").strip()
+    return value or default
+
+
+def positive_env(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def parse_iso8601(value):
+    """offsetを持つ日時だけを受ける。
+
+    offsetの無い日時もparseはできるが、awareな`now`と比べた瞬間にTypeErrorに
+    なる。`main`はCostErrorしか捕まえないため、**cacheを読めなかった時の
+    退避経路を通らずに実行ごと落ちる。**読めない値として扱い、窓の側の
+    fallbackに載せる。
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def read_usage_cache(path):
+    try:
+        payload = json.loads(Path(path).read_bytes())
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def window_bounds(payload, key, length, now):
+    """windowの起点と終端を返す。
+
+    起点はusage helperが報告するresetからwindow長だけ戻して求める。読めない
+    場合は今からwindow長だけ戻した窓に落とす。**どちらで求めたかを出力に
+    残す。**同じ形の数字が別の窓から来ていることが、後から見て分からなくなる。
+    """
+    try:
+        reset = parse_iso8601(payload[key]["resets_at"])
+    except (KeyError, TypeError):
+        reset = None
+    if reset is None:
+        return now - dt.timedelta(seconds=length), None, "fallback_length"
+    source = "usage_cache"
+    if reset <= now:
+        # usage cacheがresetをまたいで止まっていると、報告されたresetは前の窓の
+        # ものになる。そのまま使うと窓がwindow長より長くなり、**window長でない
+        # 期間を「今の窓」として公開する。**window長は既に`reset - 長さ`で前提に
+        # しているので、同じ前提で今の窓へ送る。
+        # **この規則が偽になる観測:** providerがwindow長を変えると、ここが出す
+        # 窓は静かにずれる。chipのcount downと`window.resets_at`が食い違う。
+        elapsed = (now - reset).total_seconds()
+        periods = int(elapsed // length) + 1
+        reset += dt.timedelta(seconds=periods * length)
+        source = "usage_cache_rolled"
+    return reset - dt.timedelta(seconds=length), reset, source
+
+
+def parse_vector(payload):
+    """instant queryの応答をlabel setごとの値にする。
+
+    形が合わない応答は0件ではなく例外にする。**引けなかったことと、
+    1件も無かったことを混ぜない。**混ぜると、Grafanaが答えなくなった時に
+    全部の行が消えた画面を、正しい答えとして公開してしまう。
+    """
+    try:
+        data = json.loads(payload)
+        result = data["data"]["result"]
+        if data["data"].get("resultType") != "vector":
+            raise CostError("query did not return an instant vector")
+    except (ValueError, KeyError, TypeError) as error:
+        raise CostError(f"cannot read the query response: {error}")
+    values = []
+    for item in result:
+        try:
+            values.append((item["metric"], float(item["value"][1])))
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise CostError(f"cannot read a sample: {error}")
+    return values
+
+
+def by_session(values):
+    totals = {}
+    for metric, value in values:
+        session_id = metric.get("session_id")
+        if session_id:
+            totals[session_id] = totals.get(session_id, 0.0) + value
+    return totals
+
+
+def failure_detail(stdout, stderr, code):
+    """失敗の理由を1行にする。
+
+    **gcxは失敗の詳細をstdoutへ書き、stderrは空のまま終了する** (実測)。
+    stderrだけを見ると、cronのlogに残るのは終了コードだけになり、
+    唯一の手がかりが無内容になる。
+    """
+    try:
+        envelope = json.loads(stdout)["error"]
+        summary, details = envelope.get("summary", ""), envelope.get("details", "")
+        line = ": ".join(part for part in (summary, details) if part)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        line = ""
+    line = line or stderr.strip() or stdout.strip()
+    return " ".join(line.split())[:300] or f"exit status {code}"
+
+
+def run_query(config, expression, at=None):
+    """instant queryを1本投げる。
+
+    `at`を渡すと評価時刻をそこへ固定する。指定しないとgcxが自分のnowで
+    評価するため、**3本のqueryが別々の瞬間を見る。**rangeの起点が窓の起点より
+    後ろへずれ、窓の起点に在った系列 (足し戻しを抑止する側) では、そのずれの
+    間の消費がどちらにも入らない。
+    """
+    command = [config["gcx"], "metrics", "query", "-d", config["datasource"], "-o", "json"]
+    if config["context"]:
+        command += ["--context", config["context"]]
+    if at is not None:
+        command += ["--time", str(int(at))]
+    command.append(expression)
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, timeout=config["timeout"],
+            # gcxは助言をstderrへ書く。stdoutは応答だけである。
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CostError(f"cannot run {config['gcx']}: {error}")
+    if completed.returncode != 0:
+        raise CostError("query failed: " + failure_detail(
+            completed.stdout.decode("utf-8", "replace"),
+            completed.stderr.decode("utf-8", "replace"),
+            completed.returncode,
+        ))
+    return parse_vector(completed.stdout.decode("utf-8", "replace"))
+
+
+def window_cost(config, start_ts, now_ts):
+    """窓の中で発生したコストをsessionごとに返す。
+
+    `increase()`だけでは足りない。counterはsession開始時の暗黙の0から始まるが、
+    Prometheusはその0を見ず、系列が窓の内側で始まると外挿も効かないため、
+    最初のexport 1回分が落ちる (実測で週合計の9%)。窓の起点に在った系列には
+    足さない。そこにある値は前の窓の残高である。
+
+    **この2本を1本のPromQLにまとめない。**`A + (B unless C)`は内部結合で、
+    `unless`が除いた系列を加算ごと落とす (実測$49.04→$4.46)。窓をまたぐ系列が
+    無い週ではこの誤りが再現せず、次の週次resetで初めて出る。
+    """
+    span = max(int(now_ts - start_ts), 1)
+    increase = by_session(run_query(
+        config, f"sum by (session_id) (increase({COST_METRIC}[{span}s]))", now_ts))
+    addback = by_session(run_query(
+        config,
+        f"sum by (session_id) (first_over_time({COST_METRIC}[{span}s])"
+        f" unless ({COST_METRIC} @ {int(start_ts)}))",
+        now_ts,
+    ))
+    return {key: increase.get(key, 0.0) + addback.get(key, 0.0)
+            for key in set(increase) | set(addback)}
+
+
+def session_info(config, at=None):
+    found = {}
+    for metric, _ in run_query(config, INFO_METRIC, at):
+        session_id = metric.get("session_id")
+        if not session_id:
+            continue
+        # 同じsession_idの系列が2本来たら、どちらが正かを決める情報が無い。
+        # 名前を付けずに「不明」へ送る方が、別のsessionの名前を出すより軽い。
+        if session_id in found:
+            found[session_id] = None
+            continue
+        found[session_id] = {key: metric[key] for key in INFO_LABELS if metric.get(key)}
+    return found
+
+
+def build_rows(costs, info):
+    """表示する行と、名前の付かない分を返す。
+
+    **上限を置かない。**行を切ると、切った分が`total`にだけ残って内訳と
+    突き合わせられず、読む側がlabelで絞った画面も黙って少なく出る。
+    **要求が定まっていない利用者のために、不完全なcacheを作らない。**
+    系列数は現実の側で頭打ちになっており (実測で保持期間いっぱいの20日でも
+    29件)、抑えるべき増え方が無い。
+    """
+    rows, unresolved, unresolved_count = [], 0.0, 0
+    for session_id, cost in costs.items():
+        # 窓の中に居ただけで使っていないsession。`increase()`はそれを厳密に0で
+        # 返す (実測で5Hの10系列中7件)。**閾値では落とさない。**$0.004も消費で
+        # あり、落とせば`total`から消えるか、消えないなら内訳と合わなくなる。
+        # 実測でも、0と$0.005の間の値は1件も無かった。
+        if not cost:
+            continue
+        labels = info.get(session_id)
+        # **対応表が無いことと、対応表に写せるlabelが無いことを混ぜない。**
+        # emitterは`session_id`以外を任意にしているので、cwdが`/`のsessionは
+        # `{}`で届く。それは既知のsessionであり、読む側は`session_id`の先頭で
+        # 出せる。`None`は系列が無いか、2本来て決められなかった場合である。
+        if labels is None:
+            unresolved += cost
+            unresolved_count += 1
+            continue
+        rows.append(dict(labels, session_id=session_id, cost=cost))
+    rows.sort(key=lambda row: (-row["cost"], row["session_id"]))
+    return rows, unresolved, unresolved_count
+
+
+def build_output(config, now):
+    """5Hと7Dの両方について、その窓の消費をsessionごとに返す。
+
+    panelは他のすべての段で2つのwindowを対称に扱う。片方だけ出すと、
+    そこだけ別の問いに答える段になる。
+    """
+    payload = read_usage_cache(config["usage_cache"])
+    # 名前は3本のqueryで共有する。**同じ瞬間で評価する**ため、1回だけ引く。
+    info = session_info(config, now.timestamp())
+    windows = {}
+    for name, length, key in WINDOWS:
+        start, reset, source = window_bounds(payload, key, length, now)
+        costs = window_cost(config, start.timestamp(), now.timestamp())
+        rows, unresolved, unresolved_count = build_rows(costs, info)
+        # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
+        # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに
+        # 一致する」を成り立たせるために但し書きが要る。
+        # 丸めで減るのは実測で98 byte (2%) だけだった。
+        windows[name] = {
+            "starts_at": start.isoformat(timespec="seconds"),
+            "resets_at": reset.isoformat(timespec="seconds") if reset else None,
+            "source": source,
+            # **`total`は報告する値から積む。**別に数えると、報告しなかった分が
+            # totalにだけ残り、内訳と突き合わせられない。
+            "total": sum(row["cost"] for row in rows) + unresolved,
+            "sessions": rows,
+            "unresolved": {"cost": unresolved, "sessions": unresolved_count},
+        }
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "currency": "USD",
+        "windows": windows,
+    }
+
+
+def atomic_write(path, data, mode):
+    path = Path(path)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as temporary:
+            temporary.write(data)
+        os.replace(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+
+
+def print_cache(cache, missing_code):
+    try:
+        if cache.stat().st_size:
+            sys.stdout.buffer.write(cache.read_bytes())
+            return 0
+    except OSError:
+        pass
+    print("Claude cost cache is not available yet", file=sys.stderr)
+    return missing_code
+
+
+def settings():
+    return {
+        "gcx": env_value("CLAUDE_COST_GCX_BIN", "gcx"),
+        "context": env_value("CLAUDE_COST_GCX_CONTEXT", ""),
+        "datasource": env_value("CLAUDE_COST_DATASOURCE", DEFAULT_DATASOURCE),
+        "usage_cache": env_value(
+            "CLAUDE_COST_USAGE_CACHE", str(Path.home() / ".cache/claude-usage-json/usage.json")
+        ),
+        "timeout": positive_env("CLAUDE_COST_TIMEOUT", DEFAULT_TIMEOUT),
+        "ttl": positive_env("CLAUDE_COST_CACHE_TTL", DEFAULT_TTL),
+    }
+
+
+def main(argv):
+    if len(argv) > 1 or (argv and argv[0] not in ("--force", "--cached-only")):
+        print(f"usage: {sys.argv[0]} [--force|--cached-only]", file=sys.stderr)
+        return 64
+    cache_dir = Path(env_value("CLAUDE_COST_CACHE_DIR", str(Path.home() / ".cache/claude-cost-json")))
+    cache = cache_dir / "cost.json"
+    if argv == ["--cached-only"]:
+        return print_cache(cache, 66)
+
+    config = settings()
+    try:
+        cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        cache_dir.chmod(0o700)
+        lock = open(cache_dir / "update.lock", "a+")
+        os.chmod(lock.name, 0o600)
+    except OSError as error:
+        print(f"cannot prepare Claude cost cache: {error}", file=sys.stderr)
+        return 73
+
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if argv != ["--force"]:
+            try:
+                if cache.stat().st_size and time.time() - cache.stat().st_mtime < config["ttl"]:
+                    return print_cache(cache, 66)
+            except OSError:
+                pass
+        try:
+            output = build_output(config, dt.datetime.now().astimezone())
+        except CostError as error:
+            # 取れなかった時は前回のcacheをそのまま返す。`generated_at`が
+            # 動かないので、読む側から停止が見える。
+            print(f"claude cost: {error}", file=sys.stderr)
+            return print_cache(cache, 69)
+        try:
+            # 整形しない。widgetが60秒ごとに読み直すため、indentと\uXXXXの
+            # escapeがそのまま転送量になる (題は日本語で、escapeで19%増える)。
+            atomic_write(cache, json.dumps(
+                output, separators=(",", ":"), ensure_ascii=False).encode(), 0o600)
+        except OSError as error:
+            print(f"claude cost: cannot write {cache}: {error}", file=sys.stderr)
+            return 73
+    return print_cache(cache, 66)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

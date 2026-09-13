@@ -1,0 +1,13 @@
+# Refresh the per-session cost breakdown every five minutes.
+#
+# `gcx` is usually not on the cron PATH; point CLAUDE_COST_GCX_BIN at it or add
+# its directory to the crontab PATH. Browser OAuth cannot carry an unattended
+# job, so name a context backed by a service-account or access-policy token
+# with CLAUDE_COST_GCX_CONTEXT.
+#
+# Five queries per refresh - one for the names, two for each of the two windows
+# - at a few seconds each in practice. The outer timeout has to cover all five
+# at their own budget (5 x CLAUDE_COST_TIMEOUT) plus start-up, or it kills the
+# helper before it can log why it gave up and the refresh goes quiet.
+@reboot     CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
+*/5 * * * * CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
