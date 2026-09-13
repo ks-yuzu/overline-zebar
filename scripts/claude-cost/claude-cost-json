@@ -23,12 +23,8 @@ WINDOWS = (
 )
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
-DEFAULT_TOP = 200
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_TTL = 240.0
-# $0.005 未満は表示上 $0.00 になる。行を占めるだけなので落とす。
-COST_FLOOR = 0.005
-
 # infoから写すlabel。表示名の組み立ても絞り込みも読む側が持つ。emitterが出す
 # labelはすべて写す。**scrapeが付けるlabel (`agent_hostname` `instance` `job`) は
 # 写さない。**sessionの属性ではなく、収集側の設定で変わる。
@@ -228,22 +224,22 @@ def session_info(config, at=None):
     return found
 
 
-def build_rows(costs, info, top):
-    """表示する行と、そこに入らなかった分を返す。
+def build_rows(costs, info):
+    """表示する行と、名前の付かない分を返す。
 
-    **入らなかった分を数える。**行だけを切り落とすと、`total`に含まれる額が
-    どこにも現れず、内訳と合計が突き合わせられなくなる。名前が付かない分と
-    上位に入らなかった分は別の事実なので、別々に返す。
-
-    **上限はfileの大きさを抑えるためにあり、一覧を短くするためではない。**
-    widgetはこのfileをmonitorごとに60秒間隔で読む。既定の200は、実測で最も
-    広い窓 (20日で28 session) の約7倍である。**読む側がlabelで絞るなら、
-    `truncated`が0であることがその結果が正しい条件になる。**上限に掛かった
-    行はここに無く、`truncated`はlabelごとに分かれていない。
+    **上限を置かない。**行を切ると、切った分が`total`にだけ残って内訳と
+    突き合わせられず、読む側がlabelで絞った画面も黙って少なく出る。
+    **要求が定まっていない利用者のために、不完全なcacheを作らない。**
+    系列数は現実の側で頭打ちになっており (実測で保持期間いっぱいの20日でも
+    29件)、抑えるべき増え方が無い。
     """
     rows, unresolved, unresolved_count = [], 0.0, 0
     for session_id, cost in costs.items():
-        if cost < COST_FLOOR:
+        # 窓の中に居ただけで使っていないsession。`increase()`はそれを厳密に0で
+        # 返す (実測で5Hの10系列中7件)。**閾値では落とさない。**$0.004も消費で
+        # あり、落とせば`total`から消えるか、消えないなら内訳と合わなくなる。
+        # 実測でも、0と$0.005の間の値は1件も無かった。
+        if not cost:
             continue
         labels = info.get(session_id)
         # **対応表が無いことと、対応表に写せるlabelが無いことを混ぜない。**
@@ -256,9 +252,7 @@ def build_rows(costs, info, top):
             continue
         rows.append(dict(labels, session_id=session_id, cost=cost))
     rows.sort(key=lambda row: (-row["cost"], row["session_id"]))
-    dropped = rows[top:]
-    return (rows[:top], unresolved, unresolved_count,
-            sum(row["cost"] for row in dropped), len(dropped))
+    return rows, unresolved, unresolved_count
 
 
 def build_output(config, now):
@@ -274,23 +268,20 @@ def build_output(config, now):
     for name, length, key in WINDOWS:
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
-        rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
-            costs, info, config["top"])
+        rows, unresolved, unresolved_count = build_rows(costs, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
-        # 行ごとの丸めと合計の丸めが食い違い、「行と不明と打ち切りの合計が
-        # totalに一致する」を成り立たせるために但し書きが要る。
+        # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに
+        # 一致する」を成り立たせるために但し書きが要る。
         # 丸めで減るのは実測で98 byte (2%) だけだった。
-        sessions = list(rows)
         windows[name] = {
             "starts_at": start.isoformat(timespec="seconds"),
             "resets_at": reset.isoformat(timespec="seconds") if reset else None,
             "source": source,
-            # **`total`は報告する値から積む。**別に数えると、行から落とした分が
+            # **`total`は報告する値から積む。**別に数えると、報告しなかった分が
             # totalにだけ残り、内訳と突き合わせられない。
-            "total": sum(row["cost"] for row in sessions) + unresolved + truncated,
-            "sessions": sessions,
+            "total": sum(row["cost"] for row in rows) + unresolved,
+            "sessions": rows,
             "unresolved": {"cost": unresolved, "sessions": unresolved_count},
-            "truncated": {"cost": truncated, "sessions": truncated_count},
         }
     return {
         "generated_at": now.isoformat(timespec="seconds"),
@@ -330,7 +321,6 @@ def settings():
         "usage_cache": env_value(
             "CLAUDE_COST_USAGE_CACHE", str(Path.home() / ".cache/claude-usage-json/usage.json")
         ),
-        "top": int(positive_env("CLAUDE_COST_TOP", DEFAULT_TOP)),
         "timeout": positive_env("CLAUDE_COST_TIMEOUT", DEFAULT_TIMEOUT),
         "ttl": positive_env("CLAUDE_COST_CACHE_TTL", DEFAULT_TTL),
     }

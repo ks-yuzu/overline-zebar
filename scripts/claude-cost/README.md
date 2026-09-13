@@ -76,13 +76,12 @@ addition is done in the helper.
 {"generated_at":"2026-09-14T00:07:35+09:00","currency":"USD",
  "windows":{
    "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
-              "sessions":[…],"unresolved":{…},"truncated":{…}},
+              "sessions":[…],"unresolved":{…}},
    "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
            "sessions":[{"session_name":"#46","custom_title":"#46",
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
                         "session_id":"…","cost":123.92}],
-           "unresolved":{"cost":451.61,"sessions":11},
-           "truncated":{"cost":283.62,"sessions":13}}}}
+           "unresolved":{"cost":451.61,"sessions":11}}}}
 ```
 
 **Every label the emitter publishes is carried through**, so the reader can
@@ -90,30 +89,31 @@ filter on any of them. The ones the scrape adds — `agent_hostname`, `instance`
 `job` — are not: they describe the collector rather than the session, and a
 change to the scrape configuration would take them away without notice.
 
-**`CLAUDE_COST_TOP` bounds the file, it does not shorten the list.** The widget
-reads this every 60 seconds on every monitor. The default of 200 is about seven
-times the widest window ever measured here (28 sessions over 20 days), so it
-should never bite; at 293 bytes a row, a window that did fill it would be 30KB.
+**Every session that spent anything gets a row.** There is no cap. Cutting the
+list would leave the cut amount inside `total` with nowhere to account for it,
+and a reader filtering by label would come up short without being able to say
+by how much — an incomplete cache built for a consumer whose needs are not
+settled yet. There is nothing to bound anyway: the count is limited by how many
+sessions spend money in a window, which measured 29 even over the 20 days
+Prometheus keeps.
 
-**A reader filtering by label is only exact while `truncated` is zero.** Rows
-past the cap are not in the file, and `truncated` is one number rather than one
-per label, so a filtered view built from a truncated list under-reports and
-cannot say by how much.
+**Sessions that spent nothing are left out** — exactly nothing, not "not much".
+A session can sit inside a window without using it, seven of the ten series in
+a measured five-hour window, and `increase()` reports those as exactly zero.
+There is no threshold: four tenths of a cent is still spend, and dropping it
+would either take it out of `total` or leave it there with nothing to account
+for it. Measured across every window, nothing fell between zero and half a
+cent anyway.
 
-**The rows, `unresolved` and `truncated` add up to `total`.** The total is
-summed from the reported amounts, so nothing counted can be missing from the
-breakdown.
+**The rows and `unresolved` add up to `total`.** The total is summed from the
+reported amounts, so nothing counted can be missing from the breakdown.
 
 **Amounts are not rounded.** How many decimals to show is the reader's
 decision, and rounding here would make the sentence above need a caveat: rows
 rounded on their own and a total rounded on its own do not have to agree. A
 reader adding them back in a different order can still differ in a double's
 last bits, which is a property of floating point rather than of this output,
-and it is far below anything displayed. Sessions past
-`CLAUDE_COST_TOP` are counted rather than dropped, because an amount inside
-`total` that appears nowhere else cannot be reconciled with the breakdown.
-Being unnameable and not fitting on screen are different facts, so they are
-counted separately.
+and it is far below anything displayed.
 
 **`unresolved` means no `claude_session_info` series at all** — a session from
 another machine, or one whose transcript is gone. Leaving those out would make
@@ -157,7 +157,6 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_GCX_BIN` | `gcx` |
 | `CLAUDE_COST_GCX_CONTEXT` | unset — the current context |
 | `CLAUDE_COST_DATASOURCE` | `grafanacloud-prom` |
-| `CLAUDE_COST_TOP` | `200` |
 | `CLAUDE_COST_TIMEOUT` | `30` seconds per query |
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
 

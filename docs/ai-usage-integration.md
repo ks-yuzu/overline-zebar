@@ -327,38 +327,38 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 {"generated_at":"…","currency":"USD",
  "windows":{
    "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
-              "sessions":[…],"unresolved":{…},"truncated":{…}},
+              "sessions":[…],"unresolved":{…}},
    "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
            "sessions":[{"session_name":"#46","custom_title":"#46",
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
                         "session_id":"…","cost":123.92}],
-           "unresolved":{"cost":451.61,"sessions":11},
-           "truncated":{"cost":283.62,"sessions":13}}}}
+           "unresolved":{"cost":451.61,"sessions":11}}}}
 ```
 
 **emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
 **scrapeが付けるlabel (`agent_hostname` `instance` `job`) は写さない。**sessionの
 属性ではなく収集側の設定で変わるもので、設定が変われば黙って消える。
 
-**`CLAUDE_COST_TOP`はfileの大きさを抑えるためにあり、一覧を短くするためではない。**
-widgetはこのfileをmonitorごとに60秒間隔で読む。既定の200は、ここで実測した最も広い
-窓 (20日で28 session) の約7倍で、通常は掛からない。1行293 byteなので、満杯の窓でも
-30KBである。
+**消費のあったsessionはすべて行にする。上限を置かない。**行を切ると、切った分が
+`total`にだけ残って内訳と突き合わせられず、読む側がlabelで絞った画面も黙って
+少なく出る。**要求が定まっていない利用者のために、不完全なcacheを作らない。**
+抑えるべき増え方も無い。窓に入るsession数は現実の側で頭打ちで、実測ではPrometheusが
+保持する20日いっぱいでも29件だった。
 
-**読む側がlabelで絞るなら、`truncated`が0であることがその結果の条件になる。**
-上限に掛かった行はfileに無く、`truncated`はlabelごとに分かれていないため、
-絞り込んだ画面は少なく出て、**どれだけ少ないかも言えない。**
+**消費が厳密に0のsessionは行にしない。閾値では落とさない。**窓の中に居ただけで
+使っていないsessionがあり、実測で5H窓の10系列中7件がこれだった。`increase()`は
+それを厳密に0として返す。**$0.004も消費である。**閾値で落とすと、その額が`total`から
+消えるか、消えないなら内訳と合わなくなる。実測でも、0と$0.005の間の値はどの窓にも
+1件も無かった。
 
-**行と`unresolved`と`truncated`の合計が`total`である。**`total`は報告する値から
+**行と`unresolved`の合計が`total`である。**`total`は報告する値から
 積むので、数えた額が内訳から欠けることはない。
 
 **金額を丸めない。**何桁を見せるかは読む側の判断である。ここで丸めると、行ごとに
 丸めた値と別に丸めた合計が食い違い、上の1行に但し書きが要る (実際に一度足した)。
 読む側が別の順で足し直せばdoubleの最下位桁は動きうるが、それは浮動小数の性質で
-あって、この出力の性質ではなく、表示する桁のはるか下である。`CLAUDE_COST_TOP`に
-入らなかったsessionは、行から落とすだけでなく数える。`total`に含まれる額が
-どこにも現れないと、内訳と合計を突き合わせられない。名前が付かないことと、
-画面に入らないことは別の事実なので別々に数える。
+あって、この出力の性質ではなく、表示する桁のはるか下である。`total`は報告する値から
+積むので、数えた額が内訳から欠けることはない。
 
 **`unresolved`は「`claude_session_info`の系列が1本も無いsession」である。**別マシンから
 送られたsessionと、transcriptを消した後のsessionが該当する。落とすと行の合計が
