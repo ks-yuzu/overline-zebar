@@ -275,8 +275,8 @@ Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカ�
 `scripts/claude-cost/claude-cost-json`が、5Hと7Dそれぞれの窓のコストをsessionごとに
 引いてJSON cacheへ書く。**両方を出すのは、panelの他のすべての段が2つのwindowを
 並べて出すためである。**片方だけの段は、そこだけ別の問いに答えることになる。
-**このcacheを読むwidgetは別の変更で入る。**widgetは`--cached-only`で読むだけで、既存の2つのhelperと
-同じ形である。読み出しは`gcx`に任せ、HTTPとtokenの扱いを自前で持たない。
+widgetは`--cached-only`で読むだけで、既存の2つのhelperと同じ形である。読み出しは
+`gcx`に任せ、HTTPとtokenの扱いを自前で持たない。
 
 **窓はusage helperが報告するresetからwindow長だけ戻して求める。**5Hは
 `current_session.resets_at`、7Dは`current_week.resets_at`である。読めない場合は

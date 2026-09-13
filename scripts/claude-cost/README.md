@@ -100,9 +100,6 @@ counted separately.
 machine, or ones whose transcript is gone, and leaving them out would make the
 rows stop adding up to the total. They are summed into `unresolved` instead.
 
-**The panel reader lands separately.** This change writes the cache; nothing
-reads it yet.
-
 **The display name is not composed here.** `session_name` is a plain coalesce of
 the two titles; a title that is only `#102` reads better with the generated
 title appended, and that is the reader's decision, so both titles are passed
