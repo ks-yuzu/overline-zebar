@@ -69,7 +69,19 @@ def window_bounds(usage_cache, now):
         reset = None
     if reset is None:
         return now - dt.timedelta(seconds=WEEK_SECONDS), None, "fallback_7d"
-    return reset - dt.timedelta(seconds=WEEK_SECONDS), reset, "usage_cache"
+    source = "usage_cache"
+    if reset <= now:
+        # usage cacheがresetをまたいで止まっていると、報告されたresetは前の週の
+        # ものになる。そのまま使うと窓が7日より長くなり、**7日でない期間を
+        # 「今週」として公開する。**週の長さは既に`reset - 7d`で前提にしている
+        # ので、同じ前提で今の窓へ送る。
+        # **この規則が偽になる観測:** providerが週の長さを変えると、ここが出す
+        # 窓は静かにずれる。chipのcount downと`window.resets_at`が食い違う。
+        elapsed = (now - reset).total_seconds()
+        periods = int(elapsed // WEEK_SECONDS) + 1
+        reset += dt.timedelta(seconds=periods * WEEK_SECONDS)
+        source = "usage_cache_rolled"
+    return reset - dt.timedelta(seconds=WEEK_SECONDS), reset, source
 
 
 def parse_vector(payload):
@@ -121,10 +133,19 @@ def failure_detail(stdout, stderr, code):
     return " ".join(line.split())[:300] or f"exit status {code}"
 
 
-def run_query(config, expression):
+def run_query(config, expression, at=None):
+    """instant queryを1本投げる。
+
+    `at`を渡すと評価時刻をそこへ固定する。指定しないとgcxが自分のnowで
+    評価するため、**3本のqueryが別々の瞬間を見る。**rangeの起点が窓の起点より
+    後ろへずれ、窓の起点に在った系列 (足し戻しを抑止する側) では、そのずれの
+    間の消費がどちらにも入らない。
+    """
     command = [config["gcx"], "metrics", "query", "-d", config["datasource"], "-o", "json"]
     if config["context"]:
         command += ["--context", config["context"]]
+    if at is not None:
+        command += ["--time", str(int(at))]
     command.append(expression)
     try:
         completed = subprocess.run(
@@ -156,11 +177,13 @@ def window_cost(config, start_ts, now_ts):
     無い週ではこの誤りが再現せず、次の週次resetで初めて出る。
     """
     span = max(int(now_ts - start_ts), 1)
-    increase = by_session(run_query(config, f"sum by (session_id) (increase({COST_METRIC}[{span}s]))"))
+    increase = by_session(run_query(
+        config, f"sum by (session_id) (increase({COST_METRIC}[{span}s]))", now_ts))
     addback = by_session(run_query(
         config,
         f"sum by (session_id) (first_over_time({COST_METRIC}[{span}s])"
         f" unless ({COST_METRIC} @ {int(start_ts)}))",
+        now_ts,
     ))
     return {key: increase.get(key, 0.0) + addback.get(key, 0.0)
             for key in set(increase) | set(addback)}
@@ -182,6 +205,12 @@ def session_info(config):
 
 
 def build_rows(costs, info, top):
+    """表示する行と、そこに入らなかった分を返す。
+
+    **入らなかった分を数える。**行だけを切り落とすと、`total`に含まれる額が
+    どこにも現れず、内訳と合計が突き合わせられなくなる。名前が付かない分と
+    上位に入らなかった分は別の事実なので、別々に返す。
+    """
     rows, unresolved, unresolved_count = [], 0.0, 0
     for session_id, cost in costs.items():
         if cost < COST_FLOOR:
@@ -193,13 +222,16 @@ def build_rows(costs, info, top):
             continue
         rows.append(dict(labels, session_id=session_id, cost=cost))
     rows.sort(key=lambda row: (-row["cost"], row["session_id"]))
-    return rows[:top], unresolved, unresolved_count
+    dropped = rows[top:]
+    return (rows[:top], unresolved, unresolved_count,
+            sum(row["cost"] for row in dropped), len(dropped))
 
 
 def build_output(config, now):
     start, reset, source = window_bounds(config["usage_cache"], now)
     costs = window_cost(config, start.timestamp(), now.timestamp())
-    rows, unresolved, unresolved_count = build_rows(costs, session_info(config), config["top"])
+    rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
+        costs, session_info(config), config["top"])
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "currency": "USD",
@@ -211,6 +243,7 @@ def build_output(config, now):
         "total": round(sum(cost for cost in costs.values() if cost >= COST_FLOOR), 6),
         "sessions": [dict(row, cost=round(row["cost"], 6)) for row in rows],
         "unresolved": {"cost": round(unresolved, 6), "sessions": unresolved_count},
+        "truncated": {"cost": round(truncated, 6), "sessions": truncated_count},
     }
 
 

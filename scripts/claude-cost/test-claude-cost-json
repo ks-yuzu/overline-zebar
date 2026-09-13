@@ -48,6 +48,32 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(reset.isoformat(), "2026-09-14T09:00:00+09:00")
         self.assertEqual(source, "usage_cache")
 
+    def test_a_reset_that_has_passed_is_carried_to_the_current_window(self):
+        # usage cache が reset をまたいで止まると、報告された reset は前の週の
+        # ものになる。そのまま使うと窓が 7 日より長くなる。
+        start, reset, source = self.bounds(
+            json.dumps({"current_week": {"resets_at": "2026-09-07T09:00:00+09:00"}}),
+            now="2026-09-13T12:00:00+09:00")
+        self.assertEqual(reset.isoformat(), "2026-09-14T09:00:00+09:00")
+        self.assertEqual(start.isoformat(), "2026-09-07T09:00:00+09:00")
+        self.assertEqual(source, "usage_cache_rolled")
+
+    def test_a_reset_stale_by_weeks_is_carried_by_whole_weeks(self):
+        start, reset, source = self.bounds(
+            json.dumps({"current_week": {"resets_at": "2026-08-17T09:00:00+09:00"}}),
+            now="2026-09-13T12:00:00+09:00")
+        self.assertEqual(reset.isoformat(), "2026-09-14T09:00:00+09:00")
+        self.assertEqual(source, "usage_cache_rolled")
+
+    def test_the_window_is_never_longer_than_a_week(self):
+        now = dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00")
+        for days in range(0, 40):
+            reset = now - dt.timedelta(days=days, hours=3)
+            start, rolled, _ = self.bounds(
+                json.dumps({"current_week": {"resets_at": reset.isoformat()}}))
+            self.assertLessEqual((now - start).total_seconds(), cost.WEEK_SECONDS, days)
+            self.assertGreater(rolled, now, days)
+
     def test_an_unreadable_usage_cache_falls_back_to_a_plain_week(self):
         for payload in (None, "{", "{}", json.dumps({"current_week": {}}),
                         json.dumps({"current_week": {"resets_at": "tomorrow"}})):
@@ -122,24 +148,38 @@ class RowTests(unittest.TestCase):
                 "s2": {"session_name": "#2 二番", "project": "p"}}
 
     def test_rows_are_sorted_by_cost_and_capped(self):
-        rows, _, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, self.info(), 1)
+        rows, _, _, _, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, self.info(), 1)
         self.assertEqual([row["session_name"] for row in rows], ["#2 二番"])
 
     def test_a_session_without_a_name_becomes_unresolved(self):
         # 落とすと合計が合わなくなる。別マシンから送られた session が該当する。
-        rows, unresolved, count = cost.build_rows(
+        rows, unresolved, count, _, _ = cost.build_rows(
             {"s1": 1.0, "elsewhere": 9.0}, self.info(), 10)
         self.assertEqual([row["session_id"] for row in rows], ["s1"])
         self.assertEqual((unresolved, count), (9.0, 1))
 
+    def test_sessions_past_the_cap_are_counted_not_discarded(self):
+        # 行だけを切り落とすと、total に含まれる額がどこにも現れない。
+        rows, _, _, truncated, truncated_count = cost.build_rows(
+            {"s1": 1.0, "s2": 5.0}, self.info(), 1)
+        self.assertEqual([row["session_id"] for row in rows], ["s2"])
+        self.assertEqual((truncated, truncated_count), (1.0, 1))
+
+    def test_the_parts_add_up_to_the_total(self):
+        costs = {"s1": 1.0, "s2": 5.0, "elsewhere": 9.0, "dust": 0.001}
+        rows, unresolved, _, truncated, _ = cost.build_rows(costs, self.info(), 1)
+        shown = sum(row["cost"] for row in rows)
+        total = sum(value for value in costs.values() if value >= cost.COST_FLOOR)
+        self.assertAlmostEqual(shown + unresolved + truncated, total)
+
     def test_amounts_that_would_render_as_zero_are_dropped(self):
-        rows, unresolved, count = cost.build_rows(
+        rows, unresolved, count, truncated, _ = cost.build_rows(
             {"s1": 0.001, "gone": 0.001}, self.info(), 10)
         self.assertEqual(rows, [])
-        self.assertEqual((unresolved, count), (0.0, 0))
+        self.assertEqual((unresolved, count, truncated), (0.0, 0, 0.0))
 
     def test_the_order_does_not_depend_on_dictionary_order(self):
-        rows, _, _ = cost.build_rows({"s2": 5.0, "s1": 5.0}, self.info(), 10)
+        rows, _, _, _, _ = cost.build_rows({"s2": 5.0, "s1": 5.0}, self.info(), 10)
         self.assertEqual([row["session_id"] for row in rows], ["s1", "s2"])
 
 
@@ -159,7 +199,7 @@ class SessionInfoTests(unittest.TestCase):
         found = self.info_from([({"session_id": "s1", "session_name": "古い"}, 1.0),
                                 ({"session_id": "s1", "session_name": "新しい"}, 1.0)])
         self.assertIsNone(found["s1"])
-        rows, unresolved, count = cost.build_rows({"s1": 3.0}, found, 10)
+        rows, unresolved, count, _, _ = cost.build_rows({"s1": 3.0}, found, 10)
         self.assertEqual((rows, unresolved, count), ([], 3.0, 1))
 
 
@@ -167,8 +207,8 @@ class WindowCostTests(unittest.TestCase):
     def test_the_first_sample_is_added_back_per_session(self):
         queries = []
 
-        def fake(config, expression):
-            queries.append(expression)
+        def fake(config, expression, at=None):
+            queries.append((expression, at))
             if expression.startswith("sum by (session_id) (increase"):
                 return [({"session_id": "s1"}, 10.0), ({"session_id": "s2"}, 4.0)]
             return [({"session_id": "s1"}, 2.0)]
@@ -176,16 +216,38 @@ class WindowCostTests(unittest.TestCase):
         with mock.patch.object(cost, "run_query", side_effect=fake):
             totals = cost.window_cost({}, 1000.0, 4600.0)
         self.assertEqual(totals, {"s1": 12.0, "s2": 4.0})
-        self.assertIn("[3600s]", queries[0])
+        self.assertIn("[3600s]", queries[0][0])
         # 窓の起点に在った系列を外すのは `unless` の側で、加算は helper が行う。
         # PromQL の `+` は内部結合で、`unless` が除いた系列を加算ごと落とす。
-        self.assertIn("unless", queries[1])
-        self.assertNotIn("+", queries[1])
+        self.assertIn("unless", queries[1][0])
+        self.assertNotIn("+", queries[1][0])
+        # 3 本が別々の瞬間を見ないよう、評価時刻を捕まえた now へ固定する。
+        self.assertEqual([at for _, at in queries], [4600.0, 4600.0])
 
     def test_the_addback_is_anchored_at_the_window_start(self):
         with mock.patch.object(cost, "run_query", return_value=[]) as query:
             cost.window_cost({}, 1788739200.0, 1789304700.0)
         self.assertIn("@ 1788739200", query.call_args_list[1].args[1])
+        self.assertEqual(query.call_args_list[1].args[2], 1789304700.0)
+
+    def test_the_evaluation_time_reaches_the_command_line(self):
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = vector([]).encode()
+            stderr = b""
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            return FakeCompleted()
+
+        with mock.patch.object(cost.subprocess, "run", side_effect=fake_run):
+            cost.run_query({"gcx": "gcx", "context": "", "datasource": "d", "timeout": 1},
+                           "up", 1789304700.0)
+        self.assertIn("--time", captured["command"])
+        self.assertEqual(captured["command"][captured["command"].index("--time") + 1],
+                         "1789304700")
 
 
 class CacheTests(unittest.TestCase):

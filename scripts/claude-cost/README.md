@@ -16,8 +16,19 @@ shared architecture, stale detection, and operations runbook.
 The week, anchored to the reset the usage helper reports: seven days back from
 `current_week.resets_at` in `$HOME/.cache/claude-usage-json/usage.json`. When
 that cannot be read it falls back to a plain seven days, and `window.source`
-says which of the two produced the number — the same shape of figure from a
-different window is otherwise indistinguishable afterwards.
+says which produced the number — the same shape of figure from a different
+window is otherwise indistinguishable afterwards.
+
+**A reset that has already passed is carried forward by whole weeks.** A usage
+cache that stopped across a reset still reads, but its `resets_at` belongs to
+the previous week; used as it stands, the window grows past seven days and
+publishes a period that is not a week as "this week". Seven days is already
+assumed by deriving the start from the reset, so the same assumption carries it
+to the current window, and `window.source` becomes `usage_cache_rolled`.
+
+**That rule is false if the provider changes the length of the week.** The
+window would then drift silently; the giveaway is `window.resets_at`
+disagreeing with the countdown on the chip.
 
 ## How the amount is computed
 
@@ -40,6 +51,11 @@ spend.
 counter, and everything before the restart would be lost — five sessions in the
 measured week had one.
 
+**All three queries are evaluated at one instant.** `--time` pins them to the
+moment the helper captured; without it each is evaluated at whatever `gcx`
+reaches the server, so the ranges start after the intended boundary and the
+three see different moments.
+
 **The two queries are not one PromQL expression.** `A + (B unless C)` is an
 inner join: the series `unless` removes are dropped from the addition entirely,
 taking their cost with them ($49.04 became $4.46 in a measured case). The error
@@ -52,11 +68,18 @@ addition is done in the helper.
 ```json
 {"generated_at":"2026-09-14T00:07:35+09:00","currency":"USD",
  "window":{"starts_at":"…","resets_at":"…","source":"usage_cache"},
- "total":1234.69,
+ "total":1240.45,
  "sessions":[{"session_name":"#46","custom_title":"#46","ai_title":"ツール仕様まとめ",
               "task_id":"46","project":"…","session_id":"…","cost":123.92}],
- "unresolved":{"cost":451.61,"sessions":11}}
+ "unresolved":{"cost":451.61,"sessions":11},
+ "truncated":{"cost":283.62,"sessions":13}}
 ```
+
+**The rows, `unresolved` and `truncated` add up to `total`.** Sessions past
+`CLAUDE_COST_TOP` are counted rather than dropped, because an amount inside
+`total` that appears nowhere else cannot be reconciled with the breakdown.
+Being unnameable and not fitting on screen are different facts, so they are
+counted separately.
 
 **Sessions with no name are kept, not dropped.** They are sessions from another
 machine, or ones whose transcript is gone, and leaving them out would make the

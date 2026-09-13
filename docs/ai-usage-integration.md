@@ -280,6 +280,17 @@ JSON cacheへ書く。widgetは`--cached-only`で読むだけで、既存の2つ
 落とし、**どちらで求めたかを`window.source`に残す。**同じ形の数字が別の窓から来て
 いることは、後から見て分からない。
 
+**既に過ぎたresetは、週単位で今の窓へ送る。**usage cacheがresetをまたいで止まって
+いると、`resets_at`は読めるが前の週のものになる。そのまま使うと窓が7日より長くなり、
+**7日でない期間を「今週」として公開する。**週の長さは`reset - 7d`で既に前提にして
+いるので、同じ前提で送り、`window.source`を`usage_cache_rolled`にする。
+**この規則が偽になる観測:** providerが週の長さを変えると窓は静かにずれる。
+chipのcount downと`window.resets_at`が食い違う。
+
+**3本のqueryは同じ瞬間で評価する。**`--time`でhelperが捕まえた時刻へ固定する。
+渡さないとgcxがサーバへ届いた時刻で個別に評価するため、rangeの起点が窓の起点より
+後ろへずれ、3本が別々の瞬間を見る。
+
 ### 窓の消費の求め方
 
 ```text
@@ -308,11 +319,17 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 ```json
 {"generated_at":"…","currency":"USD",
  "window":{"starts_at":"…","resets_at":"…","source":"usage_cache"},
- "total":1234.69,
+ "total":1240.45,
  "sessions":[{"session_name":"#46","custom_title":"#46","ai_title":"ツール仕様まとめ",
               "task_id":"46","project":"…","session_id":"…","cost":123.92}],
- "unresolved":{"cost":451.61,"sessions":11}}
+ "unresolved":{"cost":451.61,"sessions":11},
+ "truncated":{"cost":283.62,"sessions":13}}
 ```
+
+**行と`unresolved`と`truncated`の合計が`total`に一致する。**`CLAUDE_COST_TOP`に
+入らなかったsessionは、行から落とすだけでなく数える。`total`に含まれる額が
+どこにも現れないと、内訳と合計を突き合わせられない。名前が付かないことと、
+画面に入らないことは別の事実なので別々に数える。
 
 **名前の付かないsessionを落とさない。**別マシンから送られたsessionと、transcriptを
 消した後のsessionが該当する。落とすと行の合計がtotalに合わなくなるため、
