@@ -251,8 +251,10 @@ class WindowCostTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
-    def output(self, costs, info, top=20, usage_cache="absent.json"):
+    def output(self, costs, info, top=20, usage_cache="absent.json", seen=None):
         def fake(config, expression, at=None):
+            if seen is not None:
+                seen.append(at)
             if expression.startswith(cost.INFO_METRIC):
                 return [({"session_id": key, **labels}, 1.0)
                         for key, labels in info.items()]
@@ -273,6 +275,14 @@ class OutputTests(unittest.TestCase):
         parts = (sum(row["cost"] for row in built["sessions"])
                  + built["unresolved"]["cost"] + built["truncated"]["cost"])
         self.assertEqual(built["total"], parts)
+
+    def test_every_query_is_evaluated_at_the_same_instant(self):
+        # 題が書き換わる瞬間をまたぐと、別の瞬間の label を凍らせたコストへ付ける。
+        seen = []
+        self.output({"s1": 1.0}, {"s1": {"session_name": "一番"}}, seen=seen)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(set(seen)), 1)
+        self.assertIsNotNone(seen[0])
 
     def test_the_identity_holds_when_rows_are_truncated(self):
         built = self.output({f"s{n}": 1.0 / 3 for n in range(9)},

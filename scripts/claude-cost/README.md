@@ -51,10 +51,11 @@ spend.
 counter, and everything before the restart would be lost — five sessions in the
 measured week had one.
 
-**All three queries are evaluated at one instant.** `--time` pins them to the
-moment the helper captured; without it each is evaluated at whatever `gcx`
-reaches the server, so the ranges start after the intended boundary and the
-three see different moments.
+**All three queries are evaluated at one instant** — both cost queries and the
+one that reads the names. `--time` pins them to the moment the helper captured;
+without it each is evaluated at whatever `gcx` reaches the server, so the
+ranges start after the intended boundary, and a rename landing between two
+queries would attach one moment's labels to another moment's costs.
 
 **The two queries are not one PromQL expression.** `A + (B unless C)` is an
 inner join: the series `unless` removes are dropped from the addition entirely,

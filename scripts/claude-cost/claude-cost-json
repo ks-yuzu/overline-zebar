@@ -189,9 +189,9 @@ def window_cost(config, start_ts, now_ts):
             for key in set(increase) | set(addback)}
 
 
-def session_info(config):
+def session_info(config, at=None):
     found = {}
-    for metric, _ in run_query(config, INFO_METRIC):
+    for metric, _ in run_query(config, INFO_METRIC, at):
         session_id = metric.get("session_id")
         if not session_id:
             continue
@@ -229,9 +229,11 @@ def build_rows(costs, info, top):
 
 def build_output(config, now):
     start, reset, source = window_bounds(config["usage_cache"], now)
+    # 3本とも同じ瞬間で評価する。emitterがこの間に題を書き換えると、
+    # 別の瞬間のlabelを凍らせたコストへ付けることになる。
     costs = window_cost(config, start.timestamp(), now.timestamp())
     rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
-        costs, session_info(config), config["top"])
+        costs, session_info(config, now.timestamp()), config["top"])
     # **`total`は報告する値から積む。**生の合計を別に丸めると、行ごとの丸めとの
     # 差が残り、「行と不明と打ち切りの合計がtotalに一致する」という書いた規則が
     # 偽になる。差は表示の2桁には出ないが、真でない規則を書かない。
