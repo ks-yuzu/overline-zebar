@@ -75,7 +75,11 @@ addition is done in the helper.
  "truncated":{"cost":283.62,"sessions":13}}
 ```
 
-**The rows, `unresolved` and `truncated` add up to `total`.** Sessions past
+**The rows, `unresolved` and `truncated` add up to `total` exactly.** The total
+is summed from the reported amounts rather than rounded separately from the raw
+aggregate, which would leave a residual and make the sentence above false. The
+residual never reaches the two decimals on screen, but a rule that is written
+down should be true. Sessions past
 `CLAUDE_COST_TOP` are counted rather than dropped, because an amount inside
 `total` that appears nowhere else cannot be reconciled with the breakdown.
 Being unnameable and not fitting on screen are different facts, so they are

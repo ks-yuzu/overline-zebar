@@ -232,6 +232,11 @@ def build_output(config, now):
     costs = window_cost(config, start.timestamp(), now.timestamp())
     rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
         costs, session_info(config), config["top"])
+    # **`total`は報告する値から積む。**生の合計を別に丸めると、行ごとの丸めとの
+    # 差が残り、「行と不明と打ち切りの合計がtotalに一致する」という書いた規則が
+    # 偽になる。差は表示の2桁には出ないが、真でない規則を書かない。
+    sessions = [dict(row, cost=round(row["cost"], 6)) for row in rows]
+    unresolved, truncated = round(unresolved, 6), round(truncated, 6)
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "currency": "USD",
@@ -240,10 +245,10 @@ def build_output(config, now):
             "resets_at": reset.isoformat(timespec="seconds") if reset else None,
             "source": source,
         },
-        "total": round(sum(cost for cost in costs.values() if cost >= COST_FLOOR), 6),
-        "sessions": [dict(row, cost=round(row["cost"], 6)) for row in rows],
-        "unresolved": {"cost": round(unresolved, 6), "sessions": unresolved_count},
-        "truncated": {"cost": round(truncated, 6), "sessions": truncated_count},
+        "total": round(sum(row["cost"] for row in sessions) + unresolved + truncated, 6),
+        "sessions": sessions,
+        "unresolved": {"cost": unresolved, "sessions": unresolved_count},
+        "truncated": {"cost": truncated, "sessions": truncated_count},
     }
 
 

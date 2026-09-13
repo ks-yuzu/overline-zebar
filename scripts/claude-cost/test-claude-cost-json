@@ -250,6 +250,39 @@ class WindowCostTests(unittest.TestCase):
                          "1789304700")
 
 
+class OutputTests(unittest.TestCase):
+    def output(self, costs, info, top=20, usage_cache="absent.json"):
+        def fake(config, expression, at=None):
+            if expression.startswith(cost.INFO_METRIC):
+                return [({"session_id": key, **labels}, 1.0)
+                        for key, labels in info.items()]
+            if "increase" in expression:
+                return [({"session_id": key}, value) for key, value in costs.items()]
+            return []
+
+        with mock.patch.object(cost, "run_query", side_effect=fake):
+            return cost.build_output(
+                {"top": top, "usage_cache": usage_cache},
+                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
+
+    def test_the_reported_parts_add_up_to_the_reported_total_exactly(self):
+        # 行ごとの丸めと生の合計の丸めがずれると、書いた規則が偽になる。
+        # 表示の 2 桁には出ないが、真でない規則は書かない。
+        built = self.output({"s1": 0.0050004, "s2": 0.0050004, "elsewhere": 0.0050004},
+                            {"s1": {"session_name": "一番"}, "s2": {"session_name": "二番"}})
+        parts = (sum(row["cost"] for row in built["sessions"])
+                 + built["unresolved"]["cost"] + built["truncated"]["cost"])
+        self.assertEqual(built["total"], parts)
+
+    def test_the_identity_holds_when_rows_are_truncated(self):
+        built = self.output({f"s{n}": 1.0 / 3 for n in range(9)},
+                            {f"s{n}": {"session_name": str(n)} for n in range(9)}, top=2)
+        parts = (sum(row["cost"] for row in built["sessions"])
+                 + built["unresolved"]["cost"] + built["truncated"]["cost"])
+        self.assertEqual(built["total"], parts)
+        self.assertEqual(built["truncated"]["sessions"], 7)
+
+
 class CacheTests(unittest.TestCase):
     def helper(self, root, argv, gcx="true"):
         environment = {
