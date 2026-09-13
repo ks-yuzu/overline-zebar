@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE / "claude-session-info-prom"
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("claude_session_info_prom", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+emitter = importlib.util.module_from_spec(spec)
+loader.exec_module(emitter)
+
+
+def transcript(directory, project, session_id, records, mtime=None):
+    path = Path(directory) / project
+    path.mkdir(parents=True, exist_ok=True)
+    file = path / f"{session_id}.jsonl"
+    file.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    if mtime is not None:
+        os.utime(file, (mtime, mtime))
+    return file
+
+
+def session(**fields):
+    item = emitter.Session(fields.get("session_id", "s"), fields.get("last_activity", 0))
+    item.custom_title = fields.get("custom_title", "")
+    item.ai_title = fields.get("ai_title", "")
+    item.cwd = fields.get("cwd", "")
+    return item
+
+
+class TaskIdTests(unittest.TestCase):
+    def test_a_reference_is_read_from_the_custom_title(self):
+        self.assertEqual(session(custom_title="#104 軸を合わせる").task_id, "104")
+
+    def test_a_title_that_is_only_a_reference_still_yields_one(self):
+        # 実データに本文を持たない `#102` が 6 件ある。空白を必須にすると落ちる。
+        self.assertEqual(session(custom_title="#102").task_id, "102")
+
+    def test_a_reference_without_a_separator_is_not_read(self):
+        self.assertEqual(session(custom_title="#104軸を合わせる").task_id, "")
+        self.assertEqual(session(custom_title="#10.4 軸").task_id, "")
+
+    def test_a_generated_title_never_yields_a_reference(self):
+        # ai_title は会話から生成された散文で、`#3 things to fix` のような
+        # 偶然の一致はそこからしか来ない。
+        self.assertEqual(session(ai_title="#3 things to fix").task_id, "")
+
+    def test_a_title_that_is_not_a_reference_yields_nothing(self):
+        self.assertEqual(session(custom_title="PR10-review").task_id, "")
+
+
+class LabelTests(unittest.TestCase):
+    def test_the_name_prefers_the_custom_title(self):
+        item = session(custom_title="#98 実コストを出す", ai_title="コスト表示の設計")
+        self.assertEqual(item.session_name, "#98 実コストを出す")
+
+    def test_the_name_falls_back_to_the_generated_title(self):
+        self.assertEqual(session(ai_title="コスト表示の設計").session_name, "コスト表示の設計")
+
+    def test_the_project_is_the_basename_of_the_cwd(self):
+        item = session(cwd="/home/user/repo/github.com/ks-yuzu/overline-zebar")
+        self.assertEqual(item.project, "overline-zebar")
+
+    def test_empty_labels_are_not_written(self):
+        # Prometheus では空値と欠損が同じ意味になる。書くと、題が付いた時に
+        # 値が変わっただけで系列が入れ替わったように見える。
+        keys = [key for key, _ in session(session_id="s", cwd="/a/b").labels()]
+        self.assertEqual(keys, ["session_id", "project", "cwd"])
+
+    def test_label_values_are_escaped(self):
+        item = session(session_id="s", custom_title='a"b\\c\nd')
+        text = emitter.prometheus_text([item]).decode()
+        self.assertIn('custom_title="a\\"b\\\\c\\nd"', text)
+        self.assertEqual(len([row for row in text.splitlines() if row.startswith("claude_session_info{")]), 1)
+
+
+class CollectTests(unittest.TestCase):
+    def test_the_first_cwd_wins_and_the_last_title_wins(self):
+        with tempfile.TemporaryDirectory() as root:
+            transcript(root, "-a", "s1", [
+                {"cwd": "/home/user/repo/overline-zebar", "gitBranch": "main"},
+                {"customTitle": "#1 古い題"},
+                {"cwd": "/home/user/repo/overline-zebar/.claude/worktrees/task-9"},
+                {"customTitle": "#2 新しい題"},
+            ])
+            found = emitter.collect(root, 30)
+            self.assertEqual([item.session_id for item in found], ["s1"])
+            self.assertEqual(found[0].custom_title, "#2 新しい題")
+            self.assertEqual(found[0].project, "overline-zebar")
+
+    def test_a_session_id_in_two_directories_is_emitted_once(self):
+        # 2 本出すと PromQL の group_left が duplicate series でクエリごと落ちる。
+        with tempfile.TemporaryDirectory() as root:
+            transcript(root, "-a", "s1", [{"customTitle": "古い"}], mtime=1000)
+            transcript(root, "-b", "s1", [{"customTitle": "新しい"}], mtime=2000)
+            found = emitter.collect(root, 30, now=2000)
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0].custom_title, "新しい")
+
+    def test_transcripts_older_than_the_cutoff_are_skipped(self):
+        with tempfile.TemporaryDirectory() as root:
+            transcript(root, "-a", "old", [{"customTitle": "古い"}], mtime=0)
+            transcript(root, "-a", "new", [{"customTitle": "新しい"}], mtime=40 * 86400)
+            found = emitter.collect(root, 30, now=40 * 86400)
+            self.assertEqual([item.session_id for item in found], ["new"])
+
+    def test_one_unreadable_transcript_does_not_stop_the_scan(self):
+        with tempfile.TemporaryDirectory() as root:
+            transcript(root, "-a", "s1", [{"customTitle": "読める"}])
+            broken = transcript(root, "-a", "s0", [{"customTitle": "読めない"}])
+            broken.chmod(0o000)
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    found = emitter.collect(root, 30)
+            finally:
+                broken.chmod(0o600)
+            self.assertEqual([item.session_id for item in found], ["s1"])
+
+    def test_a_line_that_is_not_json_is_skipped(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = transcript(root, "-a", "s1", [{"customTitle": "題"}])
+            path.write_text('{"cwd": "/a/b"\n' + path.read_text())
+            found = emitter.collect(root, 30)
+            self.assertEqual(found[0].custom_title, "題")
+
+
+class ScanFailureTests(unittest.TestCase):
+    """走査が立たなかった時に、既にある出力を置き換えないこと。
+
+    この規則は `main` でしか落ちない。`collect` が例外を上げても、出力を
+    書くかどうかを決めているのは `main` である。
+    """
+
+    def run_main(self, projects_dir, output, cache):
+        environment = {
+            "CLAUDE_SESSION_INFO_PROJECTS_DIR": str(projects_dir),
+            "CLAUDE_SESSION_INFO_CACHE": str(cache),
+        }
+        with mock.patch.dict(os.environ, environment), \
+                contextlib.redirect_stderr(io.StringIO()) as complaint:
+            code = emitter.main(["--output", str(output)])
+        return code, complaint.getvalue()
+
+    def existing_output(self, root):
+        output = Path(root) / "claude-sessions.prom"
+        output.write_text('claude_session_info{session_id="s1"} 1\n')
+        return output
+
+    def test_a_missing_projects_directory_leaves_the_output_alone(self):
+        # `glob` は走査元が無くても空を返すだけで、header だけの file を書いて
+        # しまう。解決できていた session が一斉に「不明」へ落ちる。
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            code, complaint = self.run_main(
+                Path(root) / "absent", output, Path(root) / "scan.json")
+            self.assertEqual(code, 73)
+            self.assertIn("cannot scan", complaint)
+            self.assertEqual(output.read_text(), 'claude_session_info{session_id="s1"} 1\n')
+
+    def test_a_projects_path_that_is_a_file_leaves_the_output_alone(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            plain = Path(root) / "plain"
+            plain.write_text("not a directory")
+            code, _ = self.run_main(plain, output, Path(root) / "scan.json")
+            self.assertEqual(code, 73)
+            self.assertEqual(output.read_text(), 'claude_session_info{session_id="s1"} 1\n')
+
+    def test_an_empty_projects_directory_does_replace_the_output(self):
+        # 読めなかったことと、1 つも無かったことは別である。
+        with tempfile.TemporaryDirectory() as root:
+            output = self.existing_output(root)
+            projects = Path(root) / "projects"
+            projects.mkdir()
+            code, _ = self.run_main(projects, output, Path(root) / "scan.json")
+            self.assertEqual(code, 0)
+            self.assertNotIn("session_id=", output.read_text())
+
+    def test_one_unreadable_project_directory_does_not_hide_the_others(self):
+        with tempfile.TemporaryDirectory() as root:
+            projects = Path(root) / "projects"
+            transcript(projects, "-a", "s1", [{"customTitle": "読める"}])
+            closed = projects / "-0"
+            closed.mkdir()
+            (closed / "s0.jsonl").write_text("{}\n")
+            closed.chmod(0o000)
+            try:
+                with contextlib.redirect_stderr(io.StringIO()) as complaint:
+                    found = emitter.collect(projects, 30)
+            finally:
+                closed.chmod(0o700)
+            self.assertEqual([item.session_id for item in found], ["s1"])
+            self.assertIn("cannot list", complaint.getvalue())
+
+
+class CacheTests(unittest.TestCase):
+    def scan(self, root, cache, now=None):
+        read = []
+        original = emitter.read_session
+        emitter.read_session = lambda path: read.append(path) or original(path)
+        try:
+            return emitter.collect(root, 30, cache, now=now), read
+        finally:
+            emitter.read_session = original
+
+    def test_an_unchanged_transcript_is_not_read_again(self):
+        with tempfile.TemporaryDirectory() as root:
+            transcript(root, "-a", "s1", [{"customTitle": "題", "cwd": "/a/b"}])
+            cache = {}
+            first, read = self.scan(root, cache)
+            self.assertEqual(len(read), 1)
+            again, read = self.scan(root, cache)
+            self.assertEqual(read, [])
+            self.assertEqual(again[0].custom_title, first[0].custom_title)
+            self.assertEqual(again[0].project, "b")
+
+    def test_a_transcript_that_grew_is_read_again(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = transcript(root, "-a", "s1", [{"customTitle": "古い"}], mtime=1000)
+            cache = {}
+            self.scan(root, cache, now=1000)
+            with path.open("a") as handle:
+                handle.write(json.dumps({"customTitle": "新しい"}) + "\n")
+            os.utime(path, (1000, 1000))  # mtime を据え置いても size で気付く
+            found, read = self.scan(root, cache, now=1000)
+            self.assertEqual(len(read), 1)
+            self.assertEqual(found[0].custom_title, "新しい")
+
+    def test_a_damaged_cache_is_ignored(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "scan.json"
+            self.assertEqual(emitter.load_cache(path), {})
+            path.write_text("{")
+            self.assertEqual(emitter.load_cache(path), {})
+            path.write_text("[]")
+            self.assertEqual(emitter.load_cache(path), {})
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -185,6 +185,91 @@ model名が増えた時はここを確かめる。
 **tokenはheaderのfileから渡す。**command lineに置くと同じホストの全processから
 見える。captureにもlogにも出さない。
 
+## セッション名の解決
+
+Claude Code自身がOpenTelemetryで送るmetric (`claude_code_*`) は、全sampleに
+`session_id`を付けるが、**そのsessionが何の作業だったかは付けない。**それを持って
+いるのは`~/.claude/projects`のtranscriptで、起動したdirectoryと、付けられた題が
+そこにある。
+
+`scripts/claude-sessions/claude-session-info-prom`がtranscriptを走査し、
+node_exporter textfile collector向けに`claude_session_info`を出す。
+**名前の解決はPromQLのjoinで、読み出し時に行う。**
+
+```text
+claude_session_info{session_id="…",session_name="#104 …",custom_title="#104 …",
+  ai_title="…",task_id="104",project="overline-zebar",cwd="/home/…"} 1
+```
+
+**transcriptの最終更新は出さない。**emitterが止まったかどうかは、node_exporterが
+このfileに対して既に出している`node_textfile_mtime_seconds`が答える。session
+ごとの時刻を読む利用者は無い。
+
+**読み出す側でtranscriptを引かないのは、別マシンのsessionを名前にできないため
+である。**同じGrafana stackへ送っている別のマシンでこのemitterも動かせば、そちらの
+sessionもこちらのpanelで名前が付く。手元のtranscriptを引く形ではこれができない。
+実測 (2026-09-13) では、週のコスト$1,080のうち$397 (37%) が手元にtranscriptを
+持たないsessionだった。
+
+| label | 出所 |
+| --- | --- |
+| `session_id` | transcriptのfile名 |
+| `custom_title` | 最後の`customTitle`。人かhookが付けた題 |
+| `ai_title` | 最後の`aiTitle`。会話から生成された題 |
+| `session_name` | `custom_title`、無ければ`ai_title` |
+| `task_id` | `custom_title`が`#<数字>`で始まる時、その数字 |
+| `project` | `cwd`のbasename |
+| `cwd` | transcriptの**最初の**`cwd` |
+
+**`session_name`は単純な合成であって、画面に出す文字列とは限らない。**
+`custom_title`が`#102`のように本文を持たない時、表示側は`ai_title`を副題として
+足す。**「表示名」の答えが2つあることになるので、片方を変える時はもう片方を見る。**
+
+**空のlabelは書かない。**Prometheusは空値と欠損を同じに読む。`foo=""`と書くと、
+題が付いた最初の1回で系列が入れ替わったように見える。
+
+**`cwd`は最初の値を採る。**sessionは作業の途中でworktreeや下位directoryへ移る。
+実測で53本中17本が2つ以上の`cwd`を持ち、最も多いもので11あった。最後の値は
+たまたま最後に居た場所でしかない。最初の値は起動したdirectoryで、
+`~/.claude/projects`のdirectory名が指すものと同じである (53本すべてで一致)。
+
+**`task_id`は`custom_title`からだけ読む。**custom titleは人かhookが明示的に付けた
+名前で、先頭の`#104`は参照としか読めない。`aiTitle`は会話から生成された散文で、
+`#3 things to fix`のような偶然の一致はそこからしか来ない。**層を分けると誤爆の
+入口が無くなる** (実測: `ai_title`を持つ44本で`^#<数字>`にマッチしたものは0件)。
+区切りは空白または行末で、**空白を必須にはできない。**本文を持たない`#102`が
+実測で6件ある。
+
+**この規則が偽になる観測。** custom titleを`#3 things to fix`と付ければ
+`task_id="3"`が付く。このlabelは題の先頭にある`#<数字>`を写したものであって、
+そのidが存在することを意味しない。再測は
+`gcx metrics query -d grafanacloud-prom 'claude_session_info'`のlabelと題の
+突き合わせ。
+
+**`git_branch`は出さない。**実測で53本中20本が2つ以上のbranchを持ち、最多は19
+だった。最初のbranchは「始めた時のbranch」でしかなく、「作業したbranch」ではない。
+**曖昧な主張をするlabelは置かない。**
+
+**30日より古いtranscriptは出さない。**Prometheusの保持期間はそれよりずっと短く、
+古いsessionがcostのqueryに現れることはない。一方でtranscriptは消えない
+(`cleanupPeriodDays`の既定は36500) ため、上限を置かないと系列が増え続ける。
+
+**走査cacheが実行時間を抑えている。**transcriptは追記しかされないので、`mtime`と
+sizeが変わらなければ中身も同じである。手元の53本 (drvfs上186MB) を全部読むと
+12.3秒、変わったものだけなら2.0秒で、後者の大半はinterpreterの起動である。
+cacheを失っても、遅い実行が1回増えるだけで答えは変わらない。
+
+**走査が立たなかった時は、既にある出力を置き換えない。**`Path.glob`は走査元が
+無くても、通常のfileでも、読めなくても、例外を上げずに空を返す。emitterは
+`iterdir`で開き、その 3 つを例外として受け取る。**読めなかったことと、1 つも
+無かったことを混ぜない。**headerだけのfileを書くと、解決できていたsessionが
+一斉に「不明」へ落ちる。**空だが読めるdirectoryは別で、出力を置き換える。**
+publishするものが無いことは 1 つの答えである。
+
+**出力にはconversation由来の題が入る。**usage helperが送るaccount labelと同じ
+Prometheusへ届くので、collector fileとPrometheusの閲覧権限はアカウント情報として
+扱う。
+
 ## ファイル配置
 
 ### Widget
@@ -218,6 +303,8 @@ model名が増えた時はここを確かめる。
   - Claude `/usage` の操作、解析、cache更新、cron例。
 - `scripts/codex-usage/`
   - Codex app-serverのusage取得、cache更新、cron例。
+- `scripts/claude-sessions/`
+  - transcriptからの`claude_session_info`の生成、走査cache、cron例。
 
 ## 表示仕様
 

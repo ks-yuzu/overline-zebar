@@ -1,0 +1,12 @@
+# Publish the session_id -> name mapping for the textfile collector.
+#
+# The emitter only reads transcripts under $HOME/.claude/projects, so it needs
+# no PATH beyond python3 and no authentication. Point --output at the directory
+# `--collector.textfile.directory` was given; it has to exist already and be
+# writable by the cron user. When it cannot write there the run logs one line
+# and changes nothing.
+#
+# The output carries session titles taken from conversations; see
+# docs/ai-usage-integration.md before widening who can read it.
+@reboot     /usr/bin/timeout 120s "$HOME/bin/claude-session-info-prom" --output /var/lib/textfile-collector/claude-sessions.prom 2>&1 | /usr/bin/logger -t claude-sessions.cron
+*/5 * * * * /usr/bin/timeout 120s "$HOME/bin/claude-session-info-prom" --output /var/lib/textfile-collector/claude-sessions.prom 2>&1 | /usr/bin/logger -t claude-sessions.cron
