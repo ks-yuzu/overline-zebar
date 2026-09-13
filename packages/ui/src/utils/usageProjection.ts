@@ -1,7 +1,7 @@
 /* Spelt with the extension, unlike every other import here: tsc emits the
    specifier as written, and the projection tests load this file in Node, which
    will not resolve an extensionless relative path. */
-import { consumedOver, hasJustReset, windowStarted } from './usageSeries.js';
+import { consumedOver } from './usageSeries.js';
 import type { UsageHistorySample } from './usageSeries.js';
 
 export type QuotaWindow = {
@@ -69,17 +69,23 @@ export type WindowPace = {
 /**
  * What the recent pace says about the rest of a window, measured over the
  * trailing `1 / PACE_FRAME_DIVISOR` of it. Null where there is nothing to say.
- * See docs/ai-usage-integration.md.
+ *
+ * The frame is a span of time, not a part of the window: it reaches over a
+ * reset while one is that recent, so a quota just handed back is read against
+ * the pace that emptied the last one. A window with nothing spent is read the
+ * same way - it lands where the frame says, which is nowhere at all once the
+ * frame has emptied of work. See docs/ai-usage-integration.md.
  */
 export function windowPace(
   window: QuotaWindow,
   samples: UsageHistorySample[],
   now: number
 ): WindowPace | null {
-  // Neither number is checked for being usable; the readers hold that contract.
+  // usedPercent is not checked for being usable; the readers hold that
+  // contract. The reset is, because a window with none reported reaches here
+  // as NaN and would be announced as "NaN% left at reset".
   if (window.usedPercent >= 100) return null;
-  // The axis' own judgement, so the two cannot come apart on it.
-  if (!windowStarted(window, hasJustReset(samples, now / 1000))) return null;
+  if (!Number.isFinite(window.resetsAt)) return null;
 
   const remainingSeconds = (window.resetsAt - now) / 1000;
   if (remainingSeconds <= 0) return null;

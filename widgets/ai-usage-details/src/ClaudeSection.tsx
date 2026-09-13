@@ -7,7 +7,6 @@ import {
   buildWindowPeaks,
   formatRemaining,
   formatUpdatedAt,
-  hasJustReset,
   readUsageStatus,
   selectCurrentWindow,
   selectScopedSamples,
@@ -54,16 +53,13 @@ function formatResetDate(period: ClaudeUsagePeriod) {
 function getTrendRange(
   period: ClaudeUsagePeriod,
   windowSeconds: number,
-  now: number,
-  justReset: boolean
+  now: number
 ) {
   return windowTrendRange({
     resetsAt: period.resets_at
       ? Date.parse(period.resets_at) / 1000
       : Number.NaN,
     windowSeconds,
-    usedPercent: period.used_percent,
-    justReset,
     now: now / 1000,
   });
 }
@@ -197,26 +193,20 @@ export default function ClaudeSection({
   const sessionRange = getTrendRange(
     data.current_session,
     SESSION_WINDOW_SECONDS,
-    now,
-    hasJustReset(sessionSamples, now / 1000)
+    now
   );
-  const weekRange = getTrendRange(
-    data.current_week,
-    WEEK_WINDOW_SECONDS,
-    now,
-    hasJustReset(weekSamples, now / 1000)
-  );
+  const weekRange = getTrendRange(data.current_week, WEEK_WINDOW_SECONDS, now);
   const sessionHistory: TrendPoint[] = selectCurrentWindow(sessionSamples, {
     endsAt: windowEndFor(data.current_session.resets_at),
     endAt: sessionRange.endAt,
     startAt: sessionRange.startAt,
-    started: sessionRange.started,
+    anchored: sessionRange.anchored,
   });
   const weekHistory: TrendPoint[] = selectCurrentWindow(weekSamples, {
     endsAt: windowEndFor(data.current_week.resets_at),
     endAt: weekRange.endAt,
     startAt: weekRange.startAt,
-    started: weekRange.started,
+    anchored: weekRange.anchored,
   });
   /* Plotted on the all-models window's axis by time, with no window identity
      of its own. See docs/ai-usage-integration.md. */
@@ -324,7 +314,7 @@ export default function ClaudeSection({
           <UsageTrend
             endAt={sessionRange.endAt}
             label="5H"
-            paceGuide={sessionRange.started}
+            paceGuide={sessionRange.anchored}
             points={sessionHistory}
             projection={sessionProjection?.point}
             startAt={sessionRange.startAt}
@@ -343,7 +333,7 @@ export default function ClaudeSection({
           <UsageTrend
             endAt={weekRange.endAt}
             label="7D"
-            paceGuide={weekRange.started}
+            paceGuide={weekRange.anchored}
             points={weekHistory}
             pointsLabel="all models"
             projection={weekProjection?.point}
