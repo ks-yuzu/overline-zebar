@@ -85,12 +85,16 @@ addition is done in the helper.
            "truncated":{"cost":283.62,"sessions":13}}}}
 ```
 
-**The rows, `unresolved` and `truncated` add up to `total`, at six decimals.**
-The total is summed from the reported amounts rather than rounded separately
-from the raw aggregate, which would leave a residual. Agreement is at that
-decimal and not in binary: adding numbers rounded to six places does not
-generally land on a six-place number (0.1 + 0.2 is 0.30000000000000004), and a
-live reading disagreed in exactly that way. Add the parts, then round. Sessions past
+**The rows, `unresolved` and `truncated` add up to `total`.** The total is
+summed from the reported amounts, so nothing counted can be missing from the
+breakdown.
+
+**Amounts are not rounded.** How many decimals to show is the reader's
+decision, and rounding here would make the sentence above need a caveat: rows
+rounded on their own and a total rounded on its own do not have to agree. A
+reader adding them back in a different order can still differ in a double's
+last bits, which is a property of floating point rather than of this output,
+and it is far below anything displayed. Sessions past
 `CLAUDE_COST_TOP` are counted rather than dropped, because an amount inside
 `total` that appears nowhere else cannot be reconciled with the breakdown.
 Being unnameable and not fitting on screen are different facts, so they are

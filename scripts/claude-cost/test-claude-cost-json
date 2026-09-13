@@ -322,18 +322,17 @@ class OutputTests(unittest.TestCase):
                 + built["unresolved"]["cost"] + built["truncated"]["cost"])
 
     def test_the_reported_parts_add_up_to_the_reported_total(self):
-        # 行ごとの丸めと生の合計の丸めがずれると、内訳と合計を突き合わせられない。
         built = self.output({"s1": 0.0050004, "s2": 0.0050004, "elsewhere": 0.0050004},
                             {"s1": {"session_name": "一番"}, "s2": {"session_name": "二番"}})
-        self.assertEqual(built["total"], round(self.parts(built), 6))
+        self.assertEqual(built["total"], self.parts(built))
 
-    def test_the_agreement_is_at_six_decimals_not_in_binary(self):
-        # 6 桁の値を足した結果がその桁で表せるとは限らない。実データで
-        # 行の合計 20.099999999999998 と total 20.1 が食い違った。
-        built = self.output({"s1": 0.1, "s2": 0.2},
-                            {"s1": {"session_name": "一番"}, "s2": {"session_name": "二番"}})
-        self.assertNotEqual(built["total"], self.parts(built))
-        self.assertEqual(built["total"], round(self.parts(built), 6))
+    def test_the_amounts_are_not_rounded(self):
+        # 表示の精度は読む側が決める。ここで丸めると、行ごとの丸めと合計の
+        # 丸めが食い違い、但し書きが要る。
+        built = self.output({"s1": 0.00500049999, "elsewhere": 0.1234567891},
+                            {"s1": {"session_name": "一番"}})
+        self.assertEqual(built["sessions"][0]["cost"], 0.00500049999)
+        self.assertEqual(built["unresolved"]["cost"], 0.1234567891)
 
     def test_every_query_is_evaluated_at_the_same_instant(self):
         # 題が書き換わる瞬間をまたぐと、別の瞬間の label を凍らせたコストへ付ける。
@@ -368,7 +367,7 @@ class OutputTests(unittest.TestCase):
     def test_the_identity_holds_when_rows_are_truncated(self):
         built = self.output({f"s{n}": 1.0 / 3 for n in range(9)},
                             {f"s{n}": {"session_name": str(n)} for n in range(9)}, top=2)
-        self.assertEqual(built["total"], round(self.parts(built), 6))
+        self.assertEqual(built["total"], self.parts(built))
         self.assertEqual(built["truncated"]["sessions"], 7)
 
 

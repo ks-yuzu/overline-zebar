@@ -268,18 +268,18 @@ def build_output(config, now):
         costs = window_cost(config, start.timestamp(), now.timestamp())
         rows, unresolved, unresolved_count, truncated, truncated_count = build_rows(
             costs, info, config["top"])
-        # **`total`は報告する値から積む。**生の合計を別に丸めると、行ごとの丸めとの
-        # 差が残り、内訳と合計を突き合わせられない。
-        # **一致するのは6桁に丸めた上での話である。**2進浮動小数では、6桁の値を
-        # 足した結果がその桁で表せるとは限らない (0.1 + 0.2 が 0.30000000000000004
-        # になる類)。読む側も足してから丸める。
-        sessions = [dict(row, cost=round(row["cost"], 6)) for row in rows]
-        unresolved, truncated = round(unresolved, 6), round(truncated, 6)
+        # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
+        # 行ごとの丸めと合計の丸めが食い違い、「行と不明と打ち切りの合計が
+        # totalに一致する」を成り立たせるために但し書きが要る。
+        # 丸めで減るのは実測で98 byte (2%) だけだった。
+        sessions = list(rows)
         windows[name] = {
             "starts_at": start.isoformat(timespec="seconds"),
             "resets_at": reset.isoformat(timespec="seconds") if reset else None,
             "source": source,
-            "total": round(sum(row["cost"] for row in sessions) + unresolved + truncated, 6),
+            # **`total`は報告する値から積む。**別に数えると、行から落とした分が
+            # totalにだけ残り、内訳と突き合わせられない。
+            "total": sum(row["cost"] for row in sessions) + unresolved + truncated,
             "sessions": sessions,
             "unresolved": {"cost": unresolved, "sessions": unresolved_count},
             "truncated": {"cost": truncated, "sessions": truncated_count},
