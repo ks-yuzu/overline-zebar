@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+DEFAULT_MAX_AGE_DAYS = 30
+
+# `#<数字>` に続くのが空白か行末の時だけ参照とみなす。本文を持たない `#102` が
+# 実データに存在するため、空白を必須にはできない。
+TASK_REFERENCE = re.compile(r"^#(\d+)(\s|$)")
+
+
+
+class Session:
+    """1 つの transcript から読み取った、そのセッションの属性。"""
+
+    def __init__(self, session_id, last_activity):
+        self.session_id = session_id
+        self.last_activity = last_activity
+        self.custom_title = ""
+        self.ai_title = ""
+        self.cwd = ""
+
+    @property
+    def session_name(self):
+        return self.custom_title or self.ai_title
+
+    @property
+    def task_id(self):
+        match = TASK_REFERENCE.match(self.custom_title)
+        return match.group(1) if match else ""
+
+    @property
+    def project(self):
+        return os.path.basename(self.cwd.rstrip("/")) if self.cwd else ""
+
+    def as_cache(self, size):
+        return {
+            "mtime": self.last_activity,
+            "size": size,
+            "custom_title": self.custom_title,
+            "ai_title": self.ai_title,
+            "cwd": self.cwd,
+        }
+
+    @classmethod
+    def from_cache(cls, session_id, entry):
+        session = cls(session_id, entry["mtime"])
+        session.custom_title = entry["custom_title"]
+        session.ai_title = entry["ai_title"]
+        session.cwd = entry["cwd"]
+        return session
+
+    def labels(self):
+        pairs = [
+            ("session_id", self.session_id),
+            ("session_name", self.session_name),
+            ("custom_title", self.custom_title),
+            ("ai_title", self.ai_title),
+            ("task_id", self.task_id),
+            ("project", self.project),
+            ("cwd", self.cwd),
+        ]
+        # 空の label は書かない。Prometheus では空値と欠損が同じ意味になるため、
+        # 書くと両者を行き来するだけで系列が変わって見える。
+        return [(key, value) for key, value in pairs if value]
+
+
+def read_session(path):
+    """transcript 1 本を読む。題は最後の値を、cwd は最初の値を採る。
+
+    cwd がセッション中に変わるのは worktree や下位 directory への移動で、
+    最後の値はそのセッションが最後に居た場所でしかない。最初の値は起動した
+    directory で、`~/.claude/projects` の directory 名と同じものを指す。
+    """
+    session = Session(path.stem, path.stat().st_mtime)
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            # transcript の大半は会話の行で、読むべき 3 種類はどれも固有の key を
+            # 持つ。この足切りを generator 式で書くと、1 行あたりの呼び出しが
+            # そのまま効いて 10 倍以上遅くなる (実測 6.3s → 77s)。
+            if ('"cwd"' not in line
+                    and '"customTitle"' not in line
+                    and '"aiTitle"' not in line):
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            custom = record.get("customTitle")
+            if isinstance(custom, str) and custom:
+                session.custom_title = custom
+            ai_title = record.get("aiTitle")
+            if isinstance(ai_title, str) and ai_title:
+                session.ai_title = ai_title
+            cwd = record.get("cwd")
+            if not session.cwd and isinstance(cwd, str) and cwd:
+                session.cwd = cwd
+    return session
+
+
+def load_cache(path):
+    """前回の走査結果。読めなければ空で始める (全部読み直すだけで結果は同じ)。"""
+    try:
+        data = json.loads(Path(path).read_bytes())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cached_session(entry, session_id, stat):
+    """transcript が前回から変わっていなければ、読まずに組み立てる。
+
+    transcript は追記しかされないため、mtime と size が揃っていれば中身も
+    同じである。履歴は消えずに増え続ける (`cleanupPeriodDays` は既定で 36500)
+    ので、毎回全部読む形は時間が伸び続ける。
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        if entry["mtime"] != stat.st_mtime or entry["size"] != stat.st_size:
+            return None
+        return Session.from_cache(session_id, entry)
+    except (KeyError, TypeError):
+        return None
+
+
+def collect(projects_dir, max_age_days, cache=None, now=None):
+    """transcript を走査し、session_id ごとに 1 つの Session を返す。
+
+    `cache` を渡すと、その場で次回ぶんの内容へ書き換える。
+    """
+    now = time.time() if now is None else now
+    cutoff = now - max_age_days * 86400
+    last_scan, cache = dict(cache or {}), cache
+    if cache is not None:
+        cache.clear()
+    sessions = {}
+    for path in sorted(Path(projects_dir).glob("*/*.jsonl")):
+        try:
+            stat = path.stat()
+            if not path.is_file() or stat.st_mtime < cutoff:
+                continue
+            session = cached_session(last_scan.get(str(path)), path.stem, stat)
+            if session is None:
+                session = read_session(path)
+            if cache is not None:
+                cache[str(path)] = session.as_cache(stat.st_size)
+        except OSError as error:
+            # 1 本で走査を止めない。止めると、詰まった transcript より後ろの
+            # セッションが恒久的に出なくなる。
+            print(f"claude sessions: cannot read {path}: {error}", file=sys.stderr)
+            continue
+        # 同じ session_id が 2 つの directory に出ることがある (別の cwd から
+        # resume した場合)。2 本出すと join が duplicate series で落ちるため、
+        # 新しい方だけを残す。
+        existing = sessions.get(session.session_id)
+        if existing is None or existing.last_activity < session.last_activity:
+            sessions[session.session_id] = session
+    return [sessions[key] for key in sorted(sessions)]
+
+
+def prometheus_text(sessions):
+    def labels(pairs):
+        escaped = []
+        for key, value in pairs:
+            value = str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+            escaped.append(f'{key}="{value}"')
+        return "{" + ",".join(escaped) + "}"
+
+    rows = [
+        "# HELP claude_session_info Attributes of a Claude Code session, keyed by session_id.",
+        "# TYPE claude_session_info gauge",
+    ]
+    for session in sessions:
+        rows.append(f"claude_session_info{labels(session.labels())} 1")
+    rows += [
+        "# HELP claude_session_last_activity_timestamp_seconds"
+        " Unix timestamp of the last write to a Claude Code session transcript.",
+        "# TYPE claude_session_last_activity_timestamp_seconds gauge",
+    ]
+    for session in sessions:
+        pairs = [("session_id", session.session_id)]
+        rows.append(
+            f"claude_session_last_activity_timestamp_seconds{labels(pairs)}"
+            f" {session.last_activity:.0f}"
+        )
+    return ("\n".join(rows) + "\n").encode()
+
+
+def atomic_write(path, data, mode):
+    path = Path(path)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as temporary:
+            temporary.write(data)
+        os.replace(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+
+
+def positive_env(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def main(argv):
+    output = os.environ.get("CLAUDE_SESSION_INFO_TEXTFILE_PATH", "")
+    if argv[:1] == ["--output"] and len(argv) == 2:
+        output, argv = argv[1], []
+    if argv:
+        print(f"usage: {sys.argv[0]} [--output PATH]", file=sys.stderr)
+        return 64
+
+    projects_dir = os.environ.get(
+        "CLAUDE_SESSION_INFO_PROJECTS_DIR", str(Path.home() / ".claude/projects")
+    )
+    max_age_days = positive_env("CLAUDE_SESSION_INFO_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS)
+    cache_path = Path(os.environ.get(
+        "CLAUDE_SESSION_INFO_CACHE", str(Path.home() / ".cache/claude-session-info/scan.json")
+    ))
+
+    cache = load_cache(cache_path)
+    try:
+        sessions = collect(projects_dir, max_age_days, cache)
+    except OSError as error:
+        # 走査そのものが立たなかった時は、既にある出力を置き換えない。空の
+        # 出力へ差し替えると、解決できていた session が一斉に「不明」へ落ちる。
+        print(f"claude sessions: cannot scan {projects_dir}: {error}", file=sys.stderr)
+        return 73
+
+    try:
+        cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_write(cache_path, json.dumps(cache).encode(), 0o600)
+    except OSError as error:
+        # 走査結果は既に手元にある。次回が遅くなるだけなので、出力は続ける。
+        print(f"claude sessions: cannot write {cache_path}: {error}", file=sys.stderr)
+
+    text = prometheus_text(sessions)
+    if not output:
+        sys.stdout.write(text.decode())
+        return 0
+    try:
+        atomic_write(output, text, 0o644)
+    except OSError as error:
+        print(f"claude sessions: cannot write {output}: {error}", file=sys.stderr)
+        return 73
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
