@@ -452,14 +452,9 @@ widgetのstale判定がそのまま効く。半分だけの答えは公開しな
 **見出しはTitle Case、副題と本文と失敗時の文言はsentence case。**見出しは名前で、
 本文は文である。
 
-**括弧はgraphが覆う期間を指す。**`[5H]` `[7D]` `[14D]`はそのcardのgraphの横軸の幅で
-あり、**同じ見出しの中に現れるwindowの長さとは別物である。**`[14D] 7D Usage Trend and
-Daily Usage`は「14日ぶんのgraphに7Dのwindowの推移を描く」と読む。括弧を外すと
-`14D 7D Usage Trend…`となり、2つの期間が区別できない。
-
-**それ以外の修飾は語順で表し、記号を足さない。**`5H Quota`であって`Quota · 5H`では
-ない。**記号の形を2つ持たない**ためで、括弧が既にgraphの期間という役を持っている以上、
-別の役に別の記号を当てると、どちらが何の印か読む側が覚えることになる。
+**見出しの`[5H]` `[7D]` `[14D]`はそのgraphの横軸の幅で、同じ見出しの中に現れるwindowの
+長さとは別物である。**`[14D] 7D Usage Trend and Daily Usage`は「14日ぶんのgraphに7Dの
+windowの推移を描く」と読む。
 
 **副題はplan名であり、無い時は出さない。**Codexは`rate_limits.planType`を出す。
 Claudeのusageには相当する項目が無いので、**何も出さない。**固定文字列を置くと、
