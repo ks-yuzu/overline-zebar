@@ -11,7 +11,7 @@
 //
 //   CI=1 corepack pnpm --filter @overline-zebar/ui test
 
-import { formatCost, sessionDisplayName } from './dist/utils/costRows.js';
+import { formatCost, formatQuota, sessionDisplayName } from './dist/utils/costRows.js';
 
 /** A row as the helper writes it; every label but the id is optional. */
 function session(fields) {
@@ -91,6 +91,20 @@ const cases = [
     name: 'sub-cent rows do not add up to more than their total',
     run: () => [formatCost(0.004), formatCost(0.004), formatCost(0.008)],
     expect: ['$0.00', '$0.00', '$0.01'],
+  },
+  {
+    // One decimal, because the gauge these are apportioned from reports whole
+    // percent only. A second would be place value the reading does not carry.
+    name: 'quota reads to one decimal',
+    run: () => [formatQuota(26.98), formatQuota(4), formatQuota(0.0412)],
+    expect: ['27.0%', '4.0%', '0.0%'],
+  },
+  {
+    // The rows are read against the window's own reading, not against each
+    // other, so a row can be a third of a window that is itself at 80.
+    name: 'quota is a share of the limit, so rows do not run to 100',
+    run: () => [formatQuota(80), formatQuota(100)],
+    expect: ['80.0%', '100.0%'],
   },
 ];
 

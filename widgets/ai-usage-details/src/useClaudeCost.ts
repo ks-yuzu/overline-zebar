@@ -10,7 +10,15 @@ export type ClaudeCostWindow = {
   source: string;
   total: number;
   sessions: CostSession[];
-  unresolved: { cost: number; sessions: number };
+  /** Sessions the helper could not name. Their spend still counts. */
+  unresolved: { cost: number; sessions: number; quota?: number };
+  /**
+   * The quota gauge this window's `quota` figures were apportioned from, and
+   * the part of it that reached no session. Null when the helper could not
+   * read the gauge - the spend columns are fetched separately and stand on
+   * their own - and absent from caches written before it read one at all.
+   */
+  quota?: { used_percent: number; unattributed: number } | null;
 };
 
 export type ClaudeCostData = {
@@ -42,7 +50,22 @@ function isCostSession(value: unknown): value is CostSession {
     session.session_id.length > 0 &&
     typeof session.cost === 'number' &&
     Number.isFinite(session.cost) &&
+    isOptionalNumber(session.quota) &&
     optional.every((label) => label === undefined || typeof label === 'string')
+  );
+}
+
+/**
+ * A field the helper may not report at all.
+ *
+ * The quota figures arrived after the cost ones, so a cache written by an
+ * older helper - or by this one when Grafana would not answer the gauge -
+ * carries the cost fields and nothing else. Rejecting those windows would
+ * blank the spend columns to withhold a column that was never there.
+ */
+function isOptionalNumber(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === 'number' && Number.isFinite(value))
   );
 }
 
@@ -70,7 +93,31 @@ function isCostWindow(value: unknown): value is ClaudeCostWindow {
     typeof window.unresolved.cost === 'number' &&
     Number.isFinite(window.unresolved.cost) &&
     typeof window.unresolved.sessions === 'number' &&
-    Number.isFinite(window.unresolved.sessions)
+    Number.isFinite(window.unresolved.sessions) &&
+    isOptionalNumber(window.unresolved.quota) &&
+    isQuotaReading(window.quota)
+  );
+}
+
+/**
+ * The gauge the rows were apportioned from.
+ *
+ * Both numbers or neither: `used_percent` is what the rows are read against
+ * and `unattributed` is the part of it no row holds, so a reading missing one
+ * of them would show rows that add up to nothing stated.
+ */
+function isQuotaReading(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== 'object') return false;
+  const quota = value as Partial<{
+    used_percent: number;
+    unattributed: number;
+  }>;
+  return (
+    typeof quota.used_percent === 'number' &&
+    Number.isFinite(quota.used_percent) &&
+    typeof quota.unattributed === 'number' &&
+    Number.isFinite(quota.unattributed)
   );
 }
 
