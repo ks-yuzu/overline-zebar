@@ -437,6 +437,29 @@ widgetのstale判定がそのまま効く。半分だけの答えは公開しな
 
 ## 表示仕様
 
+**語は1つの意味だけを持たせる。**このpanelでは2つが衝突しやすい。
+
+| 語 | 指すもの |
+| --- | --- |
+| **window** / `5H` / `7D` | quotaの窓。`[14D] 5H Usage Peak per Window`のWindowもこれ |
+| **session** | Claude Codeの会話1本。`session_id`、`session_name`、costの各行、`Unresolved (n)` |
+
+**Claudeの`/usage`はquotaの窓を`Current session`と呼ぶが、その語はここでは使わない。**
+このツールの`session`は会話1本であり、**同じ語が2つの意味を持つとcostの段で破綻する** —
+「session別のcost」を並べたcardに「sessionのcost」という見出しが載る。providerの語彙より
+自分の語彙を優先する。
+
+**見出しはTitle Case、副題と本文と失敗時の文言はsentence case。**見出しは名前で、
+本文は文である。
+
+**見出しの`[5H]` `[7D]` `[14D]`はそのgraphの横軸の幅で、同じ見出しの中に現れるwindowの
+長さとは別物である。**`[14D] 7D Usage Trend and Daily Usage`は「14日ぶんのgraphに7Dの
+windowの推移を描く」と読む。
+
+**副題はplan名であり、無い時は出さない。**Codexは`rate_limits.planType`を出す。
+Claudeのusageには相当する項目が無いので、**何も出さない。**固定文字列を置くと、
+titleとcardが既に言っていることの言い換えが常設される。
+
 main widget右側の順序は次のとおり。
 
 ```text
