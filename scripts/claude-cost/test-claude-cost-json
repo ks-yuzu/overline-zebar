@@ -435,7 +435,11 @@ class QuotaTests(unittest.TestCase):
     CONFIG = {"gcx": "gcx", "context": "", "datasource": "d", "timeout": 1}
 
     def apportion(self, readings, costs, measured, start=1000, now=3000):
-        """`readings`/`costs` は `{時刻: 値}` / `{時刻: {session: 額}}`。"""
+        """`readings` は gauge の読み、`costs` は **counter の値** である。
+
+        `{時刻: {session: そこまでの累計}}`。増分ではない。helper は生の counter を
+        引いて手元で差を取るので、fixture もその形にする。
+        """
         def fake(config, expression, start_ts, end_ts):
             if cost.QUOTA_METRIC in expression:
                 return [(moment, {"window": "session"}, value)
@@ -451,9 +455,38 @@ class QuotaTests(unittest.TestCase):
         # 一致する。**これが崩れたら、画面の内訳は上の数字の内訳ではない。**
         points, unattributed = self.apportion(
             {1500: 2.0, 2000: 5.0, 2500: 5.0},
-            {1400: {"a": 1.0}, 1900: {"a": 1.0, "b": 3.0}, 2400: {"b": 2.0}},
+            {1400: {"a": 1.0}, 1900: {"a": 2.0, "b": 3.0}, 2400: {"b": 5.0}},
             measured=9.0)
         self.assertAlmostEqual(sum(points.values()) + unattributed, 9.0)
+
+    def test_a_session_that_starts_inside_the_window_keeps_its_first_export(self):
+        # counter は session 開始時の暗黙の 0 から始まるが、Prometheus はその 0 を
+        # 見ない。`increase()` を区間ごとに並べると最初の export が落ち、**落ちるの
+        # は額ではなく取り分なので、その区間に居た他の session へそのまま回る**
+        # (実測 20h で合計の 11.6%、session ごとでは -14%〜+60%)。
+        points, _ = self.apportion(
+            {1500: 4.0}, {1500: {"early": 1.0, "late": 1.0}}, measured=4.0)
+        self.assertAlmostEqual(points["early"], 2.0)
+        self.assertAlmostEqual(points["late"], 2.0)
+
+    def test_a_session_running_before_the_window_weighs_only_what_it_spent_inside(self):
+        # 窓をまたいで走り続けている session。**取り分を counter の値で決めると、
+        # 前の窓で使った分がそのまま重みになり、今の窓のクォータをほぼ全部取る。**
+        points, _ = self.apportion(
+            {2000: 4.0},
+            {900: {"old": 100.0}, 1500: {"old": 101.0, "new": 1.0}},
+            measured=4.0)
+        self.assertAlmostEqual(points["old"], 2.0)
+        self.assertAlmostEqual(points["new"], 2.0)
+
+    def test_a_counter_reset_counts_what_is_there_after_it(self):
+        # 同じ session_id のまま resume すると counter がリセットされる
+        # (実測で週に 5 件)。下がった分を落とすと、reset 後の消費が丸ごと消える。
+        points, _ = self.apportion(
+            {2500: 4.0}, {1200: {"r": 10.0}, 1800: {"r": 3.0}, 2400: {"other": 13.0}},
+            measured=4.0)
+        self.assertAlmostEqual(points["r"], 2.0)
+        self.assertAlmostEqual(points["other"], 2.0)
 
     def test_the_window_starts_at_zero(self):
         # 窓は reset 直後の 0 から始まる。最初の読みまでの上昇を落とすと、

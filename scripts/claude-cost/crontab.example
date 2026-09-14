@@ -7,7 +7,8 @@
 #
 # Seven instant queries per refresh - one for the names, and two for the cost
 # plus one for the quota gauge in each of the two windows - and two range
-# queries per twelve hours of each window, which is 28 more for a full week.
+# queries per twelve hours of each window - one of them the cost counters
+# unaggregated - which is 28 more for a full week.
 # About 60 seconds in all. The outer timeout has to cover the range queries too,
 # or it kills the helper before it can log why it gave up and the refresh goes
 # quiet. It has to stay under the five-minute period as well: a refresh still

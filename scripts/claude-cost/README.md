@@ -95,9 +95,26 @@ loses the window's head and tail (2 of 3 in a measured five-hour window, 1 of 25
 in the week). **What makes the rows add up to the gauge is the pinning, not the
 precision of the queries.**
 
-**The increments are not built in PromQL.** `delta` and `increase` both
-extrapolate, so neighbouring differences do not sum to the difference of the
-endpoints. The gauge's own values are fetched and subtracted in the helper.
+**The increments are not built in PromQL — neither side of the split.** For the
+gauge, `delta` and `increase` both extrapolate, so neighbouring differences do
+not sum to the difference of the endpoints. For the cost, a series that starts
+inside an interval loses its first exported sample, because Prometheus never
+sees the implicit zero a counter starts from — the same loss `window_cost`
+repairs with its addback, except that here **what is lost is not an amount but a
+share, so it passes straight to whoever else was running in that interval.**
+Measured over 20 hours that was 11.6% of the total and −14% to +60% per session.
+Both are fetched raw and subtracted in the helper.
+
+**A counter that falls is a resumed session, and what is there after the fall is
+this window's spend.** Resuming restarts the counter; five sessions in a measured
+week did.
+
+The balance a session carried into the window needs no special handling here. A
+range query's steps align to the step boundary rather than to `--from`, so the
+first reading of a series that already existed lands at or before the window
+start, and the split only looks at intervals after it. `window_cost` has to
+suppress that balance explicitly because it counts the whole window in one range
+and has no such edge to hide behind.
 
 **Read with `max by (window)`, not filtered to one instance.** Several hosts
 report the same account's figure — two of them measured, agreeing exactly at
@@ -280,8 +297,9 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 
 Each refresh makes seven instant queries — one for the names, and for each
 window two for the cost and one for the quota gauge — plus two range queries per
-twelve hours of each window. A full seven-day week is 28 of those, about 60
-seconds in all. **An outer timeout has to cover the range queries too**, or it
+twelve hours of each window, one of which fetches the cost counters unaggregated
+(62 series and 0.5 MB over a measured 20 hours). A full seven-day week is 28 of
+those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
 kills the helper before it can say why it gave up; the cron example allows 200
 seconds.
 

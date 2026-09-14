@@ -264,6 +264,43 @@ def window_cost(config, start_ts, now_ts):
             for key in set(increase) | set(addback)}
 
 
+def interval_costs(config, start_ts, now_ts):
+    """`{区間の時刻: {session_id: その区間の消費}}`。生counterの差で出す。
+
+    **`increase()`を区間ごとに並べない。**系列がその区間の中で始まると、
+    Prometheusは暗黙の0を見ないため最初のexportが落ちる。`window_cost`が
+    `first_over_time ... unless`で足し戻しているのと同じ欠けだが、こちらは
+    **落ちるのが額ではなく取り分なので、その区間に居た他のsessionへそのまま
+    回る。**実測 (20h) で合計の11.6%、sessionごとでは-14%〜+60%ずれた。
+
+    **窓の起点に在った系列の残高は、ここでは落とさなくてよい。**range queryの
+    刻みは`--from`ではなくstepの絶対境界に揃う (実測) ため、その系列の初値は
+    窓の起点かそれより前に載る。按分は起点より後の区間しか見ないので、
+    残高はどの区間にも入らない。`window_cost`が`unless`で明示的に抑えているのは、
+    あちらが窓ぜんぶを1本のrangeで数えていて、同じ逃げ道が無いためである。
+    """
+    series = {}
+    for moment, metric, value in run_range_query(config, COST_METRIC, start_ts, now_ts):
+        session_id = metric.get("session_id")
+        if not session_id:
+            continue
+        key = tuple(sorted((name, metric[name]) for name in metric if name != "__name__"))
+        series.setdefault(key, (session_id, {}))[1][moment] = value
+
+    costs = {}
+    for session_id, points in series.values():
+        previous = 0.0
+        for moment, value in sorted(points.items()):
+            # 同じsession_idのままresumeするとcounterがリセットされる (実測で
+            # 週に5件)。下がったら、そこにある値がreset後の消費そのものである。
+            spent = value - previous if value >= previous else value
+            previous = value
+            if spent > 0:
+                row = costs.setdefault(moment, {})
+                row[session_id] = row.get(session_id, 0.0) + spent
+    return costs
+
+
 def window_quota(config, quota_window, start_ts, now_ts, measured):
     """窓のクォータ消費をsessionごとに按分する。`(session別, 帰属できない分)`。
 
@@ -317,14 +354,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
         if after > before:
             rises[moment] = after - before
 
-    costs = {}
-    for moment, metric, value in run_range_query(
-        config, f"sum by (session_id) (increase({COST_METRIC}[{QUOTA_STEP}s]))",
-        start_ts, now_ts,
-    ):
-        session_id = metric.get("session_id")
-        if session_id and value > 0:
-            costs.setdefault(moment, {})[session_id] = value
+    costs = interval_costs(config, start_ts, now_ts)
 
     points, unattributed, previous = {}, 0.0, int(start_ts)
     for tick in sorted(rises):
