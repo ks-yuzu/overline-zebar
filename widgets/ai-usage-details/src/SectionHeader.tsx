@@ -6,7 +6,12 @@ type Props = {
   service: 'claude' | 'codex';
   /** Absent while the reading is still being fetched, or after it failed. */
   status?: UsageStatus;
-  subtitle: string;
+  /**
+   * The plan the block's windows belong to. Codex reports one; Claude's usage
+   * has no equivalent, so its blocks pass nothing rather than a constant that
+   * says what the title already says.
+   */
+  subtitle?: string;
   title: string;
   updatedAt?: string;
 };
@@ -27,9 +32,11 @@ export default function SectionHeader({
         <ServiceIcon className="text-xl" service={service} />
         <div className="min-w-0">
           <h2 className="text-sm font-semibold leading-tight">{title}</h2>
-          <p className="truncate text-[10px] leading-tight text-text-muted">
-            {subtitle}
-          </p>
+          {subtitle && (
+            <p className="truncate text-[10px] leading-tight text-text-muted">
+              {subtitle}
+            </p>
+          )}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">

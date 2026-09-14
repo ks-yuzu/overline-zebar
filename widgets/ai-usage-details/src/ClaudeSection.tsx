@@ -166,12 +166,12 @@ export default function ClaudeSection({
        column here is the same window as the column above it. */
     <div className="grid min-h-0 grid-cols-2 gap-2">
       <CostBreakdown
-        label="5H session"
+        label="5H Cost by Session"
         status={costStatus}
         window={cost?.windows.session}
       />
       <CostBreakdown
-        label="7D week"
+        label="7D Cost by Session"
         status={costStatus}
         window={cost?.windows.week}
       />
@@ -186,8 +186,7 @@ export default function ClaudeSection({
       >
         <SectionHeader
           service="claude"
-          subtitle="Current plan windows"
-          title="Claude usage"
+          title="Claude Usage"
         />
         {/* Spans the three usage rows only. The cost row is fetched on its
             own and can have an answer when this one does not, so covering it
@@ -299,21 +298,20 @@ export default function ClaudeSection({
       <SectionHeader
         service="claude"
         status={status}
-        subtitle="Current plan windows"
-        title="Claude usage"
+        title="Claude Usage"
         updatedAt={formatUpdatedAt(data.generated_at)}
       />
 
       <div className="grid min-h-0 grid-cols-2 gap-2">
         <UsageCard
-          label="5H session"
+          label="5H Quota"
           projection={sessionProjection?.text}
           reset={`Resets in ${formatSessionReset(data.current_session.resets_at, now)}`}
           thresholds={thresholds}
           usedPercent={data.current_session.used_percent}
         />
         <UsageCard
-          label="7D week"
+          label="7D Quota"
           projection={weekProjection?.text}
           reset={`Resets ${formatResetDate(data.current_week)}`}
           scoped={
@@ -331,7 +329,7 @@ export default function ClaudeSection({
         <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              [5H] usage trend
+              [5H] Usage Trend
             </p>
             <p className="text-[10px] text-text-muted">
               {sessionHistory.length} samples
@@ -350,7 +348,7 @@ export default function ClaudeSection({
         <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              [7D] usage trend
+              [7D] Usage Trend
             </p>
             <p className="text-[10px] text-text-muted">
               {weekHistory.length} samples
@@ -376,7 +374,7 @@ export default function ClaudeSection({
         <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              [14D] 5H usage peak per window
+              [14D] 5H Usage Peak per Window
             </p>
             <p className="text-[10px] text-text-muted">
               {sessionSamples.length} samples
@@ -395,7 +393,7 @@ export default function ClaudeSection({
         <Card className="bg-background-deeper/60 p-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-text-muted">
-              [14D] 7D usage trend and daily usage
+              [14D] 7D Usage Trend and Daily Usage
             </p>
             <p className="text-[10px] text-text-muted">
               {weekSamples.length} samples

@@ -135,7 +135,7 @@ function HistoryCard({
       <Card className="bg-background-deeper/60 p-2.5">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium text-text-muted">
-            [14D] {label} usage trend and daily usage
+            [14D] {label} Usage Trend and Daily Usage
           </p>
           <p className="text-[10px] text-text-muted">
             {samples.length} samples
@@ -166,7 +166,7 @@ function HistoryCard({
     <Card className="bg-background-deeper/60 p-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-text-muted">
-          [14D] {label} usage peak per window
+          [14D] {label} Usage Peak per Window
         </p>
         <p className="text-[10px] text-text-muted">{samples.length} samples</p>
       </div>
@@ -200,7 +200,7 @@ function Placeholder({
   className?: string;
   message: string;
   status?: UsageStatus;
-  subtitle: string;
+  subtitle?: string;
   updatedAt?: string;
 }) {
   return (
@@ -213,7 +213,7 @@ function Placeholder({
         service="codex"
         status={status}
         subtitle={subtitle}
-        title="Codex usage"
+        title="Codex Usage"
         updatedAt={updatedAt}
       />
       {/* Spans what the four rows of cards would have filled, so the block
@@ -242,13 +242,14 @@ export default function CodexSection({
             ? 'Loading Codex usage…'
             : error?.message || 'Usage unavailable'
         }
-        subtitle="Current plan windows"
       />
     );
   }
 
   const status = readUsageStatus(data.generated_at, now);
-  const subtitle = data.rate_limits.planType ?? 'Current plan windows';
+  /* The plan, when Codex reports one. Nothing rather than a constant
+     otherwise: the title already says which service this block is. */
+  const subtitle = data.rate_limits.planType ?? undefined;
   const updatedAt = formatUpdatedAt(data.generated_at);
   const windows = [data.rate_limits.primary, data.rate_limits.secondary]
     .filter((window): window is CodexUsageWindow => window != null)
@@ -281,7 +282,7 @@ export default function CodexSection({
         service="codex"
         status={status}
         subtitle={subtitle}
-        title="Codex usage"
+        title="Codex Usage"
         updatedAt={updatedAt}
       />
 
@@ -289,7 +290,7 @@ export default function CodexSection({
         {windows.map((window) => (
           <UsageCard
             key={`${window.windowDurationMins}-${window.resetsAt}`}
-            label={`${formatWindowDuration(window.windowDurationMins)} window`}
+            label={`${formatWindowDuration(window.windowDurationMins)} Quota`}
             projection={
               getProjection(
                 window,
@@ -325,7 +326,7 @@ export default function CodexSection({
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-text-muted">
-                  [{label}] usage trend
+                  [{label}] Usage Trend
                 </p>
                 <p className="text-[10px] text-text-muted">
                   {history.length} samples

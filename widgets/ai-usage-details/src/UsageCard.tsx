@@ -58,7 +58,7 @@ export default function UsageCard({
         </span>
       </div>
       <Progress
-        aria-label={`${label} usage`}
+        aria-label={label}
         indicatorColor={indicatorColor}
         value={usage}
       />
