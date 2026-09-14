@@ -13,12 +13,23 @@ export type ClaudeCostWindow = {
   /** Sessions the helper could not name. Their spend still counts. */
   unresolved: { cost: number; sessions: number; quota?: number };
   /**
-   * The quota gauge this window's `quota` figures were apportioned from, and
-   * the part of it that reached no session. Null when the helper could not
-   * read the gauge - the spend columns are fetched separately and stand on
-   * their own - and absent from caches written before it read one at all.
+   * What this window's `quota` figures were apportioned from.
+   *
+   * `total` is what was consumed during the window and what the rows add up
+   * to; `used_percent` is what the gauge reads now, which is what the chip
+   * above shows. They differ when the provider reset the quota mid-window -
+   * one measured week consumed 199% against a final 56% - so the rows are read
+   * against `total`, not against the chip.
+   *
+   * Null when the helper could not read the gauge (the spend columns are
+   * fetched separately and stand on their own), and absent from caches written
+   * before it read one at all.
    */
-  quota?: { used_percent: number; unattributed: number } | null;
+  quota?: {
+    used_percent: number;
+    total: number;
+    unattributed: number;
+  } | null;
 };
 
 export type ClaudeCostData = {
@@ -102,20 +113,23 @@ function isCostWindow(value: unknown): value is ClaudeCostWindow {
 /**
  * The gauge the rows were apportioned from.
  *
- * Both numbers or neither: `used_percent` is what the rows are read against
- * and `unattributed` is the part of it no row holds, so a reading missing one
- * of them would show rows that add up to nothing stated.
+ * All three or none: `total` is what the rows are read against, `unattributed`
+ * is the part of it no row holds, and `used_percent` is the gauge beside it. A
+ * reading missing one would show rows that add up to nothing stated.
  */
 function isQuotaReading(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (typeof value !== 'object') return false;
   const quota = value as Partial<{
     used_percent: number;
+    total: number;
     unattributed: number;
   }>;
   return (
     typeof quota.used_percent === 'number' &&
     Number.isFinite(quota.used_percent) &&
+    typeof quota.total === 'number' &&
+    Number.isFinite(quota.total) &&
     typeof quota.unattributed === 'number' &&
     Number.isFinite(quota.unattributed)
   );

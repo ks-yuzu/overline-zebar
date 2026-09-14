@@ -141,17 +141,18 @@ the check below cannot see it.** When nothing inside the window has been read
 and `measured` is not zero, the split is withheld. A window that has simply not
 been used yet reads zero and still gets its (empty) split.
 
-**A gauge that falls inside the window gets no quota at all.** Keeping the rises
-and skipping the fall would leave the previous window's usage sitting in the
-rows while the header shows the current window's reading — 83 in the rows under
-a header of 3, for a series of 0→80→0→3. A fall means the window boundary and
-the gauge disagree, and **which window the rows describe is then unknown.**
+**A reset inside the window is added back.** The provider clears the quota
+mid-window on occasion, for incident remediation and the like: one measured week
+had three (45→0, 24→5, 73→0) and consumed 199% of the limit against a final
+reading of 56%. Dropping what came before would take every session that ran
+before the reset out of the rows entirely. **Measured over 13 days the 5H window
+had none of these, across about 105 windows — it is a 7D phenomenon.**
 
-**That is not what a normal reset looks like.** A range query's samples are
-aligned to the step, so the reading from just before a reset falls before the
-window start and is dropped — measured at −120 or −60 seconds across four
-consecutive resets. A fall surviving into the window is the anomaly, not the
-routine.
+**A fall of two points or less is a downward revision and is discarded.** The
+gauge revises itself by a point now and then; adding those back would put the
+whole preceding value on the total each time (84→83 would add 83). **The rule is
+false the moment the drop sizes stop separating:** measured, they are 1, 1, 1
+against 19, 45, 73, with nothing in between.
 
 **One account is assumed, here and in the cost queries.** Neither side filters
 on `user_account_uuid`, so a datasource holding two accounts would apportion one
@@ -174,8 +175,14 @@ of the 3**. `quota` becomes `null` and the cost columns stand.
 
 ### How far to trust it
 
-**The total is exact.** Rows plus `unresolved` plus `unattributed` equals the
-measured `used_percent` — zero difference in both windows, measured.
+**The total is exact.** Rows plus `unresolved` plus `unattributed` equals
+`quota.total` — zero difference in both windows, measured.
+
+**`total` and `used_percent` are different numbers.** The first is what was
+consumed during the window; the second is what the gauge reads now, which is
+what the chip shows. A window the provider reset mid-way consumes more than the
+gauge ends up reading, and the total then passes 100%. Without a reset they
+agree.
 
 ```sh
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
@@ -184,7 +191,8 @@ for name, w in json.load(sys.stdin)["windows"].items():
     q = w.get("quota")
     if not q: print(name, "quota unavailable"); continue
     parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
-    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs measured {q[\"used_percent\"]:.2f}")'
+    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs total {q[\"total\"]:.2f}"
+          f"  (gauge {q[\"used_percent\"]:.2f})")'
 ```
 
 **A single row is an approximation.** Moving the spacing from five minutes to
@@ -235,7 +243,7 @@ to the figure on screen above them.
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
                         "session_id":"…","cost":123.92,"quota":8.64}],
            "unresolved":{"cost":451.61,"sessions":11,"quota":3.2},
-           "quota":{"used_percent":25.0,"unattributed":1.0}}}}
+           "quota":{"used_percent":25.0,"total":25.0,"unattributed":1.0}}}}
 ```
 
 **Every label the emitter publishes is carried through**, so the reader can

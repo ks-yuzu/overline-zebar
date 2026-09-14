@@ -30,6 +30,11 @@ WINDOWS = (
 # 分からないため、12hずつに割って繋ぐ。
 QUOTA_STEP = 300
 QUOTA_CHUNK = 12 * 3600
+# これより大きい下降をwindow内のresetとみなし、その先の値を足し戻す。これ以下は
+# gaugeの下方修正として捨てる。**実測 (usage cacheのhistory 13日、3740点) で、
+# 窓の中の下降は6件、下げ幅は1・1・1と19・45・73にはっきり割れる。**
+# **この規則が偽になる観測:** 3pt以上の下方修正、または2pt以下のreset。
+QUOTA_REVISION = 2
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -315,9 +320,10 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     **この規則が偽になる観測:** 1セッションだけが走った区間で、その区間の上昇が
     そのsessionに付く割合。固定幅との比較は経緯 (task #106) にある。
 
-    上昇の合計は`measured`に一致する。**一致を成り立たせているのは両端を
-    留めていることで、queryの精度ではない。**窓の中でgaugeが下がったら、
-    一致が作れないので`None`を返す。
+    返す合計は**この窓で実際に使った量**で、`measured` (gaugeの現在値) とは
+    別物である。窓の中でresetが起きた窓では前者が大きくなり、100%を超える
+    (実測で、先々週の7Dの窓は最終値56%に対し199%)。**行の合計が一致する相手は
+    こちらであって、chipの%ではない。**
     """
     # gaugeの値そのものを引き、差はここで取る。**増分をPromQLで作らない。**
     # `delta`も`increase`も外挿するため隣り合う差の合計が端点の差と一致せず、
@@ -348,17 +354,15 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     series = [(int(start_ts), 0.0)] + inside + [(int(now_ts), measured)]
     rises = {}
     for (_, before), (moment, after) in zip(series, series[1:]):
-        # 下がったら按分をやめる。**上昇だけを拾って下降を飛ばすと、前の窓の
-        # 消費が行に残ったまま、見出しは今の窓の値になる** (0→80→0→3で、行の
-        # 合計83に対し見出し3)。下降が現れたのは窓の境界がgaugeとずれた時で、
-        # **どの窓を見ているのかが分からない。**引けなかった時と同じ扱いにする。
-        # **この規則が偽になる観測:** 通常のresetでは下降は現れない。range query
-        # のサンプルはstepの境界に揃うため、reset直前の読みは窓の起点より前に
-        # 落ちて除かれる (実測、連続する4回のresetすべてで-120秒か-60秒)。
-        if after < before:
-            return None
         if after > before:
             rises[moment] = after - before
+        elif before - after > QUOTA_REVISION:
+            # **窓の中のresetである。**不具合対応などでproviderが窓の途中で
+            # 一括リセットすることがあり、実測で1つの週に3回起きている
+            # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
+            # 前の分を捨てると、resetより前に動いていたsessionが行から消える。
+            if after > 0:
+                rises[moment] = after
 
     costs = interval_costs(config, start_ts, now_ts)
 
@@ -380,11 +384,11 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
                 points[session_id] = (
                     points.get(session_id, 0.0) + rises[tick] * value / total)
         previous = tick
-    return points, unattributed
+    return points, unattributed, sum(rises.values())
 
 
 def quota_for(config, quota_window, start_ts, now_ts, source):
-    """按分と、按分した相手の実測値を返す。引けなければ`(空, 0, None)`。
+    """`(session別, 帰属できない分, {used_percent, total})`。出せなければ`None`。
 
     **クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは
     7日で28本あり、cost側は3本である。ここの失敗でcacheごと前回の写しへ落ちると、
@@ -397,23 +401,23 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
     # 窓ぜんぶが付く。**costは窓の取り方が多少ずれても額がずれるだけなので、
     # この窓ではcost側だけを出す。
     if source == "fallback_length":
-        return {}, 0.0, None
+        return None
     try:
         measured = run_query(config, (
             f'max by (window) (last_over_time('
             f'{QUOTA_METRIC}{{window="{quota_window}"}}[15m]))'
         ), now_ts)
         if not measured:
-            return {}, 0.0, None
+            return None
         used = max(value for _, value in measured)
         split = window_quota(config, quota_window, start_ts, now_ts, used)
         if split is None:
-            return {}, 0.0, None
-        points, unattributed = split
-        return points, unattributed, used
+            return None
+        points, unattributed, total = split
+        return points, unattributed, {"used_percent": used, "total": total}
     except CostError as error:
         print(f"claude cost: quota for {quota_window}: {error}", file=sys.stderr)
-        return {}, 0.0, None
+        return None
 
 
 def session_info(config, at=None):
@@ -479,8 +483,9 @@ def build_output(config, now):
     for name, length, key, quota_window in WINDOWS:
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
-        points, unattributed, measured = quota_for(
+        split = quota_for(
             config, quota_window, start.timestamp(), now.timestamp(), source)
+        points, unattributed, quota = split or ({}, 0.0, None)
         rows, unresolved = build_rows(costs, points, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
         # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに
@@ -495,13 +500,11 @@ def build_output(config, now):
             "total": sum(row["cost"] for row in rows) + unresolved["cost"],
             "sessions": rows,
             "unresolved": unresolved,
-            "quota": None if measured is None else {
-                # gaugeの現在値。窓は0から始まるので、これが窓の消費そのもの
-                # である。**usage cacheの値を写さない。**別の経路・別の瞬間の
-                # 読みであり、行を按分した相手はこちらである。
-                "used_percent": measured,
-                "unattributed": unattributed,
-            },
+            # **`total`と`used_percent`は別物である。**前者はこの窓で実際に
+            # 使った量で、行が足し合わさる相手。後者はgaugeの現在値で、chipが
+            # 出している数字。窓の中でresetが起きた窓では前者が大きくなり、
+            # 100%を超える (実測で56%に対し199%)。
+            "quota": quota and dict(quota, unattributed=unattributed),
         }
     return {
         "generated_at": now.isoformat(timespec="seconds"),

@@ -379,13 +379,16 @@ lookbackで引いているため、resetの直後、gaugeの書き込みとscrap
 掛からない。**窓の中の読みが1つも無く、かつ`measured`が0でない時に止める。
 まだ使っていないだけの窓は`measured`が0なので、空の按分がそのまま出る。
 
-**窓の中でgaugeが下がったら按分しない。**上昇だけを拾って下降を飛ばすと、
-**前の窓の消費が行に残ったまま、見出しは今の窓の値になる** (0→80→0→3で、行の
-合計83に対し見出し3)。下降は窓の境界とgaugeが食い違った印で、**どの窓を見て
-いるのかが分からない。**
-**この規則が偽になる観測:** 通常のresetでは下降は現れない。range queryのサンプルは
-stepの境界に揃うため、reset直前の読みは窓の起点より前に落ちて除かれる (実測、
-連続する4回のresetすべてで-120秒か-60秒)。
+**窓の中のresetは足し戻す。**providerは不具合対応などで窓の途中に一括リセットを
+かけることがある。**実測 (usage cacheのhistory 13日) で1つの週に3回起きており
+(45→0、24→5、73→0)、その週の消費は最終値56%に対して199%だった。**捨てると、
+resetより前に動いていたsessionが行から丸ごと消える。
+**5Hでは13日・約105窓で1件も無く、7Dだけの現象である。**
+
+**2pt以下の下降は下方修正として捨てる。**gaugeは1ptだけ下がることがある。
+足し戻すと、修正のたびに直前の値がまるごと二重に乗る (84→83で83が足される)。
+**この規則が偽になる観測:** 窓の中の下降の幅。実測では1・1・1と19・45・73に
+割れており、間に大きな隙間がある。3pt以上の下方修正か、2pt以下のresetが現れたら偽。
 
 **accountは1つを前提にしている。cost側のqueryも同じである。**どちらも
 `user_account_uuid`で絞っていないため、2 account分が入ったdatasourceでは、
@@ -406,8 +409,12 @@ cost列だけを出す。
 
 #### どこまで信じてよいか
 
-**合計は一致する。**行 + `unresolved` + `unattributed` = 実測の`used_percent`で、
-実測で両窓とも誤差0である。再測する:
+**合計は一致する。**行 + `unresolved` + `unattributed` = `quota.total`で、実測で
+両窓とも誤差0である。
+
+**`total`と`used_percent`は別物である。**前者はこの窓で実際に使った量、後者は
+gaugeの現在値 (chipが出している数字) で、窓の中でresetが起きた窓では前者が
+大きくなり100%を超える。resetの無い窓では一致する。再測する:
 
 ```bash
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
@@ -416,7 +423,7 @@ for name, w in json.load(sys.stdin)["windows"].items():
     q = w.get("quota")
     if not q: print(name, "quota unavailable"); continue
     parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
-    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs measured {q[\"used_percent\"]:.2f}")'
+    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs total {q[\"total\"]:.2f} (gauge {q[\"used_percent\"]:.2f})")'
 ```
 
 **行ごとの値は近似である。**刻みを5分から15分へ動かすと、行の値は窓の合計の1割ほど
@@ -455,7 +462,7 @@ for name, w in json.load(sys.stdin)["windows"].items():
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
                         "session_id":"…","cost":123.92,"quota":8.64}],
            "unresolved":{"cost":451.61,"sessions":11,"quota":3.2},
-           "quota":{"used_percent":25.0,"unattributed":1.0}}}}
+           "quota":{"used_percent":25.0,"total":25.0,"unattributed":1.0}}}}
 ```
 
 **emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
@@ -969,7 +976,10 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
     **画面には但し書きを足さない。**どこまで信じてよいかは「クォータの按分」に
     書く (行ごとの近似の幅、説明の付かない$/クォータの比)。
   - **%は窓の中の取り分ではなく、上限に対する割合である。**行の合計は100ではなく、
-    見出しの`used_percent`になる。**そうでないとblock上部のgaugeと比べられない。**
+    見出しの`quota.total` (この窓で実際に使った量) になる。
+    - **見出しはchipの%ではない。**窓の中でresetが起きた窓では、使った量がgaugeの
+      現在値を超える (実測で56%に対し199%)。**chipと突き合わせて読めるのはresetの
+      無い窓だけで、そこでは両者が一致する。**
   - **並び順とbarはcostのまま。**クォータは按分値で、刻みの取り方で同じ消費が
     前後する。**問いによって行の位置が動くと、更新のたびに動いたように見える。**
   - **`unattributed`を`No spend recorded`として別の行に出す。**`unresolved`とは
@@ -977,7 +987,7 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
     sessionのコスト)。出さないと、**画面に出ていない行が1つあることが、
     どこにも現れない。**
     - **ここでも合っているのは「行が欠けていないこと」であって、表示の桁では
-      ない。**cacheの中では行と`unattributed`が`used_percent`をちょうど作るが、
+      ない。**cacheの中では行と`unattributed`が`quota.total`をちょうど作るが、
       画面はそれぞれを1桁へ丸めるため、見えている数字の合計は見えている見出しと
       一致しないことがある。**列を合わせるために行の数字を調整しない。**
   - **`quota`を持たない窓も、cost列だけで出す。**helperはgaugeを引けなかった時に

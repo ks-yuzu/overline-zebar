@@ -76,14 +76,15 @@ export default function CostBreakdown({
           <StaleMark status={status} />
         </div>
         <p className="shrink-0 text-base font-semibold tabular-nums">
-          {/* The reading the quota column was apportioned from, so that the
-              rows below can be read against it rather than against each
-              other. It is the gauge's own value, not the one the header at
-              the top of the block shows: that one is fetched separately and
-              can have moved since this window was worked out. */}
+          {/* What the rows add up to: the quota consumed during this window.
+              Not the gauge's current reading and not the chip above - the
+              provider resets the quota mid-window on occasion, and a measured
+              week consumed 199% of the limit against a final reading of 56%.
+              Reading the rows against the chip would then be reading them
+              against a number they do not belong to. */}
           {quota && (
             <span className="mr-2 text-text-muted">
-              {formatQuota(quota.used_percent)}
+              {formatQuota(quota.total)}
             </span>
           )}
           {formatCost(total)}
