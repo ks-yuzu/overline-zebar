@@ -340,7 +340,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     return points, unattributed
 
 
-def quota_for(config, quota_window, start_ts, now_ts):
+def quota_for(config, quota_window, start_ts, now_ts, source):
     """按分と、按分した相手の実測値を返す。引けなければ`(空, 0, None)`。
 
     **クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは
@@ -348,6 +348,13 @@ def quota_for(config, quota_window, start_ts, now_ts):
     **28本ある側の失敗率が、3本しかない側の鮮度を決める。**
     `used_percent`が`None`であることが、按分が無いことを読む側へ伝える。
     """
+    # 按分は「窓の起点で0だった」ことに全面的に乗っている。resetを1つも読めず
+    # 今からwindow長だけ戻しただけの窓は、起点がresetではない。そこにあった
+    # 残高が起点直後の上昇として現れ、**その時に動いていたsessionへ最大で
+    # 窓ぜんぶが付く。**costは窓の取り方が多少ずれても額がずれるだけなので、
+    # この窓ではcost側だけを出す。
+    if source == "fallback_length":
+        return {}, 0.0, None
     try:
         measured = run_query(config, (
             f'max by (window) (last_over_time('
@@ -428,7 +435,7 @@ def build_output(config, now):
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
         points, unattributed, measured = quota_for(
-            config, quota_window, start.timestamp(), now.timestamp())
+            config, quota_window, start.timestamp(), now.timestamp(), source)
         rows, unresolved = build_rows(costs, points, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
         # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに

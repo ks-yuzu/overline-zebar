@@ -353,7 +353,15 @@ class WindowCostTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
-    def output(self, costs, info, usage_cache="absent.json", seen=None):
+    # reset を報告する cache を置く。**起点が reset でない窓はクォータを引かずに
+    # 降りる**ので、`absent.json` のままだと gauge を引く 2 本が消え、この class は
+    # コストの経路だけを見ることになる。
+    USAGE_CACHE = json.dumps({
+        "current_week": {"resets_at": "2026-09-14T09:00:00+09:00"},
+        "current_session": {"resets_at": "2026-09-13T14:00:00+09:00"},
+    })
+
+    def output(self, costs, info, seen=None):
         def fake(config, expression, at=None):
             if seen is not None:
                 seen.append(at)
@@ -364,10 +372,14 @@ class OutputTests(unittest.TestCase):
                 return [({"session_id": key}, value) for key, value in costs.items()]
             return []
 
-        with mock.patch.object(cost, "run_query", side_effect=fake):
-            return cost.build_output(
-                {"usage_cache": usage_cache},
-                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))["windows"]["week"]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "usage.json"
+            path.write_text(self.USAGE_CACHE)
+            with mock.patch.object(cost, "run_query", side_effect=fake):
+                return cost.build_output(
+                    {"usage_cache": str(path)},
+                    dt.datetime.fromisoformat(
+                        "2026-09-13T12:00:00+09:00"))["windows"]["week"]
 
     def parts(self, built):
         return sum(row["cost"] for row in built["sessions"]) + built["unresolved"]["cost"]
@@ -539,12 +551,16 @@ class RangeQueryTests(unittest.TestCase):
 
 
 class QuotaFailureTests(unittest.TestCase):
-    def build(self, fail_on):
+    """クォータが出せない時も cost 列は出る。出せない理由は 3 通りある。"""
+
+    def build(self, fail_on=None, reset="2026-09-14T09:00:00+09:00"):
+        ranges = []
+
         def fake_query(config, expression, at=None):
             if cost.QUOTA_METRIC in expression:
                 if fail_on == "measured":
                     raise cost.CostError("no gauge")
-                return [({"window": "weekly_all"}, 25.0)]
+                return [] if fail_on == "silent" else [({"window": "weekly_all"}, 25.0)]
             if expression.startswith(cost.INFO_METRIC):
                 return [({"session_id": "s1", "session_name": "一番"}, 1.0)]
             if "increase" in expression:
@@ -552,25 +568,54 @@ class QuotaFailureTests(unittest.TestCase):
             return []
 
         def fake_range(config, expression, start_ts, end_ts):
-            raise cost.CostError("range refused")
+            ranges.append(expression)
+            if fail_on == "range":
+                raise cost.CostError("range refused")
+            return []
 
-        with mock.patch.object(cost, "run_query", side_effect=fake_query), \
-                mock.patch.object(cost, "run_range_query", side_effect=fake_range):
-            return cost.build_output(
-                {"usage_cache": "absent.json"},
-                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))["windows"]["week"]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "usage.json"
+            if reset is not None:
+                path.write_text(json.dumps({"current_week": {"resets_at": reset}}))
+            with mock.patch.object(cost, "run_query", side_effect=fake_query), \
+                    mock.patch.object(cost, "run_range_query", side_effect=fake_range):
+                built = cost.build_output(
+                    {"usage_cache": str(path)},
+                    dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
+        return built["windows"]["week"], ranges
+
+    def assert_cost_still_there(self, built):
+        self.assertIsNone(built["quota"])
+        self.assertEqual(built["total"], 4.0)
+        self.assertEqual(built["sessions"][0]["session_name"], "一番")
 
     def test_a_refused_quota_query_leaves_the_cost_standing(self):
         # 窓ぶんの range query は 7 日で 28 本あり、cost 側は 3 本である。
         # ここの失敗で cache ごと前回の写しへ落ちると、**28 本ある側の失敗率が、
         # 3 本しかない側の鮮度を決める。**
-        for fail_on in ("measured", "range"):
+        for fail_on in ("measured", "range", "silent"):
             with self.subTest(fail_on=fail_on):
                 with contextlib.redirect_stderr(io.StringIO()):
-                    built = self.build(fail_on)
-                self.assertIsNone(built["quota"])
-                self.assertEqual(built["total"], 4.0)
-                self.assertEqual(built["sessions"][0]["session_name"], "一番")
+                    built, _ = self.build(fail_on)
+                self.assert_cost_still_there(built)
+
+    def test_a_window_whose_start_is_not_a_reset_gets_no_quota(self):
+        # 按分は「窓の起点で 0 だった」ことに全面的に乗っている。reset を 1 つも
+        # 読めず今から window 長だけ戻しただけの窓は起点が reset ではなく、
+        # そこにあった残高が起点直後の上昇として現れる。**その時に動いていた
+        # session へ最大で窓ぜんぶが付く。**
+        with contextlib.redirect_stderr(io.StringIO()):
+            built, ranges = self.build(reset=None)
+        self.assertEqual(built["source"], "fallback_length")
+        self.assert_cost_still_there(built)
+        # 引かずに降りる。引いてから捨てるのでは 28 本ぶんの時間を毎回捨てる。
+        self.assertEqual(ranges, [])
+
+    def test_a_rolled_reset_still_gets_a_quota(self):
+        # 窓単位で送った reset は reset のままなので、起点は 0 である。
+        built, _ = self.build(reset="2026-09-07T09:00:00+09:00")
+        self.assertEqual(built["source"], "usage_cache_rolled")
+        self.assertIsNotNone(built["quota"])
 
 
 class CacheTests(unittest.TestCase):
