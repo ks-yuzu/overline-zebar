@@ -131,6 +131,16 @@ returns zero **without an error**; `[1h:5m]` is correct, and either half alone i
 correct even at `[24h:5m]`. Only the product of two metrics over a long subquery
 breaks, and it breaks silently.
 
+**A reading that only predates the window gets no quota either.** `measured` is
+read with the same fifteen-minute lookback, so just after a reset — before the
+gauge's write and its scrape have caught up — it still carries the previous
+window's figure. Pinned against zero at the start that reads as a single huge
+rise at the head of the window, charging the previous window to whichever
+sessions happened to be running just after the reset, and **no fall occurs, so
+the check below cannot see it.** When nothing inside the window has been read
+and `measured` is not zero, the split is withheld. A window that has simply not
+been used yet reads zero and still gets its (empty) split.
+
 **A gauge that falls inside the window gets no quota at all.** Keeping the rises
 and skipping the fall would leave the previous window's usage sitting in the
 rows while the header shows the current window's reading — 83 in the rows under
@@ -189,6 +199,13 @@ land 90–100% on that session at any spacing from 5 to 15 minutes. Shorter ones
 do not, having no room to be separated. Shifting the quota by one bucket strands
 24–29 points in stretches with no cost and moves the split by 20–24%; unshifted
 it strands none.
+
+**Spend during a gap in a series lands where the series comes back.** A session
+that goes quiet drops out of the step grid and returns carrying what it did on
+returning, which is where that work happened. If ingestion itself dropped
+samples while work continued, the same shape would place that work later than it
+happened. Measured over 24 hours: one gap with growth across it, of the harmless
+kind.
 
 **Do not trust the ratio of dollars to quota.** Models explain part of it — a
 mostly-Fable session measured $1.83/point against $2.5–6.4 for Opus ones — but

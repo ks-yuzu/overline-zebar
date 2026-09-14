@@ -336,10 +336,16 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     # 両端を留める。窓は0から始まり、今の値が`measured`である。**留めないと
     # 合計は「最初のサンプルから最後のサンプルまで」になり、窓の頭と尻尾が
     # 落ちる** (実測で5Hの窓で3のうち2、7Dの窓で25のうち1)。
-    series = [(int(start_ts), 0.0)]
-    series += [(moment, value) for moment, value in sorted(readings.items())
-               if int(start_ts) < moment < int(now_ts)]
-    series.append((int(now_ts), measured))
+    inside = [(moment, value) for moment, value in sorted(readings.items())
+              if int(start_ts) < moment < int(now_ts)]
+    # 窓の中に読みが1つも無いのに`measured`が0でないなら、その値は窓の外から
+    # 来ている。**`measured`も`[15m]`のlookbackで引いており、resetの直後は
+    # 前の窓の値を返す** (gaugeの書き込みとscrapeがresetに追いつくまで)。
+    # 0で留めた起点との差が「窓の頭で一気に消費した」形になり、**reset直後に
+    # 動いていたsessionへ前の窓ぶんが付く。**下降が無いので下の検出には掛からない。
+    if measured > 0 and not inside:
+        return None
+    series = [(int(start_ts), 0.0)] + inside + [(int(now_ts), measured)]
     rises = {}
     for (_, before), (moment, after) in zip(series, series[1:]):
         # 下がったら按分をやめる。**上昇だけを拾って下降を飛ばすと、前の窓の

@@ -536,6 +536,20 @@ class QuotaTests(unittest.TestCase):
             {1500: 9.0, 2000: 2.0}, {1400: {"a": 1.0}, 1900: {"a": 1.0}},
             measured=2.0))
 
+    def test_a_reading_that_only_predates_the_window_is_not_used(self):
+        # reset の直後、gauge の書き込みと scrape が追いつくまでの間、`measured`
+        # (これも `[15m]` の lookback で引く) は前の窓の値を返す。0 で留めた起点
+        # との差が「窓の頭で一気に消費した」形になり、**reset 直後に動いていた
+        # session へ前の窓ぶんが付く。**下降が無いので下降の検出には掛からない。
+        self.assertIsNone(self.apportion(
+            {900: 84.0}, {1200: {"unlucky": 1.0}}, measured=84.0))
+
+    def test_a_window_with_no_reading_and_nothing_used_is_still_a_split(self):
+        # 窓が開いたばかりで、まだ何も使っていない。**「読みが無い」だけで
+        # 落とすと、窓の頭の5分は毎回クォータ列が消える。**
+        points, unattributed = self.apportion({}, {}, measured=0.0)
+        self.assertEqual((points, unattributed), ({}, 0.0))
+
     def test_a_fall_only_at_the_very_end_is_caught_too(self):
         # 留めた `now` の側へ落ちる形。`measured` が最後の読みより小さい。
         self.assertIsNone(self.apportion(
@@ -610,9 +624,12 @@ class QuotaFailureTests(unittest.TestCase):
             ranges.append(expression)
             if fail_on == "range":
                 raise cost.CostError("range refused")
-            if fail_on == "fall" and cost.QUOTA_METRIC in expression:
+            if cost.QUOTA_METRIC in expression:
+                # 窓の中の読み。**「読みが無い」は別の理由で按分を止めるので、
+                # ここに置かないと、この class が見たい経路まで届かない。**
                 middle = int(start_ts) + (int(end_ts) - int(start_ts)) // 2
-                return [(middle, {"window": "weekly_all"}, 90.0)]
+                return [(middle, {"window": "weekly_all"},
+                         90.0 if fail_on == "fall" else 20.0)]
             return []
 
         with tempfile.TemporaryDirectory() as root:
