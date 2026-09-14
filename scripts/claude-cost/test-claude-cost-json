@@ -97,9 +97,15 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(source, "usage_cache_rolled")
 
     def test_the_helper_asks_for_both_windows(self):
-        self.assertEqual([name for name, _, _ in cost.WINDOWS], ["session", "week"])
-        lengths = {name: length for name, length, _ in cost.WINDOWS}
+        self.assertEqual([name for name, *_ in cost.WINDOWS], ["session", "week"])
+        lengths = {name: length for name, length, _, _ in cost.WINDOWS}
         self.assertEqual(lengths, {"session": SESSION_SECONDS, "week": WEEK_SECONDS})
+
+    def test_each_window_names_the_gauge_it_is_measured_against(self):
+        # cost 側の窓と quota gauge の窓は別の語彙である。対応を取り違えると、
+        # 5H の行が 7D のクォータを按分した値になり、**合計だけは合う。**
+        gauges = {name: gauge for name, _, _, gauge in cost.WINDOWS}
+        self.assertEqual(gauges, {"session": "session", "week": "weekly_all"})
 
     def test_a_reset_without_an_offset_is_unreadable(self):
         # parse はできるが aware な now と比べた瞬間に TypeError になり、
@@ -183,64 +189,87 @@ class RowTests(unittest.TestCase):
                 "s2": {"session_name": "#2 二番", "project": "p"}}
 
     def test_rows_are_sorted_by_cost(self):
-        rows, _, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, self.info())
+        rows, _ = cost.build_rows({"s1": 1.0, "s2": 5.0}, {}, self.info())
         self.assertEqual([row["session_name"] for row in rows], ["#2 二番", "#1 一番"])
+
+    def test_the_order_does_not_follow_the_quota(self):
+        # クォータは按分値で、同じ消費でも刻みの取り方で前後する。行の位置が
+        # 問いによって動かない方 (cost) を鍵にする。
+        rows, _ = cost.build_rows({"s1": 5.0, "s2": 1.0}, {"s1": 1.0, "s2": 9.0},
+                                  self.info())
+        self.assertEqual([row["session_id"] for row in rows], ["s1", "s2"])
 
     def test_no_row_is_left_out_however_many_there_are(self):
         # 行を切ると、切った分が total にだけ残って内訳と突き合わせられず、
         # 読む側が label で絞った画面も黙って少なく出る。
         costs = {f"s{n}": float(n + 1) for n in range(300)}
         info = {f"s{n}": {"session_name": str(n)} for n in range(300)}
-        rows, unresolved, count = cost.build_rows(costs, info)
+        rows, unresolved = cost.build_rows(costs, {}, info)
         self.assertEqual(len(rows), 300)
-        self.assertEqual((unresolved, count), (0.0, 0))
+        self.assertEqual(unresolved, {"cost": 0.0, "quota": 0.0, "sessions": 0})
         self.assertAlmostEqual(sum(row["cost"] for row in rows), sum(costs.values()))
 
     def test_a_session_known_only_by_its_project_still_gets_a_row(self):
         # 題がまだ付いていない session も info は持ち、project が入る。
         # project の分かる行は「不明」より情報がある。
-        rows, unresolved, count = cost.build_rows(
-            {"s1": 1.0}, {"s1": {"project": "overline-zebar"}})
+        rows, unresolved = cost.build_rows(
+            {"s1": 1.0}, {}, {"s1": {"project": "overline-zebar"}})
         self.assertEqual([row["project"] for row in rows], ["overline-zebar"])
-        self.assertEqual((unresolved, count), (0.0, 0))
+        self.assertEqual(unresolved["sessions"], 0)
 
     def test_a_session_whose_info_carries_no_labels_still_gets_a_row(self):
         # emitter は session_id 以外を任意にしている。cwd が "/" の session は
         # project が空になり、写せる label が 1 つも無い形で届く。
-        rows, unresolved, count = cost.build_rows({"s1": 5.0}, {"s1": {}})
+        rows, unresolved = cost.build_rows({"s1": 5.0}, {}, {"s1": {}})
         self.assertEqual([row["session_id"] for row in rows], ["s1"])
-        self.assertEqual((unresolved, count), (0.0, 0))
+        self.assertEqual(unresolved["sessions"], 0)
 
     def test_a_session_without_a_name_becomes_unresolved(self):
         # 落とすと合計が合わなくなる。別マシンから送られた session が該当する。
-        rows, unresolved, count = cost.build_rows(
-            {"s1": 1.0, "elsewhere": 9.0}, self.info())
+        rows, unresolved = cost.build_rows(
+            {"s1": 1.0, "elsewhere": 9.0}, {"elsewhere": 4.0}, self.info())
         self.assertEqual([row["session_id"] for row in rows], ["s1"])
-        self.assertEqual((unresolved, count), (9.0, 1))
+        self.assertEqual(unresolved, {"cost": 9.0, "quota": 4.0, "sessions": 1})
 
     def test_the_parts_add_up_to_the_total(self):
         costs = {"s1": 1.0, "s2": 5.0, "elsewhere": 9.0, "idle": 0.0}
-        rows, unresolved, _ = cost.build_rows(costs, self.info())
+        rows, unresolved = cost.build_rows(costs, {}, self.info())
         shown = sum(row["cost"] for row in rows)
-        self.assertAlmostEqual(shown + unresolved, sum(costs.values()))
+        self.assertAlmostEqual(shown + unresolved["cost"], sum(costs.values()))
+
+    def test_the_quota_parts_add_up_too(self):
+        points = {"s1": 1.5, "s2": 5.5, "elsewhere": 9.0}
+        rows, unresolved = cost.build_rows(
+            {"s1": 1.0, "s2": 1.0, "elsewhere": 1.0}, points, self.info())
+        shown = sum(row["quota"] for row in rows)
+        self.assertAlmostEqual(shown + unresolved["quota"], sum(points.values()))
 
     def test_an_amount_below_a_cent_is_still_spend(self):
         # 閾値で落とすと、その額が total から消えるか、消えないなら内訳と
         # 合わなくなる。実測でも 0 と $0.005 の間の値は 1 件も無かった。
-        rows, unresolved, _ = cost.build_rows({"s1": 0.004, "elsewhere": 0.001},
-                                              self.info())
+        rows, unresolved = cost.build_rows({"s1": 0.004, "elsewhere": 0.001},
+                                           {}, self.info())
         self.assertEqual([row["cost"] for row in rows], [0.004])
-        self.assertEqual(unresolved, 0.001)
+        self.assertEqual(unresolved["cost"], 0.001)
 
     def test_sessions_that_spent_nothing_are_dropped(self):
         # 窓の中に居ただけで使っていない session。実測で 5H の 10 系列中 7 件。
         # `increase()` はそれを厳密に 0 で返す。
-        rows, unresolved, count = cost.build_rows({"s1": 0.0, "gone": 0.0}, self.info())
+        rows, unresolved = cost.build_rows({"s1": 0.0, "gone": 0.0}, {}, self.info())
         self.assertEqual(rows, [])
-        self.assertEqual((unresolved, count), (0.0, 0))
+        self.assertEqual(unresolved, {"cost": 0.0, "quota": 0.0, "sessions": 0})
+
+    def test_a_session_with_quota_but_no_cost_still_gets_a_row(self):
+        # cost は窓ぜんぶを 1 本の `increase` で引き、quota は 5 分刻みで引く。
+        # 別の引き方なので、片方にしか出ない session がありうる。**落とすと
+        # その行のクォータが合計から消える。**
+        rows, unresolved = cost.build_rows({}, {"s1": 2.0}, self.info())
+        self.assertEqual([(row["session_id"], row["quota"]) for row in rows],
+                         [("s1", 2.0)])
+        self.assertEqual(unresolved["sessions"], 0)
 
     def test_the_order_does_not_depend_on_dictionary_order(self):
-        rows, _, _ = cost.build_rows({"s2": 5.0, "s1": 5.0}, self.info())
+        rows, _ = cost.build_rows({"s2": 5.0, "s1": 5.0}, {}, self.info())
         self.assertEqual([row["session_id"] for row in rows], ["s1", "s2"])
 
 
@@ -271,8 +300,9 @@ class SessionInfoTests(unittest.TestCase):
         found = self.info_from([({"session_id": "s1", "session_name": "古い"}, 1.0),
                                 ({"session_id": "s1", "session_name": "新しい"}, 1.0)])
         self.assertIsNone(found["s1"])
-        rows, unresolved, count = cost.build_rows({"s1": 3.0}, found)
-        self.assertEqual((rows, unresolved, count), ([], 3.0, 1))
+        rows, unresolved = cost.build_rows({"s1": 3.0}, {"s1": 2.0}, found)
+        self.assertEqual(rows, [])
+        self.assertEqual(unresolved, {"cost": 3.0, "quota": 2.0, "sessions": 1})
 
 
 class WindowCostTests(unittest.TestCase):
@@ -359,8 +389,9 @@ class OutputTests(unittest.TestCase):
         # 題が書き換わる瞬間をまたぐと、別の瞬間の label を凍らせたコストへ付ける。
         seen = []
         self.output({"s1": 1.0}, {"s1": {"session_name": "一番"}}, seen=seen)
-        # 窓 2 つ × コスト 2 本 + 名前 1 本。名前は窓ごとに引き直さない。
-        self.assertEqual(len(seen), 5)
+        # 窓 2 つ × (コスト 2 本 + クォータの実測 1 本) + 名前 1 本。
+        # 名前は窓ごとに引き直さない。
+        self.assertEqual(len(seen), 7)
         self.assertEqual(len(set(seen)), 1)
         self.assertIsNotNone(seen[0])
 
@@ -384,6 +415,162 @@ class OutputTests(unittest.TestCase):
         self.assertEqual((dt.datetime.fromisoformat(week["starts_at"])
                           - dt.datetime.fromisoformat(built["generated_at"])).total_seconds(),
                          -WEEK_SECONDS)
+
+
+class QuotaTests(unittest.TestCase):
+    """按分そのもの。`window_quota` は gauge の読みとコストの増分を受け取る。"""
+
+    CONFIG = {"gcx": "gcx", "context": "", "datasource": "d", "timeout": 1}
+
+    def apportion(self, readings, costs, measured, start=1000, now=3000):
+        """`readings`/`costs` は `{時刻: 値}` / `{時刻: {session: 額}}`。"""
+        def fake(config, expression, start_ts, end_ts):
+            if cost.QUOTA_METRIC in expression:
+                return [(moment, {"window": "session"}, value)
+                        for moment, value in readings.items()]
+            return [(moment, {"session_id": key}, value)
+                    for moment, row in costs.items() for key, value in row.items()]
+
+        with mock.patch.object(cost, "run_range_query", side_effect=fake):
+            return cost.window_quota(self.CONFIG, "session", start, now, measured)
+
+    def test_the_parts_add_up_to_the_measured_reading(self):
+        # 達成条件。行と「帰属できない分」の合計が、按分した相手そのものに
+        # 一致する。**これが崩れたら、画面の内訳は上の数字の内訳ではない。**
+        points, unattributed = self.apportion(
+            {1500: 2.0, 2000: 5.0, 2500: 5.0},
+            {1400: {"a": 1.0}, 1900: {"a": 1.0, "b": 3.0}, 2400: {"b": 2.0}},
+            measured=9.0)
+        self.assertAlmostEqual(sum(points.values()) + unattributed, 9.0)
+
+    def test_the_window_starts_at_zero(self):
+        # 窓は reset 直後の 0 から始まる。最初の読みまでの上昇を落とすと、
+        # **窓の頭が消える** (実測で 5H の窓の 3 のうち 2)。
+        points, unattributed = self.apportion(
+            {1500: 4.0}, {1200: {"a": 1.0}}, measured=4.0)
+        self.assertAlmostEqual(points["a"], 4.0)
+        self.assertEqual(unattributed, 0.0)
+
+    def test_the_tail_after_the_last_reading_is_not_lost(self):
+        # range query の最後のサンプルから `now` までは、どんな PromQL を
+        # 書いても式の外に出る。`measured` で留めて拾う。
+        points, unattributed = self.apportion(
+            {1500: 4.0}, {1200: {"a": 1.0}, 2800: {"b": 1.0}}, measured=7.0)
+        self.assertAlmostEqual(points["a"], 4.0)
+        self.assertAlmostEqual(points["b"], 3.0)
+
+    def test_spend_between_two_readings_of_the_same_value_still_counts(self):
+        # gauge は整数でしか報告されない。固定幅のバケットで見ると「コストは
+        # あるが上昇 0」のバケットが出て、**そのコストは配分に 1 円も効かない**
+        # (実測で窓のコストの 35%)。区切りを gauge の目盛りに置けば効く。
+        points, _ = self.apportion(
+            {1500: 0.0, 2000: 0.0, 2500: 6.0},
+            {1400: {"quiet": 1.0}, 2400: {"loud": 1.0}},
+            measured=6.0)
+        self.assertAlmostEqual(points["quiet"], 3.0)
+        self.assertAlmostEqual(points["loud"], 3.0)
+
+    def test_a_rise_with_no_spend_beside_it_is_not_spread(self):
+        # 他の machine の CLI が OTel を送っていない時にここへ来る。寄せると
+        # 手元の session が一律に膨らむ。
+        points, unattributed = self.apportion(
+            {1500: 4.0, 2500: 10.0}, {2400: {"a": 1.0}}, measured=10.0)
+        self.assertAlmostEqual(unattributed, 4.0)
+        self.assertAlmostEqual(points["a"], 6.0)
+
+    def test_spend_outside_the_window_does_not_take_a_share(self):
+        points, _ = self.apportion(
+            {1500: 6.0}, {500: {"before": 1.0}, 1400: {"inside": 1.0}}, measured=6.0)
+        self.assertEqual(list(points), ["inside"])
+
+    def test_a_fall_is_not_added_back(self):
+        # 下降は窓の中には現れない。現れたら窓の境界が gauge とずれており、
+        # 足し戻すと前の窓の消費が混ざる。
+        points, _ = self.apportion(
+            {1500: 9.0, 2000: 2.0}, {1400: {"a": 1.0}, 1900: {"a": 1.0}}, measured=2.0)
+        self.assertAlmostEqual(points["a"], 9.0)
+
+
+class RangeQueryTests(unittest.TestCase):
+    CONFIG = {"gcx": "gcx", "context": "", "datasource": "d", "timeout": 1}
+
+    def spans(self, start, end):
+        asked = []
+
+        def fake(config, extra, expression):
+            asked.append((int(extra[1]), int(extra[3])))
+            # **進まない分割は落ちずに回り続ける。**回数で打ち切って、
+            # 「戻らない」を assert できる失敗に変える。
+            if len(asked) > 32:
+                raise AssertionError(f"run_range_query did not advance: {asked[-3:]}")
+            return json.dumps({"status": "success",
+                               "data": {"resultType": "matrix", "result": []}})
+
+        with mock.patch.object(cost, "run_gcx", side_effect=fake):
+            cost.run_range_query(self.CONFIG, "up", start, end)
+        return asked
+
+    def test_a_long_window_is_split(self):
+        # **gcx は range の点数で step を勝手に上げる** (実測: 300s が通るのは
+        # 12h までの 145 点。7d を 1 発で投げると 900s になる)。上がったことは
+        # 応答からは分からないので、頼んだ刻みが返る長さに割る。
+        asked = self.spans(0, 7 * 86400)
+        self.assertEqual(len(asked), 14)
+        self.assertEqual(asked[0], (0, cost.QUOTA_CHUNK))
+        self.assertEqual(asked[-1][1], 7 * 86400)
+        for (_, before), (after, _) in zip(asked, asked[1:]):
+            self.assertEqual(before, after)
+
+    def test_a_short_window_is_one_query(self):
+        self.assertEqual(self.spans(1000, 2000), [(1000, 2000)])
+
+    def test_a_fractional_end_does_not_repeat_the_last_span(self):
+        # 片方だけを int にすると、`moment < end_ts` が真のまま `stop` が
+        # `moment` に等しくなり、**同じ span を投げ続けて戻らない。**
+        self.assertEqual(self.spans(1000.0, 2000.75), [(1000, 2000)])
+
+    def test_an_empty_instant_response_is_refused(self):
+        # 中身のある instant は `values` が無くて落ちるが、**空の instant は
+        # 「窓の中に 1 点も無かった」と見分けが付かない。**そのまま通すと、
+        # gauge を引けなかった窓が「クォータが 1 も動いていない窓」になる。
+        with mock.patch.object(cost, "run_gcx", return_value=vector([])):
+            with self.assertRaises(cost.CostError):
+                cost.run_range_query(self.CONFIG, "up", 1000, 2000)
+
+
+class QuotaFailureTests(unittest.TestCase):
+    def build(self, fail_on):
+        def fake_query(config, expression, at=None):
+            if cost.QUOTA_METRIC in expression:
+                if fail_on == "measured":
+                    raise cost.CostError("no gauge")
+                return [({"window": "weekly_all"}, 25.0)]
+            if expression.startswith(cost.INFO_METRIC):
+                return [({"session_id": "s1", "session_name": "一番"}, 1.0)]
+            if "increase" in expression:
+                return [({"session_id": "s1"}, 4.0)]
+            return []
+
+        def fake_range(config, expression, start_ts, end_ts):
+            raise cost.CostError("range refused")
+
+        with mock.patch.object(cost, "run_query", side_effect=fake_query), \
+                mock.patch.object(cost, "run_range_query", side_effect=fake_range):
+            return cost.build_output(
+                {"usage_cache": "absent.json"},
+                dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))["windows"]["week"]
+
+    def test_a_refused_quota_query_leaves_the_cost_standing(self):
+        # 窓ぶんの range query は 7 日で 28 本あり、cost 側は 3 本である。
+        # ここの失敗で cache ごと前回の写しへ落ちると、**28 本ある側の失敗率が、
+        # 3 本しかない側の鮮度を決める。**
+        for fail_on in ("measured", "range"):
+            with self.subTest(fail_on=fail_on):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    built = self.build(fail_on)
+                self.assertIsNone(built["quota"])
+                self.assertEqual(built["total"], 4.0)
+                self.assertEqual(built["sessions"][0]["session_name"], "一番")
 
 
 class CacheTests(unittest.TestCase):

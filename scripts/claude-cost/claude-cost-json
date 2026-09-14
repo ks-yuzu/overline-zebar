@@ -13,14 +13,23 @@ from pathlib import Path
 
 COST_METRIC = "claude_code_cost_usage_USD_total"
 INFO_METRIC = "claude_session_info"
+QUOTA_METRIC = "claude_usage_used_percent"
 
-# 名前・窓の長さ・usage cache内のkey。**window長はhelperの外にも写しがある**
+# 名前・窓の長さ・usage cache内のkey・quota gaugeの`window` label。
+# **window長はhelperの外にも写しがある**
 # (docs/ai-usage-integration.md「window長は複数箇所に重複している」)。
 # providerが変えた時は揃える。
 WINDOWS = (
-    ("session", 5 * 3600, "current_session"),
-    ("week", 7 * 86400, "current_week"),
+    ("session", 5 * 3600, "current_session", "session"),
+    ("week", 7 * 86400, "current_week", "weekly_all"),
 )
+
+# quotaの按分で使うrange queryの刻みと、1本で引く長さの上限。
+# **gcxはrangeの点数でstepを勝手に上げる** (実測: 300sが通るのは12hまでの145点。
+# 18hを投げると600sへ、7dを1発で投げると900sになる)。上がったことは応答からは
+# 分からないため、12hずつに割って繋ぐ。
+QUOTA_STEP = 300
+QUOTA_CHUNK = 12 * 3600
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -161,11 +170,16 @@ def run_query(config, expression, at=None):
     後ろへずれ、窓の起点に在った系列 (足し戻しを抑止する側) では、そのずれの
     間の消費がどちらにも入らない。
     """
+    extra = ["--time", str(int(at))] if at is not None else []
+    return parse_vector(run_gcx(config, extra, expression))
+
+
+def run_gcx(config, extra, expression):
+    """gcxを1回呼び、応答のJSONを返す。"""
     command = [config["gcx"], "metrics", "query", "-d", config["datasource"], "-o", "json"]
     if config["context"]:
         command += ["--context", config["context"]]
-    if at is not None:
-        command += ["--time", str(int(at))]
+    command += extra
     command.append(expression)
     try:
         completed = subprocess.run(
@@ -181,7 +195,48 @@ def run_query(config, expression, at=None):
             completed.stderr.decode("utf-8", "replace"),
             completed.returncode,
         ))
-    return parse_vector(completed.stdout.decode("utf-8", "replace"))
+    return completed.stdout.decode("utf-8", "replace")
+
+
+def parse_matrix(payload):
+    """range queryの応答を`(時刻, label set, 値)`にする。
+
+    `parse_vector`と同じく、形が合わない応答は0件ではなく例外にする。
+    """
+    try:
+        data = json.loads(payload)
+        result = data["data"]["result"]
+        if data["data"].get("resultType") != "matrix":
+            raise CostError("query did not return a range vector")
+    except (ValueError, KeyError, TypeError) as error:
+        raise CostError(f"cannot read the query response: {error}")
+    samples = []
+    for item in result:
+        try:
+            for moment, value in item["values"]:
+                samples.append((int(moment), item["metric"], float(value)))
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise CostError(f"cannot read a sample: {error}")
+    return samples
+
+
+def run_range_query(config, expression, start_ts, end_ts):
+    """窓ぜんぶを`QUOTA_STEP`刻みで引く。
+
+    **1本で投げない。**gcxはrangeが長いとstepを黙って上げるため、頼んだ刻みとは
+    別の刻みの答えが、同じ形で返る (`QUOTA_CHUNK`)。
+    """
+    # **秒より下を先に落とす。**片方だけをintにすると、最後のチャンクで
+    # `moment < end_ts`が真のまま`stop`が`moment`に等しくなり、進まなくなる。
+    moment, end = int(start_ts), int(end_ts)
+    samples = []
+    while moment < end:
+        stop = min(moment + QUOTA_CHUNK, end)
+        samples += parse_matrix(run_gcx(config, [
+            "--from", str(moment), "--to", str(stop), "--step", f"{QUOTA_STEP}s",
+        ], expression))
+        moment = stop
+    return samples
 
 
 def window_cost(config, start_ts, now_ts):
@@ -209,6 +264,106 @@ def window_cost(config, start_ts, now_ts):
             for key in set(increase) | set(addback)}
 
 
+def window_quota(config, quota_window, start_ts, now_ts, measured):
+    """窓のクォータ消費をsessionごとに按分する。`(session別, 帰属できない分)`。
+
+    gaugeが上がった時刻を境界にし、その1つ前の上昇から今回までに積まれた
+    コストの取り分で、今回の上昇を割る。
+
+    **バケットを固定幅にしない。**gaugeは整数でしか報告されないので、5分幅で
+    見ると「コストはあるが上昇0」のバケットが出る (実測で窓のコストの35%)。
+    その消費は配分に1円も効かないまま、上昇は後のバケットに整数で現れ、
+    その時に動いていたsessionが丸ごと受け取る。区切りをgaugeの目盛り自体に
+    置けば、窓の中のコストはすべてどこかの上昇に効く。
+    **この規則が偽になる観測:** 1セッションだけが走った区間で、その区間の上昇が
+    そのsessionに付く割合。固定幅との比較は経緯 (task #106) にある。
+
+    上昇の合計は`measured`に一致する。**一致を成り立たせているのは両端を
+    留めていることで、queryの精度ではない。**窓の中でgaugeが下がった時だけ
+    崩れ、その時は窓の境界がgaugeとずれている。
+    """
+    # gaugeの値そのものを引き、差はここで取る。**増分をPromQLで作らない。**
+    # `delta`も`increase`も外挿するため隣り合う差の合計が端点の差と一致せず、
+    # range queryの最後のサンプルから`now`までの分はどう書いても式の外に出る。
+    #
+    # `max by (window)`で引く。**instanceでは絞らない。**同じaccountの値を
+    # 複数のhostが報告しており (実測で2台、24hの上昇は177.0で完全に一致)、
+    # 1台を選ぶとその台が止まっていた間の上昇が丸ごと落ちる。
+    # `[15m]`は欠測をまたぐためのlookback。飛んでもその先で差が繋がる。
+    readings = {}
+    for moment, _, value in run_range_query(config, (
+        f'max by (window) (last_over_time({QUOTA_METRIC}{{window="{quota_window}"}}[15m]))'
+    ), start_ts, now_ts):
+        readings[moment] = max(readings.get(moment, 0.0), value)
+
+    # 両端を留める。窓は0から始まり、今の値が`measured`である。**留めないと
+    # 合計は「最初のサンプルから最後のサンプルまで」になり、窓の頭と尻尾が
+    # 落ちる** (実測で5Hの窓で3のうち2、7Dの窓で25のうち1)。
+    series = [(int(start_ts), 0.0)]
+    series += [(moment, value) for moment, value in sorted(readings.items())
+               if int(start_ts) < moment < int(now_ts)]
+    series.append((int(now_ts), measured))
+    rises = {}
+    for (_, before), (moment, after) in zip(series, series[1:]):
+        # 下降は窓の中には現れない (引くのは常に窓の起点から今まで)。現れたら
+        # 窓の境界がgaugeとずれており、**足し戻すと前の窓の消費が混ざる。**
+        if after > before:
+            rises[moment] = after - before
+
+    costs = {}
+    for moment, metric, value in run_range_query(
+        config, f"sum by (session_id) (increase({COST_METRIC}[{QUOTA_STEP}s]))",
+        start_ts, now_ts,
+    ):
+        session_id = metric.get("session_id")
+        if session_id and value > 0:
+            costs.setdefault(moment, {})[session_id] = value
+
+    points, unattributed, previous = {}, 0.0, int(start_ts)
+    for tick in sorted(rises):
+        shares = {}
+        for moment, row in costs.items():
+            if previous < moment <= tick:
+                for session_id, value in row.items():
+                    shares[session_id] = shares.get(session_id, 0.0) + value
+        total = sum(shares.values())
+        if total <= 0:
+            # 上昇はあるのに、その間のコストが1件も無い。**どこかへ寄せない。**
+            # 他のmachineのCLIがOTelを送っていない時にここへ来るので、寄せると
+            # 手元のsessionが一律に膨らむ。
+            unattributed += rises[tick]
+        else:
+            for session_id, value in shares.items():
+                points[session_id] = (
+                    points.get(session_id, 0.0) + rises[tick] * value / total)
+        previous = tick
+    return points, unattributed
+
+
+def quota_for(config, quota_window, start_ts, now_ts):
+    """按分と、按分した相手の実測値を返す。引けなければ`(空, 0, None)`。
+
+    **クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは
+    7日で28本あり、cost側は3本である。ここの失敗でcacheごと前回の写しへ落ちると、
+    **28本ある側の失敗率が、3本しかない側の鮮度を決める。**
+    `used_percent`が`None`であることが、按分が無いことを読む側へ伝える。
+    """
+    try:
+        measured = run_query(config, (
+            f'max by (window) (last_over_time('
+            f'{QUOTA_METRIC}{{window="{quota_window}"}}[15m]))'
+        ), now_ts)
+        if not measured:
+            return {}, 0.0, None
+        used = max(value for _, value in measured)
+        points, unattributed = window_quota(
+            config, quota_window, start_ts, now_ts, used)
+        return points, unattributed, used
+    except CostError as error:
+        print(f"claude cost: quota for {quota_window}: {error}", file=sys.stderr)
+        return {}, 0.0, None
+
+
 def session_info(config, at=None):
     found = {}
     for metric, _ in run_query(config, INFO_METRIC, at):
@@ -224,7 +379,7 @@ def session_info(config, at=None):
     return found
 
 
-def build_rows(costs, info):
+def build_rows(costs, points, info):
     """表示する行と、名前の付かない分を返す。
 
     **上限を置かない。**行を切ると、切った分が`total`にだけ残って内訳と
@@ -233,13 +388,14 @@ def build_rows(costs, info):
     系列数は現実の側で頭打ちになっており (実測で保持期間いっぱいの20日でも
     29件)、抑えるべき増え方が無い。
     """
-    rows, unresolved, unresolved_count = [], 0.0, 0
-    for session_id, cost in costs.items():
+    rows, unresolved = [], {"cost": 0.0, "quota": 0.0, "sessions": 0}
+    for session_id in set(costs) | set(points):
+        cost, quota = costs.get(session_id, 0.0), points.get(session_id, 0.0)
         # 窓の中に居ただけで使っていないsession。`increase()`はそれを厳密に0で
         # 返す (実測で5Hの10系列中7件)。**閾値では落とさない。**$0.004も消費で
         # あり、落とせば`total`から消えるか、消えないなら内訳と合わなくなる。
         # 実測でも、0と$0.005の間の値は1件も無かった。
-        if not cost:
+        if not cost and not quota:
             continue
         labels = info.get(session_id)
         # **対応表が無いことと、対応表に写せるlabelが無いことを混ぜない。**
@@ -247,12 +403,15 @@ def build_rows(costs, info):
         # `{}`で届く。それは既知のsessionであり、読む側は`session_id`の先頭で
         # 出せる。`None`は系列が無いか、2本来て決められなかった場合である。
         if labels is None:
-            unresolved += cost
-            unresolved_count += 1
+            unresolved["cost"] += cost
+            unresolved["quota"] += quota
+            unresolved["sessions"] += 1
             continue
-        rows.append(dict(labels, session_id=session_id, cost=cost))
+        rows.append(dict(labels, session_id=session_id, cost=cost, quota=quota))
+    # **並べる鍵はcostのまま。**クォータは按分値で、同じ消費でも刻みの取り方で
+    # 前後する。行の位置が問いによって動かない方を鍵にする。
     rows.sort(key=lambda row: (-row["cost"], row["session_id"]))
-    return rows, unresolved, unresolved_count
+    return rows, unresolved
 
 
 def build_output(config, now):
@@ -265,10 +424,12 @@ def build_output(config, now):
     # 名前は3本のqueryで共有する。**同じ瞬間で評価する**ため、1回だけ引く。
     info = session_info(config, now.timestamp())
     windows = {}
-    for name, length, key in WINDOWS:
+    for name, length, key, quota_window in WINDOWS:
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
-        rows, unresolved, unresolved_count = build_rows(costs, info)
+        points, unattributed, measured = quota_for(
+            config, quota_window, start.timestamp(), now.timestamp())
+        rows, unresolved = build_rows(costs, points, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
         # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに
         # 一致する」を成り立たせるために但し書きが要る。
@@ -279,9 +440,16 @@ def build_output(config, now):
             "source": source,
             # **`total`は報告する値から積む。**別に数えると、報告しなかった分が
             # totalにだけ残り、内訳と突き合わせられない。
-            "total": sum(row["cost"] for row in rows) + unresolved,
+            "total": sum(row["cost"] for row in rows) + unresolved["cost"],
             "sessions": rows,
-            "unresolved": {"cost": unresolved, "sessions": unresolved_count},
+            "unresolved": unresolved,
+            "quota": None if measured is None else {
+                # gaugeの現在値。窓は0から始まるので、これが窓の消費そのもの
+                # である。**usage cacheの値を写さない。**別の経路・別の瞬間の
+                # 読みであり、行を按分した相手はこちらである。
+                "used_percent": measured,
+                "unattributed": unattributed,
+            },
         }
     return {
         "generated_at": now.isoformat(timespec="seconds"),
