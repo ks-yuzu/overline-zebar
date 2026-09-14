@@ -321,18 +321,101 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 この誤りが再現しない。**`unless`が何も除かないためで、次の週次resetで初めて
 本番に出る。足し算はhelper側で行う。
 
+### クォータの按分
+
+同じ窓のクォータ消費 (`claude_usage_used_percent`) を、sessionごとに割り振る。
+**コストで代用できない。**実測 (2026-09-15、5Hの窓) で、最も金を使ったsessionは
+上限の10.9%しか取っておらず、2位のsessionが26.9%を取っていた。$とtokenは互いに
+一致して動き、クォータだけが両方から外れる。**窓全体で1つの`%/$`を使うと、
+出るのはコスト列の定数倍で、順位も比率も変わらない。**
+
+```text
+境界:  窓の起点 → gaugeが上がった各時刻 → now
+各境界の上昇を、1つ前の境界からその境界までのコストの取り分で割る
+```
+
+**バケットを固定幅にしない。区切りはgaugeの目盛り自体に置く。**gaugeは整数でしか
+報告されないので、5分幅で見ると「コストはあるが上昇0」のバケットが出る。実測で
+**窓のコストの35%**がそこに落ち、配分に1円も効かないまま、その上昇は後のバケットに
+整数で現れて、その時に動いていたsessionが丸ごと受け取る。目盛りを境界にすれば、
+窓の中のコストはすべてどこかの上昇に効く。
+
+**両端を留める。**窓は0から始まり、今の値が実測値である。留めないと合計は
+「最初のサンプルから最後のサンプルまで」になり、頭と尻尾が落ちる (実測で5Hの窓の
+3のうち2、7Dの窓の25のうち1)。**一致を成り立たせているのは両端を留めていることで、
+queryの精度ではない。**
+
+**増分をPromQLで作らない。**`delta`も`increase`も外挿するため、隣り合う差の合計が
+端点の差と一致しない。gaugeの値そのものをrange queryで引き、差はhelper側で取る。
+
+**`max by (window)`で引き、instanceでは絞らない。**同じaccountの値を複数のhostが
+報告している (実測で2台、24hの上昇は177.0で完全に一致)。1台を選ぶと、その台が
+止まっていた間の上昇が丸ごと落ちる。
+
+**range queryは12時間ずつに割る。****gcxはrangeの点数でstepを勝手に上げる。**
+実測で300s stepが通るのは12hまで (145点)、18hを投げると600sに、7dを1発で投げると
+900sになる。**上がったことは応答からは分からない。**7dぶんで28本になる。
+
+**subqueryに載せない。**`(コストの取り分 * クォータの増分)[6h:5m]`以上は、
+**エラーにならずに0を返す** (実測)。`[1h:5m]`なら正しく48を返し、片方ずつなら
+`[24h:5m]`でも正しい。2つのmetricを掛けた式を長いsubqueryに載せた時だけ静かに壊れる。
+
+**クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは7日で
+28本あり、cost側は3本である。ここの失敗でcacheごと前回の写しへ落ちると、
+**28本ある側の失敗率が、3本しかない側の鮮度を決める。**`quota`を`null`にして
+cost列だけを出す。
+
+#### どこまで信じてよいか
+
+**合計は一致する。**行 + `unresolved` + `unattributed` = 実測の`used_percent`で、
+実測で両窓とも誤差0である。再測する:
+
+```bash
+CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
+import json, sys
+for name, w in json.load(sys.stdin)["windows"].items():
+    q = w.get("quota")
+    if not q: print(name, "quota unavailable"); continue
+    parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
+    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs measured {q[\"used_percent\"]:.2f}")'
+```
+
+**行ごとの値は近似である。**刻みを5分から15分へ動かすと、行の値は窓の合計の1割ほど
+動く。**細かくしても収束しない** (60s→120sで21%、120s→300sで12%、300s→600sで7%)。
+24hでクォータの上昇イベントは69件しか無く、細かい刻みは1件の上昇をその1分に
+動いていたsessionへ丸ごと付けるだけになる。
+
+**帰属の向きは確かめてある。**60秒刻みの生データで1 sessionだけが走った区間を取ると、
+10分以上続いた区間は5〜15分の刻みで90〜100%がそのsessionに付く。5分未満の区間は
+当たらない (区間が刻みより短く、分離できない)。時刻合わせも、クォータを1バケット
+ずらすと24hで24〜29ポイントがコストの無い区間へ落ち、配分が20〜24%動く。
+ずらさなければ0である。
+
+**$/クォータの比まで信じてはいけない。**modelの違いで説明が付くのは一部である
+(Fable主体のsessionは$1.83/pt、Opus勢は$2.5〜6.4/pt)。tokenの量も内訳もほぼ同じで
+金額も近い2つのsessionが、クォータでは2.3倍違う例があり、**その残りが本物か
+按分の誤差かは、手元のデータでは区別できない。**整数丸め (目盛り境界に替えても
+行は最大2.3ポイントしか動かない) と時刻ずれ (±5分が最適、±10分で悪化) は潰した。
+
+**`unattributed`と`unresolved`は別のものである。**`unresolved`は「コストは分かるが
+名前が付かないsession」で、`unattributed`は「上昇した区間にコストが1件も無く、
+どのsessionにも渡せないクォータ」である。前者は別マシンでemitterを動かせば消え、
+後者は消えない。**どちらも行として出す。**出さないと列が上の数字に合わなくなり、
+足りない分が丸め誤差に見える。
+
 ### 出力
 
 ```json
 {"generated_at":"…","currency":"USD",
  "windows":{
    "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
-              "sessions":[…],"unresolved":{…}},
+              "sessions":[…],"unresolved":{…},"quota":{…}},
    "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
            "sessions":[{"session_name":"#46","custom_title":"#46",
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
-                        "session_id":"…","cost":123.92}],
-           "unresolved":{"cost":451.61,"sessions":11}}}}
+                        "session_id":"…","cost":123.92,"quota":8.64}],
+           "unresolved":{"cost":451.61,"sessions":11,"quota":3.2},
+           "quota":{"used_percent":25.0,"unattributed":1.0}}}}
 ```
 
 **emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
@@ -443,6 +526,8 @@ widgetのstale判定がそのまま効く。半分だけの答えは公開しな
 | --- | --- |
 | **window** / `5H` / `7D` | quotaの窓。`[14D] 5H Usage Peak per Window`のWindowもこれ |
 | **session** | Claude Codeの会話1本。`session_id`、`session_name`、costの各行、`Unresolved (n)` |
+| **unresolved** | 名前の付かないsession。コストは分かっている。別マシンでemitterを動かせば消える |
+| **unattributed** | どのsessionにも渡せないクォータ。上昇した区間にコストが1件も無い。名前を付けても消えない |
 
 **Claudeの`/usage`はquotaの窓を`Current session`と呼ぶが、その語はここでは使わない。**
 このツールの`session`は会話1本であり、**同じ語が2つの意味を持つとcostの段で破綻する** —
@@ -837,6 +922,23 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
     上位N件に切ると、切った分が`total`に現れず、行の合計と合わなくなる。
   - **`unresolved`も1行として出す。**落とすと行が`total`に合わない。実測では
     週の$1,329のうち$451 (34%) がこれで、別マシンのsessionである。
+  - **1行に「上限の何%」と「いくら」を並べる。**$の側は実測値、%の側は按分値で
+    ある。**同じ行に並べるのは、順位の食い違いこそが見たい情報だからである。**
+    実測で、最も金を使ったsessionが上限の10.9%しか取っておらず、2位が26.9%を
+    取っていた。2枚のcardに分けると、この1行が2つの並びに割れて読めなくなる。
+    **画面には但し書きを足さない。**どこまで信じてよいかは「クォータの按分」に
+    書く (行ごとの近似の幅、説明の付かない$/クォータの比)。
+  - **%は窓の中の取り分ではなく、上限に対する割合である。**行の合計は100ではなく、
+    見出しの`used_percent`になる。**そうでないとblock上部のgaugeと比べられない。**
+  - **並び順とbarはcostのまま。**クォータは按分値で、刻みの取り方で同じ消費が
+    前後する。**問いによって行の位置が動くと、更新のたびに動いたように見える。**
+  - **`unattributed`を`No spend recorded`として別の行に出す。**`unresolved`とは
+    別のものである (前者はどのsessionにも渡せないクォータ、後者は名前の付かない
+    sessionのコスト)。出さないと%の列が見出しに合わなくなり、**足りない分が
+    丸め誤差に見える。**
+  - **`quota`を持たない窓も、cost列だけで出す。**helperはgaugeを引けなかった時に
+    `null`を書き、この変更より前のcacheはfieldを持たない。**窓ごと拒むと、
+    元から無かった列のために、届いているcost列まで消える。**
   - **表示名は`custom_title`→(本文が無ければ`ai_title`を副題に足す)→`ai_title`
     →`project`→`session_id`の先頭。**組み立てはここが持つ。helperは両方の題を
     そのまま渡す。実データで`#102`が`#102 AI usage ポップアップパネル統合`になる。
@@ -1523,8 +1625,11 @@ python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
+python3 scripts/claude-cost/test-claude-cost-json
+python3 scripts/claude-sessions/test-claude-session-info-prom
 node packages/ui/test-usage-series.mjs
 node packages/ui/test-usage-status.mjs
+node packages/ui/test-cost-rows.mjs
 ```
 
 `test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
@@ -1543,6 +1648,11 @@ collector出力、stale readingを同じ実装moduleに対して検証する。
 - buildした全widgetの`dist`を、Zebarが実際に参照するpackへ同期している。
 - ソース側とpack側の各`dist/index.html`が`cmp`で一致している。
 - 同期後にZebarをreloadまたは再起動し、対象表示を確認している。
+
+**クォータの按分を触った時は、合計が実測に一致することを実データで引き直す。**
+テストは固定したreadingに対して規則を確かめるもので、**gaugeの側の形が変わった
+ことは捕まえない** (窓の中でresetが起きる、片方のhostだけが報告する等)。
+コマンドは`scripts/claude-cost/README.md`の「How far to trust it」にある。
 
 加えて、Windows側（PowerShellなど）からZebarと同じcommandを実行し、既定の
 distributionでJSONが返ることを確認する。
