@@ -279,8 +279,8 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     そのsessionに付く割合。固定幅との比較は経緯 (task #106) にある。
 
     上昇の合計は`measured`に一致する。**一致を成り立たせているのは両端を
-    留めていることで、queryの精度ではない。**窓の中でgaugeが下がった時だけ
-    崩れ、その時は窓の境界がgaugeとずれている。
+    留めていることで、queryの精度ではない。**窓の中でgaugeが下がったら、
+    一致が作れないので`None`を返す。
     """
     # gaugeの値そのものを引き、差はここで取る。**増分をPromQLで作らない。**
     # `delta`も`increase`も外挿するため隣り合う差の合計が端点の差と一致せず、
@@ -305,8 +305,15 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     series.append((int(now_ts), measured))
     rises = {}
     for (_, before), (moment, after) in zip(series, series[1:]):
-        # 下降は窓の中には現れない (引くのは常に窓の起点から今まで)。現れたら
-        # 窓の境界がgaugeとずれており、**足し戻すと前の窓の消費が混ざる。**
+        # 下がったら按分をやめる。**上昇だけを拾って下降を飛ばすと、前の窓の
+        # 消費が行に残ったまま、見出しは今の窓の値になる** (0→80→0→3で、行の
+        # 合計83に対し見出し3)。下降が現れたのは窓の境界がgaugeとずれた時で、
+        # **どの窓を見ているのかが分からない。**引けなかった時と同じ扱いにする。
+        # **この規則が偽になる観測:** 通常のresetでは下降は現れない。range query
+        # のサンプルはstepの境界に揃うため、reset直前の読みは窓の起点より前に
+        # 落ちて除かれる (実測、連続する4回のresetすべてで-120秒か-60秒)。
+        if after < before:
+            return None
         if after > before:
             rises[moment] = after - before
 
@@ -363,8 +370,10 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
         if not measured:
             return {}, 0.0, None
         used = max(value for _, value in measured)
-        points, unattributed = window_quota(
-            config, quota_window, start_ts, now_ts, used)
+        split = window_quota(config, quota_window, start_ts, now_ts, used)
+        if split is None:
+            return {}, 0.0, None
+        points, unattributed = split
         return points, unattributed, used
     except CostError as error:
         print(f"claude cost: quota for {quota_window}: {error}", file=sys.stderr)

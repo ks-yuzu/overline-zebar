@@ -495,12 +495,18 @@ class QuotaTests(unittest.TestCase):
             {1500: 6.0}, {500: {"before": 1.0}, 1400: {"inside": 1.0}}, measured=6.0)
         self.assertEqual(list(points), ["inside"])
 
-    def test_a_fall_is_not_added_back(self):
-        # 下降は窓の中には現れない。現れたら窓の境界が gauge とずれており、
-        # 足し戻すと前の窓の消費が混ざる。
-        points, _ = self.apportion(
-            {1500: 9.0, 2000: 2.0}, {1400: {"a": 1.0}, 1900: {"a": 1.0}}, measured=2.0)
-        self.assertAlmostEqual(points["a"], 9.0)
+    def test_a_fall_inside_the_window_yields_no_split(self):
+        # **上昇だけを拾って下降を飛ばすと、前の窓の消費が行に残ったまま、
+        # 見出しは今の窓の値になる。**ここでは行の合計 9 に対し見出しは 2 で、
+        # 「行の合計が実測に一致する」がその場で偽になる。
+        self.assertIsNone(self.apportion(
+            {1500: 9.0, 2000: 2.0}, {1400: {"a": 1.0}, 1900: {"a": 1.0}},
+            measured=2.0))
+
+    def test_a_fall_only_at_the_very_end_is_caught_too(self):
+        # 留めた `now` の側へ落ちる形。`measured` が最後の読みより小さい。
+        self.assertIsNone(self.apportion(
+            {1500: 9.0}, {1400: {"a": 1.0}}, measured=2.0))
 
 
 class RangeQueryTests(unittest.TestCase):
@@ -571,6 +577,9 @@ class QuotaFailureTests(unittest.TestCase):
             ranges.append(expression)
             if fail_on == "range":
                 raise cost.CostError("range refused")
+            if fail_on == "fall" and cost.QUOTA_METRIC in expression:
+                middle = int(start_ts) + (int(end_ts) - int(start_ts)) // 2
+                return [(middle, {"window": "weekly_all"}, 90.0)]
             return []
 
         with tempfile.TemporaryDirectory() as root:
@@ -598,6 +607,14 @@ class QuotaFailureTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()):
                     built, _ = self.build(fail_on)
                 self.assert_cost_still_there(built)
+
+    def test_a_window_the_gauge_fell_inside_publishes_no_quota(self):
+        # 窓の中で 90 まで上がってから、今は 25 である。**上昇だけを拾うと
+        # 行の合計が 90 を超え、見出しは 25 になる。**helper の出口まで通して、
+        # `quota` が `null` で出ることを見る。
+        with contextlib.redirect_stderr(io.StringIO()):
+            built, _ = self.build("fall")
+        self.assert_cost_still_there(built)
 
     def test_a_window_whose_start_is_not_a_reset_gets_no_quota(self):
         # 按分は「窓の起点で 0 だった」ことに全面的に乗っている。reset を 1 つも

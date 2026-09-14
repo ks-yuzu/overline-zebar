@@ -114,6 +114,32 @@ returns zero **without an error**; `[1h:5m]` is correct, and either half alone i
 correct even at `[24h:5m]`. Only the product of two metrics over a long subquery
 breaks, and it breaks silently.
 
+**A gauge that falls inside the window gets no quota at all.** Keeping the rises
+and skipping the fall would leave the previous window's usage sitting in the
+rows while the header shows the current window's reading — 83 in the rows under
+a header of 3, for a series of 0→80→0→3. A fall means the window boundary and
+the gauge disagree, and **which window the rows describe is then unknown.**
+
+**That is not what a normal reset looks like.** A range query's samples are
+aligned to the step, so the reading from just before a reset falls before the
+window start and is dropped — measured at −120 or −60 seconds across four
+consecutive resets. A fall surviving into the window is the anomaly, not the
+routine.
+
+**One account is assumed, here and in the cost queries.** Neither side filters
+on `user_account_uuid`, so a datasource holding two accounts would apportion one
+account's gauge across both accounts' costs. **That rule is false the moment
+`count(count by (user_account_uuid) (claude_usage_used_percent))` returns more
+than one** — measured at 1 for both metrics across the 20 days Prometheus keeps.
+
+**A window whose start is not a reset gets no quota at all.** The split rests
+entirely on the window having begun at zero. When no reset can be read and the
+start is just one length back from now, the balance sitting there arrives as a
+rise just after the start and goes whole to whoever was running — up to the
+entire window on one session. `source` says which windows those are; the cost
+columns still stand, because a window taken slightly wrong only moves the
+amounts.
+
 **A quota that cannot be read does not fail the cost.** The range queries are 28
 of the week's calls against the cost side's 3; letting them take the cache down
 to its previous copy would let **the failure rate of the 28 decide the freshness
