@@ -201,8 +201,10 @@ offset (±5 minutes is the optimum, ±10 is worse).
 **`unattributed` is not `unresolved`.** `unresolved` is spend whose session is
 known but unnamed, and it goes away once the emitter runs on the other machine.
 `unattributed` is quota from a stretch where nothing reported spend at all, and
-naming sessions will not touch it. **Both are reported**, or the column stops
-adding up to the reading above it and the shortfall reads as rounding.
+naming sessions will not touch it. **Both are reported**, or a row that
+exists goes unshown with nothing to say so. What adds up exactly is the output;
+the panel rounds each row to one decimal, so the figures on screen need not sum
+to the figure on screen above them.
 
 ## Output
 

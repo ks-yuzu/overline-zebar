@@ -66,7 +66,11 @@ export default function CostBreakdown({
     <Card className="bg-background-deeper/60 min-h-0 p-2.5">
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <p className="shrink-0 text-xs font-medium text-text-muted">
+          {/* The caption gives way, not the figures. At the narrowest panel the
+              bar allows - 1366px, so a 307px card - a stale mark beside a
+              four-digit total leaves this 7px short, and whichever of the two
+              is not allowed to shrink is the one that leaves the card. */}
+          <p className="min-w-0 truncate text-xs font-medium text-text-muted">
             {label}
           </p>
           <StaleMark status={status} />
