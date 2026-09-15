@@ -36,6 +36,15 @@ function share(cost: number, total: number) {
 const FIGURE_COLUMN = 'shrink-0 text-right text-xs tabular-nums';
 
 /**
+ * The cost column, held two characters clear of the quota beside it.
+ *
+ * The row's own `gap-2` supplies half a rem of that, so the margin makes up
+ * the rest. One character was not enough to read the two as separate figures
+ * when both are digits ending in the same place.
+ */
+const COST_COLUMN = `${FIGURE_COLUMN} ml-[calc(2ch_-_0.5rem)]`;
+
+/**
  * How wide to hold a column: the longest figure the card is actually showing.
  *
  * In characters, and set in `ch`, which is the advance of `0` - every glyph
@@ -151,7 +160,7 @@ export default function CostBreakdown({
               {formatQuota(quota.total)}
             </span>
           )}
-          <span className={FIGURE_COLUMN} style={costStyle}>
+          <span className={COST_COLUMN} style={costStyle}>
             {formatCost(total)}
           </span>
         </div>
@@ -202,7 +211,7 @@ export default function CostBreakdown({
                       </span>
                     )}
                     <span
-                      className={`${FIGURE_COLUMN} text-text-muted`}
+                      className={`${COST_COLUMN} text-text-muted`}
                       style={costStyle}
                     >
                       {formatCost(session.cost)}
@@ -235,7 +244,7 @@ export default function CostBreakdown({
                     </span>
                   )}
                   <span
-                    className={`${FIGURE_COLUMN} text-text-muted`}
+                    className={`${COST_COLUMN} text-text-muted`}
                     style={costStyle}
                   >
                     {formatCost(unresolved.cost)}
@@ -260,7 +269,7 @@ export default function CostBreakdown({
                   {formatQuota(quota.unattributed)}
                 </span>
                 <span
-                  className={`${FIGURE_COLUMN} text-text-muted`}
+                  className={`${COST_COLUMN} text-text-muted`}
                   style={costStyle}
                 >
                   &mdash;
