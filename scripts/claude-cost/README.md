@@ -172,10 +172,12 @@ while the value comes from one that has not: measured 60 seconds after a reset,
 one host read `0` with the new stamp and the other `18` with the old, and the
 two maxima together would have put 18 at the head of the new window.
 
-**A reset is an allocation boundary even when nothing is attributed at it.** A
-reset to zero records no rise, and without the boundary the next rise is split
-using costs from both sides of the reset - handing quota from after the reset to
-sessions that had already finished before it.
+**A reset is an allocation boundary whether or not it lands on zero.** What sits
+after a reset is what has been spent since it, so splitting it by costs from
+before the reset hands quota to sessions that had already finished. A reset to
+zero records no rise and would otherwise never reach the boundary code at all; a
+reset that lands above zero - the measured `24→5` - records one and would
+otherwise be split across the whole interval since the previous rise.
 
 **Spend in the reset's own five-minute step stays with the side it can be read
 on.** The reset happened somewhere inside that step, and nothing here says

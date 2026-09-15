@@ -586,6 +586,20 @@ class QuotaTests(unittest.TestCase):
         self.assertAlmostEqual(points["after"], 5.0)
         self.assertNotIn("stopped", points)
 
+    def test_a_reset_that_lands_above_zero_is_a_boundary_too(self):
+        # 実測の `24→5`。この刻みには上昇 (5) が在るので、0 まで落ちた reset と
+        # 違って「配るものが無い」経路を通らない。**境界にしないと、その 5 が
+        # reset より前のコストでも割られ、reset 前に終わっていた session へ
+        # reset 後のクォータが付く。**
+        points, _, total = self.apportion(
+            {1500: 24.0, 2400: 5.0},
+            {1400: {"before": 9.0}, 1800: {"stopped": 4.0}, 2300: {"after": 1.0}},
+            measured=5.0)
+        self.assertAlmostEqual(total, 29.0)
+        self.assertAlmostEqual(points["before"], 24.0)
+        self.assertAlmostEqual(points["after"], 5.0)
+        self.assertNotIn("stopped", points)
+
     def test_spend_at_the_reset_tick_is_kept_for_the_side_it_can_be_read_on(self):
         # 刻みは 5 分幅で、reset はそのどこかで起きている。**同じ刻みに載った
         # コストを両側から外すと、記録されている消費が画面では

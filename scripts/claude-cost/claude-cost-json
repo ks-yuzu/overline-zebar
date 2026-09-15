@@ -404,20 +404,22 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     # クォータが付く。
     points, unattributed, previous = {}, 0.0, int(start_ts)
     for tick in sorted(set(rises) | resets):
+        # **resetの刻みでは、その刻みのぶんしか見ない。**そこに在る値はresetから
+        # 後に積んだ分なので、resetより前のコストで割ってはいけない。
+        # 刻みは5分幅で、resetはそのどこかで起きている。曖昧なのはその1刻みだけで、
+        # **両側から外すと、記録されている消費が画面では「No spend recorded」に
+        # なる。**reset後の側へ残す。
+        lower = tick - QUOTA_STEP if tick in resets else previous
         shares = {}
         for moment, row in costs.items():
-            if previous < moment <= tick:
+            if lower < moment <= tick:
                 for session_id, value in row.items():
                     shares[session_id] = shares.get(session_id, 0.0) + value
         rise = rises.get(tick, 0.0)
         total = sum(shares.values())
         if not rise:
-            # 区切るだけのreset。配るものは無いが、**この刻みのコストは捨てない。**
-            # 刻みは5分幅で、resetはそのどこかで起きている。ここで`previous`を
-            # `tick`まで進めると、同じ刻みに載ったコストはどちらの側からも外れ、
-            # **記録されている消費が画面では「No spend recorded」になる。**
-            # 曖昧なのは1刻みだけなので、reset後の側へ残す。
-            previous = tick - QUOTA_STEP
+            # 0まで落ちたreset。配るものは無いので、曖昧な1刻みは次の上昇へ回す。
+            previous = lower
             continue
         if total <= 0:
             # 上昇はあるのに、その間のコストが1件も無い。**どこかへ寄せない。**
