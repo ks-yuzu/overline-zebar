@@ -161,16 +161,33 @@ point past the line reads as a reset.
 `claude_usage_reset_timestamp_seconds`, not from its value.** For as long as the
 lookback, a query inside a new window still returns the previous window's gauge:
 the write and its scrape have not caught up, and the value that comes back is
-indistinguishable from real consumption at the head of the window. Readings are
-taken from the first moment the reported reset is later than the window start -
-the previous window's reset being this window's start, that excludes exactly the
-ones that have not caught up. The stamps are read over the first fifteen minutes
-only, which is as long as a stale sample can survive.
+indistinguishable from real consumption at the head of the window. Each reading
+is paired with its own host's stamp, and only the pairs whose stamp is later
+than the window start are aggregated - the previous window's reset being this
+window's start, that is exactly the ones that have caught up.
+
+**The pairing is per host, not per query.** Taking the maximum value and the
+maximum stamp separately lets the stamp come from a host that has caught up
+while the value comes from one that has not: measured 60 seconds after a reset,
+one host read `0` with the new stamp and the other `18` with the old, and the
+two maxima together would have put 18 at the head of the new window.
+
+**A fall from below ten points is not read as a reset.** The gauge is an
+integer, so at low readings almost any fall lands below half of what it fell
+from - 1→0 and 3→1 both do - and reading those as resets adds the post-fall
+value a second time. Every measured in-window reset fell from 45, 24 or 73.
 
 **A reset is an allocation boundary even when nothing is attributed at it.** A
 reset to zero records no rise, and without the boundary the next rise is split
 using costs from both sides of the reset - handing quota from after the reset to
 sessions that had already finished before it.
+
+**Spend in the reset's own five-minute step stays with the side it can be read
+on.** The reset happened somewhere inside that step, and nothing here says
+whether a cost in it came before or after. Excluded from both sides it would
+vanish from the rows while the panel says `No spend recorded` about spend that
+was recorded, so the boundary is drawn one step back and the ambiguous step
+counts towards the rise after the reset.
 
 **One account is assumed, here and in the cost queries.** Neither side filters
 on `user_account_uuid`, so a datasource holding two accounts would apportion one
@@ -347,8 +364,7 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
 
 Each refresh makes seven instant queries — one for the names, and for each
-window two for the cost and one for the quota gauge — plus one short range query for the
-window's reset stamps and two per twelve hours of each window, one of which
+window two for the cost and one for the quota gauge — plus two per twelve hours of each window, one of which
 fetches the cost counters unaggregated (62 series and 0.5 MB over a measured 20
 hours). A full seven-day week is 28 of those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
 kills the helper before it can say why it gave up; the cron example allows 200

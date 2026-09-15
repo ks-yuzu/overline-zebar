@@ -33,8 +33,13 @@ WINDOWS = (
 QUOTA_STEP = 300
 QUOTA_CHUNK = 12 * 3600
 # gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
-# **同じ幅だけ、reset直後に前の窓の値が返りうる** (`window_opened_at`)。
+# **同じ幅だけ、reset直後に前の窓の値が返りうる。**採る側でresetの時刻を見て落とす。
 QUOTA_LOOKBACK = 900
+# これより低い所からの下降はresetとみなさない。**gaugeは整数なので、低い所では
+# 「半分より下へ落ちた」がほとんどの下降で成り立つ** (1→0も3→1も満たす)。
+# 実測のwindow内resetは45・24・73から落ちており、ここより下からのものは無い。
+# 取り違えて失うのは高々この値ぶんである。
+RESET_FLOOR = 10
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -306,38 +311,28 @@ def interval_costs(config, start_ts, now_ts):
     return costs
 
 
-def window_opened_at(config, quota_window, start_ts):
-    """この窓の読みを採ってよくなる時刻を返す。
+def quota_reading(quota_window, start_ts):
+    """この窓のgaugeを読む式。
 
-    **`last_over_time`の値は、いつ書かれたものかを持っていない。**resetの直後、
-    gaugeの書き込みとscrapeが追いつくまでの間、窓の中の刻みで引いても返るのは
-    前の窓の値である。その値を0で留めた起点と繋ぐと、**窓の頭で前の窓ぶんを
-    一気に消費した形**になり、reset直後に動いていたsessionへ丸ごと付く。
-    値の大きさからは見分けられない (窓の頭の本物の消費と同じ形をしている)。
+    **読みは、その台自身のresetがこの窓を指している時だけ採る。**resetの直後、
+    lookbackと同じ長さのあいだ、追いついていない台は前の窓の値を返す。その値は
+    窓の頭の本物の消費と同じ形をしていて、値からは見分けられない。
 
-    `claude_usage_reset_timestamp_seconds`が、その読みがどの窓のものかを持って
-    いる。**前の窓のresetはこの窓の起点そのもの**なので、報告されたresetが起点
-    より後ろになった時刻から採る。
+    **値とresetを別々に`max`しない。**実測 (直近の5H reset、起点+60秒) で、
+    一方の台が`0 / 新しいreset`、もう一方が`18 / 古いreset`だった。別々に取ると
+    **resetは追いついた台から、値は遅れた台から**来て、18が窓の頭の消費になる。
+    系列どうしを`and on (instance, window)`で組にしてから`max`を取る。
 
-    引けなければ起点をそのまま返す。**ここの失敗でクォータごと止めない。**
-    見分けが付かない区間は窓の頭の高々15分 (lookbackの長さ) で、その先は
-    どのみち新しい窓の値しか返らない。
+    **前の窓のresetはこの窓の起点そのもの**なので、`> 起点`がちょうど効く。
+    どの台も追いついていない間は1件も返らず、窓の外の読みも同じ理由で落ちる。
     """
-    opened = int(start_ts)
-    try:
-        stamped = run_range_query(config, (
-            f'max by (window) ({RESET_METRIC}{{window="{quota_window}"}})'
-        ), opened, opened + QUOTA_LOOKBACK)
-    except CostError as error:
-        print(f"claude cost: reset stamps for {quota_window}: {error}", file=sys.stderr)
-        return opened
-    # 刻みはstepの絶対境界に揃うので、最初の点は起点より前に落ちうる。**その点を
-    # 弾く必要は無い。**起点より前のサンプルはまだ前の窓のresetを報告しており、
-    # 前の窓のresetはこの窓の起点そのものなので、下の条件を満たさない。
-    for moment, _, reset_at in sorted(stamped):
-        if reset_at > start_ts:
-            return moment
-    return opened + QUOTA_LOOKBACK
+    selector = f'{QUOTA_METRIC}{{window="{quota_window}"}}'
+    stamp = f'{RESET_METRIC}{{window="{quota_window}"}}'
+    return (
+        f'max by (window) (last_over_time({selector}[{QUOTA_LOOKBACK}s])'
+        f' and on (instance, window)'
+        f' (last_over_time({stamp}[{QUOTA_LOOKBACK}s]) > {int(start_ts)}))'
+    )
 
 
 def window_quota(config, quota_window, start_ts, now_ts, measured):
@@ -368,17 +363,17 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     # 1台を選ぶとその台が止まっていた間の上昇が丸ごと落ちる。
     # `[15m]`は欠測をまたぐためのlookback。飛んでもその先で差が繋がる。
     readings = {}
-    for moment, _, value in run_range_query(config, (
-        f'max by (window) (last_over_time({QUOTA_METRIC}{{window="{quota_window}"}}[{QUOTA_LOOKBACK}s]))'
-    ), start_ts, now_ts):
+    for moment, _, value in run_range_query(
+        config, quota_reading(quota_window, start_ts), start_ts, now_ts):
         readings[moment] = max(readings.get(moment, 0.0), value)
 
     # 両端を留める。窓は0から始まり、今の値が`measured`である。**留めないと
     # 合計は「最初のサンプルから最後のサンプルまで」になり、窓の頭と尻尾が
     # 落ちる** (実測で5Hの窓で3のうち2、7Dの窓で25のうち1)。
-    settled = window_opened_at(config, quota_window, start_ts)
+    # 窓の外の読みはqueryの側で落ちている。ここで見るのは終端だけで、`now`ちょうどの
+    # 読みを残すと、留めた`(now, measured)`と同じ時刻が2つ並ぶ。
     inside = [(moment, value) for moment, value in sorted(readings.items())
-              if settled <= moment < int(now_ts)]
+              if moment < int(now_ts)]
     # 窓の中に読みが1つも無いのに`measured`が0でないなら、その値は窓の外から
     # 来ている。**`measured`も`[15m]`のlookbackで引いており、resetの直後は
     # 前の窓の値を返す** (gaugeの書き込みとscrapeがresetに追いつくまで)。
@@ -389,7 +384,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     for (_, before), (moment, after) in zip(series, series[1:]):
         if after > before:
             rises[moment] = after - before
-        elif after * 2 < before:
+        elif after * 2 < before and before >= RESET_FLOOR:
             # **窓の中のresetである。**不具合対応などでproviderが窓の途中で
             # 一括リセットすることがあり、実測で1つの週に3回起きている
             # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
@@ -402,6 +397,10 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
             # (実測: reset後は0・0・5、修正は前の値の0.92〜0.99倍)。
             # **この規則が偽になる観測:** 前の値の半分より下へ落ちる下方修正、
             # または半分以上で止まるreset。
+            #
+            # **低い所では比が意味を持たない。**gaugeは整数なので、1→0も3→1も
+            # 「半分より下」を満たす。実測のresetは45・24・73から落ちており、
+            # 10より下から落ちたものは1件も無い。
             resets.add(moment)
             if after > 0:
                 rises[moment] = after
@@ -422,8 +421,14 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
         rise = rises.get(tick, 0.0)
         total = sum(shares.values())
         if not rise:
-            pass                    # 区切るだけのreset。配るものが無い
-        elif total <= 0:
+            # 区切るだけのreset。配るものは無いが、**この刻みのコストは捨てない。**
+            # 刻みは5分幅で、resetはそのどこかで起きている。ここで`previous`を
+            # `tick`まで進めると、同じ刻みに載ったコストはどちらの側からも外れ、
+            # **記録されている消費が画面では「No spend recorded」になる。**
+            # 曖昧なのは1刻みだけなので、reset後の側へ残す。
+            previous = tick - QUOTA_STEP
+            continue
+        if total <= 0:
             # 上昇はあるのに、その間のコストが1件も無い。**どこかへ寄せない。**
             # 他のmachineのCLIがOTelを送っていない時にここへ来るので、寄せると
             # 手元のsessionが一律に膨らむ。
@@ -452,10 +457,9 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
     if source == "fallback_length":
         return None
     try:
-        measured = run_query(config, (
-            f'max by (window) (last_over_time('
-            f'{QUOTA_METRIC}{{window="{quota_window}"}}[{QUOTA_LOOKBACK}s]))'
-        ), now_ts)
+        # 読みと同じ組み方で引く。**こちらは窓の尻尾を留める値**なので、
+        # 追いついていない台の値を採ると、そのぶん合計が膨らむ。
+        measured = run_query(config, quota_reading(quota_window, start_ts), now_ts)
         if not measured:
             return None
         used = max(value for _, value in measured)
