@@ -27,21 +27,33 @@ function share(cost: number, total: number) {
 }
 
 /**
- * The two figure columns, at a width the figures cannot move.
+ * A figure column: right-aligned, and the same width down the whole card.
  *
  * Left to size themselves, a row's quota lands wherever the cost beside it
  * happens to end - across the amounts on screen that moved the percentages by
  * 43px within one card, which reads as a ragged column rather than as a number.
- *
- * A floor rather than a fixed width. It is set by the totals in the header
- * rather than by the rows, because the totals use these same columns and are
- * the largest figures either will hold: a quota past 100% in a week the
- * provider reset (43px) and a four-figure week ($1,246.03, 65px). Every
- * ordinary figure therefore lands on the floor and lines up with the total
- * above it, and anything wider takes the room it needs instead of being cut.
  */
-const QUOTA_COLUMN = 'min-w-[2.75rem] shrink-0 text-right text-xs tabular-nums';
-const COST_COLUMN = 'min-w-[4.25rem] shrink-0 text-right text-xs tabular-nums';
+const FIGURE_COLUMN = 'shrink-0 text-right text-xs tabular-nums';
+
+/**
+ * How wide to hold a column: the longest figure the card is actually showing.
+ *
+ * In characters, and set in `ch`, which is the advance of `0` - every glyph
+ * these figures are made of measures 0.6em in Geist Mono, digits, `$`, `%`,
+ * `,` and `.` alike, so the column ends exactly where the widest figure does.
+ *
+ * **Reserving room for the widest figure the column could ever hold instead
+ * charges every row for one that may never arrive.** Sized for a quota past
+ * 100% and a four-figure week, the cards on screen were carrying 40px and 25px
+ * of empty column, all of it taken from the session names.
+ */
+function columnWidth(figures: string[]): string | undefined {
+  const longest = figures.reduce(
+    (width, figure) => Math.max(width, figure.length),
+    0
+  );
+  return longest ? `${longest}ch` : undefined;
+}
 
 /**
  * One window's spend, session by session.
@@ -79,6 +91,29 @@ export default function CostBreakdown({
 
   const { sessions, total, unresolved, quota } = costWindow;
 
+  /* Every figure the card will draw, so the columns can be held at the width
+     of the widest one rather than at the width of the widest one imaginable.
+     The totals are in here too: they sit in these columns. */
+  const quotaStyle = {
+    width: columnWidth(
+      quota
+        ? [
+            formatQuota(quota.total),
+            formatQuota(quota.unattributed),
+            formatQuota(unresolved.quota ?? 0),
+            ...sessions.map((session) => formatQuota(session.quota ?? 0)),
+          ]
+        : []
+    ),
+  };
+  const costStyle = {
+    width: columnWidth([
+      formatCost(total),
+      formatCost(unresolved.cost),
+      ...sessions.map((session) => formatCost(session.cost)),
+    ]),
+  };
+
   return (
     <Card className="bg-background-deeper/60 min-h-0 p-2.5">
       {/* `pr-2` is the gutter the list below reserves plus the padding its
@@ -112,9 +147,13 @@ export default function CostBreakdown({
               Reading the rows against the chip would then be reading them
               against a number they do not belong to. */}
           {quota && (
-            <span className={QUOTA_COLUMN}>{formatQuota(quota.total)}</span>
+            <span className={FIGURE_COLUMN} style={quotaStyle}>
+              {formatQuota(quota.total)}
+            </span>
           )}
-          <span className={COST_COLUMN}>{formatCost(total)}</span>
+          <span className={FIGURE_COLUMN} style={costStyle}>
+            {formatCost(total)}
+          </span>
         </div>
       </div>
 
@@ -155,11 +194,17 @@ export default function CostBreakdown({
                       {name}
                     </span>
                     {quota && (
-                      <span className={`${QUOTA_COLUMN} text-text-muted`}>
+                      <span
+                        className={`${FIGURE_COLUMN} text-text-muted`}
+                        style={quotaStyle}
+                      >
                         {formatQuota(session.quota ?? 0)}
                       </span>
                     )}
-                    <span className={`${COST_COLUMN} text-text-muted`}>
+                    <span
+                      className={`${FIGURE_COLUMN} text-text-muted`}
+                      style={costStyle}
+                    >
                       {formatCost(session.cost)}
                     </span>
                   </div>
@@ -182,11 +227,17 @@ export default function CostBreakdown({
                     Unresolved ({unresolved.sessions})
                   </span>
                   {quota && (
-                    <span className={`${QUOTA_COLUMN} text-text-muted`}>
+                    <span
+                      className={`${FIGURE_COLUMN} text-text-muted`}
+                      style={quotaStyle}
+                    >
                       {formatQuota(unresolved.quota ?? 0)}
                     </span>
                   )}
-                  <span className={`${COST_COLUMN} text-text-muted`}>
+                  <span
+                    className={`${FIGURE_COLUMN} text-text-muted`}
+                    style={costStyle}
+                  >
                     {formatCost(unresolved.cost)}
                   </span>
                 </div>
@@ -202,10 +253,16 @@ export default function CostBreakdown({
                 <span className="min-w-0 flex-1 truncate text-xs italic text-text-muted">
                   No spend recorded
                 </span>
-                <span className={`${QUOTA_COLUMN} text-text-muted`}>
+                <span
+                  className={`${FIGURE_COLUMN} text-text-muted`}
+                  style={quotaStyle}
+                >
                   {formatQuota(quota.unattributed)}
                 </span>
-                <span className={`${COST_COLUMN} text-text-muted`}>
+                <span
+                  className={`${FIGURE_COLUMN} text-text-muted`}
+                  style={costStyle}
+                >
                   &mdash;
                 </span>
               </li>
