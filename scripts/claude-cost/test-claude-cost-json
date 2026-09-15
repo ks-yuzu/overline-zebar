@@ -434,13 +434,26 @@ class QuotaTests(unittest.TestCase):
 
     CONFIG = {"gcx": "gcx", "context": "", "datasource": "d", "timeout": 1}
 
-    def apportion(self, readings, costs, measured, start=1000, now=3000):
+    def apportion(self, readings, costs, measured, start=1000, now=3000,
+                  opened=None):
         """`readings` は gauge の読み、`costs` は **counter の値** である。
 
         `{時刻: {session: そこまでの累計}}`。増分ではない。helper は生の counter を
         引いて手元で差を取るので、fixture もその形にする。
+
+        `opened` は「この窓の reset を報告し始めた時刻」。既定では起点そのもので、
+        前の窓の値が紛れていない場合にあたる。
         """
         def fake(config, expression, start_ts, end_ts):
+            if cost.RESET_METRIC in expression:
+                # この窓の reset (= 起点より後) を報告し始める時刻。それより前の
+                # 刻みは前の窓の reset を報告している。
+                settled = start if opened is None else opened
+                # **刻みは step の絶対境界に揃うので、最初の点は起点より前に
+                # 落ちうる。**その点も既に新しい窓の reset を報告している。
+                return [(moment, {"window": "session"},
+                         start + 1 if moment >= settled else float(start))
+                        for moment in range(start - 300, start + cost.QUOTA_LOOKBACK, 300)]
             if cost.QUOTA_METRIC in expression:
                 return [(moment, {"window": "session"}, value)
                         for moment, value in readings.items()]
@@ -555,6 +568,52 @@ class QuotaTests(unittest.TestCase):
         # 落とすと、窓の頭の5分は毎回クォータ列が消える。**
         points, unattributed, _ = self.apportion({}, {}, measured=0.0)
         self.assertEqual((points, unattributed), ({}, 0.0))
+
+    def test_a_fall_that_stops_near_the_level_is_a_revision_however_large(self):
+        # **下げ幅で測ると、閾値のすぐ上の下方修正が「その値ぶんの消費」として
+        # 足し戻され、合計がほぼ倍になる。**84→81 は 3pt 下がっただけだが、
+        # reset と読むと 81 が足されて合計 165 になる。reset は 0 付近まで
+        # 落ちる (実測で 0・0・5) のに対し、修正は水準の近くに留まる。
+        points, _, total = self.apportion(
+            {1500: 84.0, 2000: 81.0}, {1400: {"a": 1.0}, 1900: {"b": 1.0}},
+            measured=81.0)
+        self.assertAlmostEqual(total, 84.0)
+        self.assertNotIn("b", points)
+
+    def test_a_reset_is_a_boundary_even_when_it_lands_on_zero(self):
+        # reset が 0 まで落ちた時は上昇が記録されない。**境界にしないと、次の
+        # 上昇が reset をまたいだ区間のコストで割られる。**`stopped` は reset の
+        # 前に使って終わった session で、その消費は reset で流された。reset 後の
+        # 5 を分け合う資格は無い。
+        points, _, total = self.apportion(
+            {1500: 45.0, 2000: 0.0, 2500: 5.0},
+            {1400: {"before": 9.0}, 1800: {"stopped": 4.0}, 2400: {"after": 1.0}},
+            measured=5.0)
+        self.assertAlmostEqual(total, 50.0)
+        self.assertAlmostEqual(points["before"], 45.0)
+        self.assertAlmostEqual(points["after"], 5.0)
+        self.assertNotIn("stopped", points)
+
+    def test_a_reading_from_before_the_window_is_dropped(self):
+        # 最初の刻みは起点より前に落ちうる。そこに在るのは前の窓の値で、
+        # **採ると起点の 0 との差が丸ごと上昇として立つ。**
+        points, _, total = self.apportion(
+            {700: 84.0, 1500: 3.0}, {1400: {"a": 1.0}}, measured=3.0)
+        self.assertAlmostEqual(total, 3.0)
+        self.assertAlmostEqual(points["a"], 3.0)
+
+    def test_a_reading_the_gauge_had_not_caught_up_to_is_dropped(self):
+        # reset の直後、gauge の書き込みと scrape が追いつくまでの間、窓の中の
+        # 刻みで引いても返るのは前の窓の値である。**値の大きさからは窓の頭の
+        # 本物の消費と見分けが付かない。**どの窓の読みかは reset の時刻が持つ。
+        # 落とすのは読みであって、その間に動いていた session の消費ではない。
+        # **見るのは合計。**採ってしまうと 84 の上昇が立ち、そのまま配られる。
+        points, unattributed, total = self.apportion(
+            {1300: 84.0, 1900: 3.0},          # 1300 はまだ前の窓の 84
+            {1200: {"unlucky": 1.0}, 1800: {"real": 1.0}},
+            measured=3.0, opened=1600)
+        self.assertAlmostEqual(total, 3.0)
+        self.assertAlmostEqual(sum(points.values()) + unattributed, 3.0)
 
     def test_a_small_fall_is_a_revision_and_is_not_added_back(self):
         # 1pt の下方修正は reset ではない。**足し戻すと、修正のたびに直前の値が

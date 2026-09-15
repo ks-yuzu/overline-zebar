@@ -14,6 +14,8 @@ from pathlib import Path
 COST_METRIC = "claude_code_cost_usage_USD_total"
 INFO_METRIC = "claude_session_info"
 QUOTA_METRIC = "claude_usage_used_percent"
+# 同じ読みがどの窓のものかを持つ。値の側にはその情報が無い。
+RESET_METRIC = "claude_usage_reset_timestamp_seconds"
 
 # 名前・窓の長さ・usage cache内のkey・quota gaugeの`window` label。
 # **window長はhelperの外にも写しがある**
@@ -30,11 +32,9 @@ WINDOWS = (
 # 分からないため、12hずつに割って繋ぐ。
 QUOTA_STEP = 300
 QUOTA_CHUNK = 12 * 3600
-# これより大きい下降をwindow内のresetとみなし、その先の値を足し戻す。これ以下は
-# gaugeの下方修正として捨てる。**実測 (usage cacheのhistory 13日、3740点) で、
-# 窓の中の下降は6件、下げ幅は1・1・1と19・45・73にはっきり割れる。**
-# **この規則が偽になる観測:** 3pt以上の下方修正、または2pt以下のreset。
-QUOTA_REVISION = 2
+# gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
+# **同じ幅だけ、reset直後に前の窓の値が返りうる** (`window_opened_at`)。
+QUOTA_LOOKBACK = 900
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -306,6 +306,40 @@ def interval_costs(config, start_ts, now_ts):
     return costs
 
 
+def window_opened_at(config, quota_window, start_ts):
+    """この窓の読みを採ってよくなる時刻を返す。
+
+    **`last_over_time`の値は、いつ書かれたものかを持っていない。**resetの直後、
+    gaugeの書き込みとscrapeが追いつくまでの間、窓の中の刻みで引いても返るのは
+    前の窓の値である。その値を0で留めた起点と繋ぐと、**窓の頭で前の窓ぶんを
+    一気に消費した形**になり、reset直後に動いていたsessionへ丸ごと付く。
+    値の大きさからは見分けられない (窓の頭の本物の消費と同じ形をしている)。
+
+    `claude_usage_reset_timestamp_seconds`が、その読みがどの窓のものかを持って
+    いる。**前の窓のresetはこの窓の起点そのもの**なので、報告されたresetが起点
+    より後ろになった時刻から採る。
+
+    引けなければ起点をそのまま返す。**ここの失敗でクォータごと止めない。**
+    見分けが付かない区間は窓の頭の高々15分 (lookbackの長さ) で、その先は
+    どのみち新しい窓の値しか返らない。
+    """
+    opened = int(start_ts)
+    try:
+        stamped = run_range_query(config, (
+            f'max by (window) ({RESET_METRIC}{{window="{quota_window}"}})'
+        ), opened, opened + QUOTA_LOOKBACK)
+    except CostError as error:
+        print(f"claude cost: reset stamps for {quota_window}: {error}", file=sys.stderr)
+        return opened
+    # 刻みはstepの絶対境界に揃うので、最初の点は起点より前に落ちうる。**その点を
+    # 弾く必要は無い。**起点より前のサンプルはまだ前の窓のresetを報告しており、
+    # 前の窓のresetはこの窓の起点そのものなので、下の条件を満たさない。
+    for moment, _, reset_at in sorted(stamped):
+        if reset_at > start_ts:
+            return moment
+    return opened + QUOTA_LOOKBACK
+
+
 def window_quota(config, quota_window, start_ts, now_ts, measured):
     """窓のクォータ消費をsessionごとに按分する。`(session別, 帰属できない分)`。
 
@@ -335,54 +369,69 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     # `[15m]`は欠測をまたぐためのlookback。飛んでもその先で差が繋がる。
     readings = {}
     for moment, _, value in run_range_query(config, (
-        f'max by (window) (last_over_time({QUOTA_METRIC}{{window="{quota_window}"}}[15m]))'
+        f'max by (window) (last_over_time({QUOTA_METRIC}{{window="{quota_window}"}}[{QUOTA_LOOKBACK}s]))'
     ), start_ts, now_ts):
         readings[moment] = max(readings.get(moment, 0.0), value)
 
     # 両端を留める。窓は0から始まり、今の値が`measured`である。**留めないと
     # 合計は「最初のサンプルから最後のサンプルまで」になり、窓の頭と尻尾が
     # 落ちる** (実測で5Hの窓で3のうち2、7Dの窓で25のうち1)。
+    settled = window_opened_at(config, quota_window, start_ts)
     inside = [(moment, value) for moment, value in sorted(readings.items())
-              if int(start_ts) < moment < int(now_ts)]
+              if settled <= moment < int(now_ts)]
     # 窓の中に読みが1つも無いのに`measured`が0でないなら、その値は窓の外から
     # 来ている。**`measured`も`[15m]`のlookbackで引いており、resetの直後は
     # 前の窓の値を返す** (gaugeの書き込みとscrapeがresetに追いつくまで)。
-    # 0で留めた起点との差が「窓の頭で一気に消費した」形になり、**reset直後に
-    # 動いていたsessionへ前の窓ぶんが付く。**下降が無いので下の検出には掛からない。
     if measured > 0 and not inside:
         return None
     series = [(int(start_ts), 0.0)] + inside + [(int(now_ts), measured)]
-    rises = {}
+    rises, resets = {}, set()
     for (_, before), (moment, after) in zip(series, series[1:]):
         if after > before:
             rises[moment] = after - before
-        elif before - after > QUOTA_REVISION:
+        elif after * 2 < before:
             # **窓の中のresetである。**不具合対応などでproviderが窓の途中で
             # 一括リセットすることがあり、実測で1つの週に3回起きている
             # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
             # 前の分を捨てると、resetより前に動いていたsessionが行から消える。
+            #
+            # **半分より下へ落ちたことを条件にする。下げ幅では測らない。**
+            # gaugeは下方修正で1ptだけ下がることがあり、下げ幅で測ると閾値の
+            # すぐ上の修正 (84→81) が「81の消費」として足し戻され、**合計が
+            # ほぼ倍になる。**resetは0付近まで落ち、修正は水準の近くに留まる
+            # (実測: reset後は0・0・5、修正は前の値の0.92〜0.99倍)。
+            # **この規則が偽になる観測:** 前の値の半分より下へ落ちる下方修正、
+            # または半分以上で止まるreset。
+            resets.add(moment)
             if after > 0:
                 rises[moment] = after
 
     costs = interval_costs(config, start_ts, now_ts)
 
+    # **resetの時刻も境界にする。**resetが0まで落ちた時は上昇が記録されないので、
+    # 境界にしないと`previous`がreset前の目盛りに留まる。次の上昇が、**resetを
+    # またいだ区間のコスト**で割られ、reset前に終わっていたsessionへreset後の
+    # クォータが付く。
     points, unattributed, previous = {}, 0.0, int(start_ts)
-    for tick in sorted(rises):
+    for tick in sorted(set(rises) | resets):
         shares = {}
         for moment, row in costs.items():
             if previous < moment <= tick:
                 for session_id, value in row.items():
                     shares[session_id] = shares.get(session_id, 0.0) + value
+        rise = rises.get(tick, 0.0)
         total = sum(shares.values())
-        if total <= 0:
+        if not rise:
+            pass                    # 区切るだけのreset。配るものが無い
+        elif total <= 0:
             # 上昇はあるのに、その間のコストが1件も無い。**どこかへ寄せない。**
             # 他のmachineのCLIがOTelを送っていない時にここへ来るので、寄せると
             # 手元のsessionが一律に膨らむ。
-            unattributed += rises[tick]
+            unattributed += rise
         else:
             for session_id, value in shares.items():
                 points[session_id] = (
-                    points.get(session_id, 0.0) + rises[tick] * value / total)
+                    points.get(session_id, 0.0) + rise * value / total)
         previous = tick
     return points, unattributed, sum(rises.values())
 
@@ -405,7 +454,7 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
     try:
         measured = run_query(config, (
             f'max by (window) (last_over_time('
-            f'{QUOTA_METRIC}{{window="{quota_window}"}}[15m]))'
+            f'{QUOTA_METRIC}{{window="{quota_window}"}}[{QUOTA_LOOKBACK}s]))'
         ), now_ts)
         if not measured:
             return None

@@ -148,11 +148,29 @@ reading of 56%. Dropping what came before would take every session that ran
 before the reset out of the rows entirely. **Measured over 13 days the 5H window
 had none of these, across about 105 windows — it is a 7D phenomenon.**
 
-**A fall of two points or less is a downward revision and is discarded.** The
-gauge revises itself by a point now and then; adding those back would put the
-whole preceding value on the total each time (84→83 would add 83). **The rule is
-false the moment the drop sizes stop separating:** measured, they are 1, 1, 1
-against 19, 45, 73, with nothing in between.
+**A fall is a reset only if it lands below half of what it fell from.** The
+gauge also revises itself downward by a point now and then, and reading one of
+those as a reset puts the whole remaining value on the total again - 84→81 read
+as a reset reports 165%. **A reset goes to nothing; a revision stays near the
+level.** Measured, resets land on 0, 0 and 5, and revisions come to 0.92, 0.988
+and 0.989 of what they fell from. **Measuring the drop instead puts the two
+kinds a few points apart** - 1, 1, 1 against 19, 45, 73 - so a revision one
+point past the line reads as a reset.
+
+**Which window a reading belongs to comes from
+`claude_usage_reset_timestamp_seconds`, not from its value.** For as long as the
+lookback, a query inside a new window still returns the previous window's gauge:
+the write and its scrape have not caught up, and the value that comes back is
+indistinguishable from real consumption at the head of the window. Readings are
+taken from the first moment the reported reset is later than the window start -
+the previous window's reset being this window's start, that excludes exactly the
+ones that have not caught up. The stamps are read over the first fifteen minutes
+only, which is as long as a stale sample can survive.
+
+**A reset is an allocation boundary even when nothing is attributed at it.** A
+reset to zero records no rise, and without the boundary the next rise is split
+using costs from both sides of the reset - handing quota from after the reset to
+sessions that had already finished before it.
 
 **One account is assumed, here and in the cost queries.** Neither side filters
 on `user_account_uuid`, so a datasource holding two accounts would apportion one
@@ -181,8 +199,14 @@ of the 3**. `quota` becomes `null` and the cost columns stand.
 **`total` and `used_percent` are different numbers.** The first is what was
 consumed during the window; the second is what the gauge reads now, which is
 what the chip shows. A window the provider reset mid-way consumes more than the
-gauge ends up reading, and the total then passes 100%. Without a reset they
-agree.
+gauge ends up reading, and the total then passes 100%.
+
+**A downward revision separates them too, by its own size.** The rise before a
+revision is already counted and is not given back, so the total stays at what
+the gauge had reached. Measured, revisions are one point and arrive about once
+a week: the 7D window read `total 37` against a gauge of 36 the day after a
+34→33 revision. Giving the point back would mean taking it off a session that
+has already been credited with it, which is machinery for a point a week.
 
 ```sh
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
@@ -323,10 +347,10 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
 
 Each refresh makes seven instant queries — one for the names, and for each
-window two for the cost and one for the quota gauge — plus two range queries per
-twelve hours of each window, one of which fetches the cost counters unaggregated
-(62 series and 0.5 MB over a measured 20 hours). A full seven-day week is 28 of
-those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
+window two for the cost and one for the quota gauge — plus one short range query for the
+window's reset stamps and two per twelve hours of each window, one of which
+fetches the cost counters unaggregated (62 series and 0.5 MB over a measured 20
+hours). A full seven-day week is 28 of those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
 kills the helper before it can say why it gave up; the cron example allows 200
 seconds.
 
