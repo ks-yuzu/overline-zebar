@@ -586,21 +586,6 @@ class QuotaTests(unittest.TestCase):
         self.assertAlmostEqual(points["after"], 5.0)
         self.assertNotIn("stopped", points)
 
-    def test_a_fall_from_a_low_level_is_not_a_reset(self):
-        # gauge は整数なので、低い所では「半分より下へ落ちた」がほとんどの下降で
-        # 成り立つ (1→0 も 3→1 も満たす)。**reset と読むと、落ちた先がもう一度
-        # 消費として乗る。**0→3→1 なら gauge が 1 を指しているのに合計 4 になる。
-        for readings, expected in (
-            ({1500: 1.0, 2000: 0.0}, 1.0),
-            ({1500: 3.0, 2000: 1.0}, 3.0),
-            ({1500: 9.0, 2000: 4.0}, 9.0),
-        ):
-            with self.subTest(readings=readings):
-                _, _, total = self.apportion(
-                    readings, {1400: {"a": 1.0}, 1900: {"b": 1.0}},
-                    measured=min(readings.values()))
-                self.assertAlmostEqual(total, expected)
-
     def test_spend_at_the_reset_tick_is_kept_for_the_side_it_can_be_read_on(self):
         # 刻みは 5 分幅で、reset はそのどこかで起きている。**同じ刻みに載った
         # コストを両側から外すと、記録されている消費が画面では

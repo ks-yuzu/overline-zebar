@@ -35,11 +35,6 @@ QUOTA_CHUNK = 12 * 3600
 # gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
 # **同じ幅だけ、reset直後に前の窓の値が返りうる。**採る側でresetの時刻を見て落とす。
 QUOTA_LOOKBACK = 900
-# これより低い所からの下降はresetとみなさない。**gaugeは整数なので、低い所では
-# 「半分より下へ落ちた」がほとんどの下降で成り立つ** (1→0も3→1も満たす)。
-# 実測のwindow内resetは45・24・73から落ちており、ここより下からのものは無い。
-# 取り違えて失うのは高々この値ぶんである。
-RESET_FLOOR = 10
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -384,7 +379,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     for (_, before), (moment, after) in zip(series, series[1:]):
         if after > before:
             rises[moment] = after - before
-        elif after * 2 < before and before >= RESET_FLOOR:
+        elif after * 2 < before:
             # **窓の中のresetである。**不具合対応などでproviderが窓の途中で
             # 一括リセットすることがあり、実測で1つの週に3回起きている
             # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
@@ -397,10 +392,6 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
             # (実測: reset後は0・0・5、修正は前の値の0.92〜0.99倍)。
             # **この規則が偽になる観測:** 前の値の半分より下へ落ちる下方修正、
             # または半分以上で止まるreset。
-            #
-            # **低い所では比が意味を持たない。**gaugeは整数なので、1→0も3→1も
-            # 「半分より下」を満たす。実測のresetは45・24・73から落ちており、
-            # 10より下から落ちたものは1件も無い。
             resets.add(moment)
             if after > 0:
                 rises[moment] = after

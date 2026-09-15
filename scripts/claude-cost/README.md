@@ -172,11 +172,6 @@ while the value comes from one that has not: measured 60 seconds after a reset,
 one host read `0` with the new stamp and the other `18` with the old, and the
 two maxima together would have put 18 at the head of the new window.
 
-**A fall from below ten points is not read as a reset.** The gauge is an
-integer, so at low readings almost any fall lands below half of what it fell
-from - 1→0 and 3→1 both do - and reading those as resets adds the post-fall
-value a second time. Every measured in-window reset fell from 45, 24 or 73.
-
 **A reset is an allocation boundary even when nothing is attributed at it.** A
 reset to zero records no rise, and without the boundary the next rise is split
 using costs from both sides of the reset - handing quota from after the reset to
