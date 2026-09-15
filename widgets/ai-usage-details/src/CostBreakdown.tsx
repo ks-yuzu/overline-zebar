@@ -82,11 +82,8 @@ export default function CostBreakdown({
 
   return (
     <Card className="bg-background-deeper/60 min-h-0 p-2.5">
-      {/* `pr-1` matches the inset the scrolling list below carries for its
-          scrollbar, so the total ends on the same edge as the column it is the
-          total of. The figures cannot line up on their left as well: the total
-          is set larger than the rows, and the only way to share a column with
-          them would be to stop setting it larger. */}
+      {/* `pr-1` matches the gutter the scrolling list reserves below, so each
+          total ends on the same edge as the column it totals. */}
       <div className="flex items-baseline justify-between gap-2 pr-1">
         <div className="flex min-w-0 items-center gap-2">
           {/* The caption gives way, not the figures. At the narrowest panel the
@@ -104,7 +101,13 @@ export default function CostBreakdown({
               provider resets the quota mid-window on occasion, and a measured
               week consumed 199% of the limit against a final reading of 56%.
               Reading the rows against the chip would then be reading them
-              against a number they do not belong to. */}
+              against a number they do not belong to.
+
+              Only the cost total ends level with its column. Boxing these to
+              the column widths instead would align the quota too, but they are
+              set larger than the rows and a four-figure total then overflows
+              its box far enough to land on the percentage beside it - $571.32,
+              a real weekly figure, already overlaps by 3px. */}
           {quota && (
             <span className="mr-2 text-text-muted">
               {formatQuota(quota.total)}
@@ -114,7 +117,13 @@ export default function CostBreakdown({
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      {/* The gutter is reserved whether or not the list is long enough to
+          scroll, so the rows sit at the same right edge either way and the
+          header can be inset to meet them. Padding alone does not do it: the
+          scrollbar takes its 4px out of the content box only while it is
+          showing, which moved the rows away from the total under them exactly
+          when the card had enough rows to want the comparison. */}
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         {/* Quota with no spend beside it is still something to show: a window
             can have moved while every session that moved it went unrecorded,
             and "nothing spent" would then contradict the reading above. */}
