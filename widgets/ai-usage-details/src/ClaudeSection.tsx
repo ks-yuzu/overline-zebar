@@ -166,12 +166,12 @@ export default function ClaudeSection({
        column here is the same window as the column above it. */
     <div className="grid min-h-0 grid-cols-2 gap-2">
       <CostBreakdown
-        label="5H by Session"
+        label="5H Quota and Cost by Session"
         status={costStatus}
         window={cost?.windows.session}
       />
       <CostBreakdown
-        label="7D by Session"
+        label="7D Quota and Cost by Session"
         status={costStatus}
         window={cost?.windows.week}
       />

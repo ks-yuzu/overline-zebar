@@ -27,6 +27,18 @@ function share(cost: number, total: number) {
 }
 
 /**
+ * The two figure columns, at a width that does not depend on the figures.
+ *
+ * Sized to their widest reading rather than their content: `100.0%` and a
+ * five-digit total. Left to size themselves, a row's quota lands wherever the
+ * cost beside it happens to end - measured across the amounts on screen, that
+ * moved the percentages by 43px between rows of the same card, which reads as
+ * a ragged column rather than as a number.
+ */
+const QUOTA_COLUMN = 'w-12 shrink-0 text-right text-xs tabular-nums';
+const COST_COLUMN = 'w-[4.5rem] shrink-0 text-right text-xs tabular-nums';
+
+/**
  * One window's spend, session by session.
  *
  * Every session that spent anything is here - the helper caps nothing - so
@@ -122,11 +134,11 @@ export default function CostBreakdown({
                       {name}
                     </span>
                     {quota && (
-                      <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                      <span className={`${QUOTA_COLUMN} text-text-muted`}>
                         {formatQuota(session.quota ?? 0)}
                       </span>
                     )}
-                    <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                    <span className={`${COST_COLUMN} text-text-muted`}>
                       {formatCost(session.cost)}
                     </span>
                   </div>
@@ -149,11 +161,11 @@ export default function CostBreakdown({
                     Unresolved ({unresolved.sessions})
                   </span>
                   {quota && (
-                    <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                    <span className={`${QUOTA_COLUMN} text-text-muted`}>
                       {formatQuota(unresolved.quota ?? 0)}
                     </span>
                   )}
-                  <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                  <span className={`${COST_COLUMN} text-text-muted`}>
                     {formatCost(unresolved.cost)}
                   </span>
                 </div>
@@ -169,10 +181,10 @@ export default function CostBreakdown({
                 <span className="min-w-0 flex-1 truncate text-xs italic text-text-muted">
                   No spend recorded
                 </span>
-                <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                <span className={`${QUOTA_COLUMN} text-text-muted`}>
                   {formatQuota(quota.unattributed)}
                 </span>
-                <span className="shrink-0 text-xs tabular-nums text-text-muted">
+                <span className={`${COST_COLUMN} text-text-muted`}>
                   &mdash;
                 </span>
               </li>
