@@ -27,16 +27,22 @@ function share(cost: number, total: number) {
 }
 
 /**
- * The two figure columns, at a width that does not depend on the figures.
+ * The two figure columns, at a width the figures cannot move.
  *
- * Sized to their widest reading rather than their content: `100.0%` and a
- * five-digit total. Left to size themselves, a row's quota lands wherever the
- * cost beside it happens to end - measured across the amounts on screen, that
- * moved the percentages by 43px between rows of the same card, which reads as
- * a ragged column rather than as a number.
+ * Left to size themselves, a row's quota lands wherever the cost beside it
+ * happens to end - across the amounts on screen that moved the percentages by
+ * 43px within one card, which reads as a ragged column rather than as a number.
+ *
+ * A floor rather than a fixed width, set just past what the readings actually
+ * reach (measured: 7.4% and $127.00, against 36px and 50px of glyph). Every
+ * ordinary row therefore lands on the floor and lines up, and the rare wider
+ * one - a quota past 100% in a week the provider reset, a four-figure session -
+ * takes the width it needs instead of being cut. **Sizing to the widest
+ * conceivable reading instead costs every row 34px of name to keep one row
+ * aligned that may never arrive.**
  */
-const QUOTA_COLUMN = 'w-12 shrink-0 text-right text-xs tabular-nums';
-const COST_COLUMN = 'w-[4.5rem] shrink-0 text-right text-xs tabular-nums';
+const QUOTA_COLUMN = 'min-w-[2.5rem] shrink-0 text-right text-xs tabular-nums';
+const COST_COLUMN = 'min-w-[3.5rem] shrink-0 text-right text-xs tabular-nums';
 
 /**
  * One window's spend, session by session.
@@ -76,7 +82,12 @@ export default function CostBreakdown({
 
   return (
     <Card className="bg-background-deeper/60 min-h-0 p-2.5">
-      <div className="flex items-baseline justify-between gap-2">
+      {/* `pr-1` matches the inset the scrolling list below carries for its
+          scrollbar, so the total ends on the same edge as the column it is the
+          total of. The figures cannot line up on their left as well: the total
+          is set larger than the rows, and the only way to share a column with
+          them would be to stop setting it larger. */}
+      <div className="flex items-baseline justify-between gap-2 pr-1">
         <div className="flex min-w-0 items-center gap-2">
           {/* The caption gives way, not the figures. At the narrowest panel the
               bar allows - 1366px, so a 307px card - a stale mark beside a
