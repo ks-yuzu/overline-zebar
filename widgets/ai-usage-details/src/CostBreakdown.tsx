@@ -33,16 +33,15 @@ function share(cost: number, total: number) {
  * happens to end - across the amounts on screen that moved the percentages by
  * 43px within one card, which reads as a ragged column rather than as a number.
  *
- * A floor rather than a fixed width, set just past what the readings actually
- * reach (measured: 7.4% and $127.00, against 36px and 50px of glyph). Every
- * ordinary row therefore lands on the floor and lines up, and the rare wider
- * one - a quota past 100% in a week the provider reset, a four-figure session -
- * takes the width it needs instead of being cut. **Sizing to the widest
- * conceivable reading instead costs every row 34px of name to keep one row
- * aligned that may never arrive.**
+ * A floor rather than a fixed width. It is set by the totals in the header
+ * rather than by the rows, because the totals use these same columns and are
+ * the largest figures either will hold: a quota past 100% in a week the
+ * provider reset (43px) and a four-figure week ($1,246.03, 65px). Every
+ * ordinary figure therefore lands on the floor and lines up with the total
+ * above it, and anything wider takes the room it needs instead of being cut.
  */
-const QUOTA_COLUMN = 'min-w-[2.5rem] shrink-0 text-right text-xs tabular-nums';
-const COST_COLUMN = 'min-w-[3.5rem] shrink-0 text-right text-xs tabular-nums';
+const QUOTA_COLUMN = 'min-w-[2.75rem] shrink-0 text-right text-xs tabular-nums';
+const COST_COLUMN = 'min-w-[4.25rem] shrink-0 text-right text-xs tabular-nums';
 
 /**
  * One window's spend, session by session.
@@ -82,9 +81,11 @@ export default function CostBreakdown({
 
   return (
     <Card className="bg-background-deeper/60 min-h-0 p-2.5">
-      {/* `pr-1` matches the gutter the scrolling list reserves below, so each
-          total ends on the same edge as the column it totals. */}
-      <div className="flex items-baseline justify-between gap-2 pr-1">
+      {/* `pr-2` is the gutter the list below reserves plus the padding its
+          rows carry, which together are what hold a row's figures off the
+          card's edge. The totals sit in the same columns as those figures, so
+          each one ends where the column it totals ends. */}
+      <div className="flex items-baseline justify-between gap-2 pr-2">
         <div className="flex min-w-0 items-center gap-2">
           {/* The caption gives way, not the figures. At the narrowest panel the
               bar allows - 1366px, so a 307px card - a stale mark beside a
@@ -95,26 +96,26 @@ export default function CostBreakdown({
           </p>
           <StaleMark status={status} />
         </div>
-        <p className="shrink-0 text-base font-semibold tabular-nums">
+        {/* The totals are set at the rows' size, in the rows' columns, so that
+            both of them end level with the figures they are the total of. It
+            is weight and not size that tells them apart, because size would
+            have to come out of the columns: at a larger size a four-figure
+            total runs past its column and lands on the percentage beside it -
+            $571.32, a real weekly figure, already overlaps by 3px - and
+            widening the columns to fit takes the room from every session name
+            below. */}
+        <div className="flex shrink-0 items-baseline gap-2 font-bold">
           {/* What the rows add up to: the quota consumed during this window.
               Not the gauge's current reading and not the chip above - the
               provider resets the quota mid-window on occasion, and a measured
               week consumed 199% of the limit against a final reading of 56%.
               Reading the rows against the chip would then be reading them
-              against a number they do not belong to.
-
-              Only the cost total ends level with its column. Boxing these to
-              the column widths instead would align the quota too, but they are
-              set larger than the rows and a four-figure total then overflows
-              its box far enough to land on the percentage beside it - $571.32,
-              a real weekly figure, already overlaps by 3px. */}
+              against a number they do not belong to. */}
           {quota && (
-            <span className="mr-2 text-text-muted">
-              {formatQuota(quota.total)}
-            </span>
+            <span className={QUOTA_COLUMN}>{formatQuota(quota.total)}</span>
           )}
-          {formatCost(total)}
-        </p>
+          <span className={COST_COLUMN}>{formatCost(total)}</span>
+        </div>
       </div>
 
       {/* The gutter is reserved whether or not the list is long enough to
