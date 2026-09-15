@@ -70,18 +70,180 @@ is invisible in a week where nothing spans the boundary, because then `unless`
 removes nothing — it would first appear in production at a weekly reset. The
 addition is done in the helper.
 
+## How the quota share is computed
+
+The same window's `claude_usage_used_percent`, split across the sessions that
+moved it. **Cost cannot stand in for this.** In one measured five-hour window
+the biggest spender held 10.9% of the limit while the second held 26.9%: the
+dollars and the tokens agree with each other and the quota agrees with neither,
+so no single rate for the window can produce both columns.
+
+```text
+boundaries:  window start → each moment the gauge rose → now
+each rise is split by the share of cost since the boundary before it
+```
+
+**The boundaries are the gauge's own ticks, not a fixed grid.** The gauge reports
+whole percent only, so a five-minute grid leaves buckets holding cost and no
+rise — 35% of a window's spend, measured. That spend reaches no row at all,
+while the rise it caused turns up in a later bucket and goes whole to whoever
+was running then.
+
+**Both ends of the window are pinned**: zero at the start, the measured reading
+at now. Without that the total is only "first sample to last sample", which
+loses the window's head and tail (2 of 3 in a measured five-hour window, 1 of 25
+in the week). **What makes the rows add up to the gauge is the pinning, not the
+precision of the queries.**
+
+**The increments are not built in PromQL — neither side of the split.** For the
+gauge, `delta` and `increase` both extrapolate, so neighbouring differences do
+not sum to the difference of the endpoints. For the cost, a series that starts
+inside an interval loses its first exported sample, because Prometheus never
+sees the implicit zero a counter starts from — the same loss `window_cost`
+repairs with its addback, except that here **what is lost is not an amount but a
+share, so it passes straight to whoever else was running in that interval.**
+Measured over 20 hours that was 11.6% of the total and −14% to +60% per session.
+Both are fetched raw and subtracted in the helper.
+
+**A counter that falls is a resumed session, and what is there after the fall is
+this window's spend.** Resuming restarts the counter; five sessions in a measured
+week did.
+
+The balance a session carried into the window needs no special handling here. A
+range query's steps align to the step boundary rather than to `--from`, so the
+first reading of a series that already existed lands at or before the window
+start, and the split only looks at intervals after it. `window_cost` has to
+suppress that balance explicitly because it counts the whole window in one range
+and has no such edge to hide behind.
+
+**Read with `max by (window)`, not filtered to one instance.** Several hosts
+report the same account's figure — two of them measured, agreeing exactly at
+177.0 over 24 hours — and picking one loses every rise that happened while that
+host was down.
+
+**Range queries are split into twelve-hour spans.** `gcx` raises the step on its
+own when a range is long: 300s holds to 12h (145 points), 18h becomes 600s, and
+a 7d range in one call becomes 900s. **Nothing in the response says the step
+changed.** A full week is 28 calls.
+
+**None of it goes in a subquery.** `(cost share * quota rise)[6h:5m]` and longer
+returns zero **without an error**; `[1h:5m]` is correct, and either half alone is
+correct even at `[24h:5m]`. Only the product of two metrics over a long subquery
+breaks, and it breaks silently.
+
+**A reading that only predates the window gets no quota either.** `measured` is
+read with the same fifteen-minute lookback, so just after a reset — before the
+gauge's write and its scrape have caught up — it still carries the previous
+window's figure. Pinned against zero at the start that reads as a single huge
+rise at the head of the window, charging the previous window to whichever
+sessions happened to be running just after the reset, and **no fall occurs, so
+the check below cannot see it.** When nothing inside the window has been read
+and `measured` is not zero, the split is withheld. A window that has simply not
+been used yet reads zero and still gets its (empty) split.
+
+**A reset inside the window is added back.** The provider clears the quota
+mid-window on occasion, for incident remediation and the like: one measured week
+had three (45→0, 24→5, 73→0) and consumed 199% of the limit against a final
+reading of 56%. Dropping what came before would take every session that ran
+before the reset out of the rows entirely. **Measured over 13 days the 5H window
+had none of these, across about 105 windows — it is a 7D phenomenon.**
+
+**A fall of two points or less is a downward revision and is discarded.** The
+gauge revises itself by a point now and then; adding those back would put the
+whole preceding value on the total each time (84→83 would add 83). **The rule is
+false the moment the drop sizes stop separating:** measured, they are 1, 1, 1
+against 19, 45, 73, with nothing in between.
+
+**One account is assumed, here and in the cost queries.** Neither side filters
+on `user_account_uuid`, so a datasource holding two accounts would apportion one
+account's gauge across both accounts' costs. **That rule is false the moment
+`count(count by (user_account_uuid) (claude_usage_used_percent))` returns more
+than one** — measured at 1 for both metrics across the 20 days Prometheus keeps.
+
+**A window whose start is not a reset gets no quota at all.** The split rests
+entirely on the window having begun at zero. When no reset can be read and the
+start is just one length back from now, the balance sitting there arrives as a
+rise just after the start and goes whole to whoever was running — up to the
+entire window on one session. `source` says which windows those are; the cost
+columns still stand, because a window taken slightly wrong only moves the
+amounts.
+
+**A quota that cannot be read does not fail the cost.** The range queries are 28
+of the week's calls against the cost side's 3; letting them take the cache down
+to its previous copy would let **the failure rate of the 28 decide the freshness
+of the 3**. `quota` becomes `null` and the cost columns stand.
+
+### How far to trust it
+
+**The total is exact.** Rows plus `unresolved` plus `unattributed` equals
+`quota.total` — zero difference in both windows, measured.
+
+**`total` and `used_percent` are different numbers.** The first is what was
+consumed during the window; the second is what the gauge reads now, which is
+what the chip shows. A window the provider reset mid-way consumes more than the
+gauge ends up reading, and the total then passes 100%. Without a reset they
+agree.
+
+```sh
+CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
+import json, sys
+for name, w in json.load(sys.stdin)["windows"].items():
+    q = w.get("quota")
+    if not q: print(name, "quota unavailable"); continue
+    parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
+    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs total {q[\"total\"]:.2f}"
+          f"  (gauge {q[\"used_percent\"]:.2f})")'
+```
+
+**A single row is an approximation.** Moving the spacing from five minutes to
+fifteen moves a row by about a tenth of the window's total, and **going finer
+does not converge** (21% from 60s to 120s, 12% to 300s, 7% to 600s): 24 hours
+hold only 69 rises, and a fine grid just hands each one whole to whoever moved
+in that minute.
+
+**The direction of the attribution has been checked.** Taking stretches where
+exactly one session ran, from 60-second raw data: stretches over ten minutes
+land 90–100% on that session at any spacing from 5 to 15 minutes. Shorter ones
+do not, having no room to be separated. Shifting the quota by one bucket strands
+24–29 points in stretches with no cost and moves the split by 20–24%; unshifted
+it strands none.
+
+**Spend during a gap in a series lands where the series comes back.** A session
+that goes quiet drops out of the step grid and returns carrying what it did on
+returning, which is where that work happened. If ingestion itself dropped
+samples while work continued, the same shape would place that work later than it
+happened. Measured over 24 hours: one gap with growth across it, of the harmless
+kind.
+
+**Do not trust the ratio of dollars to quota.** Models explain part of it — a
+mostly-Fable session measured $1.83/point against $2.5–6.4 for Opus ones — but
+two sessions with near-identical token counts, token mixes and dollar amounts
+came out 2.3× apart in quota, and **whether that remainder is real or an error
+in the split cannot be told from this data.** Integer rounding was ruled out
+(moving to tick boundaries shifts a row by at most 2.3 points) and so was a time
+offset (±5 minutes is the optimum, ±10 is worse).
+
+**`unattributed` is not `unresolved`.** `unresolved` is spend whose session is
+known but unnamed, and it goes away once the emitter runs on the other machine.
+`unattributed` is quota from a stretch where nothing reported spend at all, and
+naming sessions will not touch it. **Both are reported**, or a row that
+exists goes unshown with nothing to say so. What adds up exactly is the output;
+the panel rounds each row to one decimal, so the figures on screen need not sum
+to the figure on screen above them.
+
 ## Output
 
 ```json
 {"generated_at":"2026-09-14T00:07:35+09:00","currency":"USD",
  "windows":{
    "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
-              "sessions":[…],"unresolved":{…}},
+              "sessions":[…],"unresolved":{…},"quota":{…}},
    "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
            "sessions":[{"session_name":"#46","custom_title":"#46",
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
-                        "session_id":"…","cost":123.92}],
-           "unresolved":{"cost":451.61,"sessions":11}}}}
+                        "session_id":"…","cost":123.92,"quota":8.64}],
+           "unresolved":{"cost":451.61,"sessions":11,"quota":3.2},
+           "quota":{"used_percent":25.0,"total":25.0,"unattributed":1.0}}}}
 ```
 
 **Every label the emitter publishes is carried through**, so the reader can
@@ -160,9 +322,13 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 | `CLAUDE_COST_TIMEOUT` | `30` seconds per query |
 | `CLAUDE_COST_CACHE_TTL` | `240` seconds |
 
-Each refresh makes five queries — one for the names, two for each window — so
-an outer timeout has to cover five times `CLAUDE_COST_TIMEOUT` plus start-up, or
-it kills the helper before it can say why it gave up.
+Each refresh makes seven instant queries — one for the names, and for each
+window two for the cost and one for the quota gauge — plus two range queries per
+twelve hours of each window, one of which fetches the cost counters unaggregated
+(62 series and 0.5 MB over a measured 20 hours). A full seven-day week is 28 of
+those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
+kills the helper before it can say why it gave up; the cron example allows 200
+seconds.
 
 `gcx` must be authenticated for the user that runs this. Browser OAuth cannot
 carry a cron job — its refresh token expires in a month and the job then stops

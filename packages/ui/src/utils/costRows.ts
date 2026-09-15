@@ -2,6 +2,12 @@
 export type CostSession = {
   session_id: string;
   cost: number;
+  /**
+   * Percent of the plan limit this session took, apportioned from the quota
+   * gauge. Absent when the helper could not read the gauge, and absent from
+   * every cache written before the helper reported it at all.
+   */
+  quota?: number;
   session_name?: string;
   custom_title?: string;
   ai_title?: string;
@@ -60,4 +66,22 @@ export function formatCost(cost: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+/**
+ * `26.9%` - the share of the plan limit, not of the window.
+ *
+ * The rows add up to the window's own reading rather than to 100, which is
+ * what makes a row comparable with the gauge at the top of the panel: a
+ * window at 80% whose largest row says 26.9% means that session took a third
+ * of what has been used, and 26.9 of the 100 available.
+ *
+ * One decimal, because the gauge underneath reports whole percent only. A
+ * second would be place value the reading does not carry.
+ */
+export function formatQuota(quota: number): string {
+  return `${quota.toLocaleString('en-US', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`;
 }
