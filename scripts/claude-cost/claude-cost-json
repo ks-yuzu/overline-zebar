@@ -3,6 +3,7 @@
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 import subprocess
 import sys
@@ -118,6 +119,21 @@ def window_bounds(payload, key, length, now):
     return reset - dt.timedelta(seconds=length), reset, source
 
 
+def finite(raw):
+    """数として読める値だけを返す。**`NaN`と`Inf`は読めなかった側へ送る。**
+
+    Prometheusは`"NaN"`を返すことがあり、`float()`はそれを受ける。通すと
+    `json.dumps`が裸の`NaN`を書き、**JSONとして壊れたcacheが前の正しいcacheを
+    原子的に置き換える。**widgetの`JSON.parse`はそれを読めないので、
+    クォータだけでなくコスト列まで消える (docsに書いた退避経路を通らない)。
+    ここで弾けば、引けなかった時と同じく前回のcacheがそのまま出る。
+    """
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(f"not a finite number: {raw!r}")
+    return value
+
+
 def parse_vector(payload):
     """instant queryの応答をlabel setごとの値にする。
 
@@ -135,7 +151,7 @@ def parse_vector(payload):
     values = []
     for item in result:
         try:
-            values.append((item["metric"], float(item["value"][1])))
+            values.append((item["metric"], finite(item["value"][1])))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
     return values
@@ -219,7 +235,7 @@ def parse_matrix(payload):
     for item in result:
         try:
             for moment, value in item["values"]:
-                samples.append((int(moment), item["metric"], float(value)))
+                samples.append((int(moment), item["metric"], finite(value)))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
     return samples
@@ -632,8 +648,12 @@ def main(argv):
         try:
             # 整形しない。widgetが60秒ごとに読み直すため、indentと\uXXXXの
             # escapeがそのまま転送量になる (題は日本語で、escapeで19%増える)。
+            # **`allow_nan=False`は最後の砦である。**ここで落ちればcacheは
+            # 触られず、前回の正しい内容がそのまま読まれ続ける。書いてしまうと
+            # 読む側には直す手段が無い。
             atomic_write(cache, json.dumps(
-                output, separators=(",", ":"), ensure_ascii=False).encode(), 0o600)
+                output, separators=(",", ":"), ensure_ascii=False,
+                allow_nan=False).encode(), 0o600)
         except OSError as error:
             print(f"claude cost: cannot write {cache}: {error}", file=sys.stderr)
             return 73

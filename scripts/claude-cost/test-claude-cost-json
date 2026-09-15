@@ -146,6 +146,23 @@ class ParseTests(unittest.TestCase):
     def test_an_empty_vector_is_an_answer(self):
         self.assertEqual(cost.parse_vector(vector([])), [])
 
+    def test_a_sample_that_is_not_a_finite_number_is_not_a_reading(self):
+        # Prometheus は `"NaN"` を返すことがあり、`float()` はそれを受ける。
+        # 通すと `json.dumps` が裸の `NaN` を書き、**JSON として壊れた cache が
+        # 前の正しい cache を原子的に置き換える。**widget の `JSON.parse` は
+        # それを読めないので、クォータだけでなくコスト列まで消える。
+        for raw in ("NaN", "Inf", "-Inf"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(cost.CostError):
+                    cost.parse_vector(vector([({"window": "session"}, raw)]))
+                with self.assertRaises(cost.CostError):
+                    cost.parse_matrix(json.dumps({
+                        "status": "success",
+                        "data": {"resultType": "matrix", "result": [
+                            {"metric": {"session_id": "s1"},
+                             "values": [[1789000000, raw]]}]},
+                    }))
+
 
 class FailureDetailTests(unittest.TestCase):
     """gcx は失敗の詳細を stdout へ書き、stderr は空のまま終了する (実測)。"""
@@ -798,6 +815,19 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(printed, previous)
             self.assertEqual((Path(root) / "cost.json").read_text(), previous)
             self.assertIn("claude cost:", complaint)
+
+    def test_a_figure_that_is_not_json_does_not_replace_the_cache(self):
+        # 最後の砦。**書けてしまうと、読む側には直す手段が無い** — `JSON.parse`
+        # が読めない cache が、前の正しい cache を原子的に置き換える。ここで
+        # 落ちれば cache は触られず、前回の内容がそのまま読まれ続ける。
+        with tempfile.TemporaryDirectory() as root:
+            previous = '{"generated_at":"2026-09-01T00:00:00+09:00","total":1}'
+            (Path(root) / "cost.json").write_text(previous)
+            with mock.patch.object(cost, "build_output",
+                                   return_value={"total": float("nan")}):
+                with self.assertRaises(ValueError):
+                    self.helper(root, ["--force"])
+            self.assertEqual((Path(root) / "cost.json").read_text(), previous)
 
     def test_a_failed_query_without_a_previous_reading_says_so(self):
         with tempfile.TemporaryDirectory() as root:

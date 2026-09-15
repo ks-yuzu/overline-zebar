@@ -545,6 +545,12 @@ emitterは`session_id`以外のlabelを任意にしているため、cwdが`/`�
 できるが、awareな現在時刻と比べた瞬間にTypeErrorになり、**cacheを読めなかった時の
 退避経路を通らずに実行ごと落ちる。**窓の側のfallbackに載せる。
 
+**有限でない値は読めなかった値として扱う。**Prometheusは`"NaN"`を返すことがあり、
+`float()`はそれを受ける。通すと`json.dumps`が裸の`NaN`を書き、**前の正しいcacheを
+置き換えたcacheがJSONでなくなる。**widgetのparserはfileごと拒むので、クォータだけで
+なくコスト列も消える (下の退避経路を通らない)。parserで弾いて下の経路へ送り、
+書き出しの`allow_nan=False`を最後の砦にする。**書いてしまうと読む側に直す手段が無い。**
+
 **引けなかった時は前回のcacheをそのまま返す。**`generated_at`が動かないので、
 widgetのstale判定がそのまま効く。半分だけの答えは公開しない。
 

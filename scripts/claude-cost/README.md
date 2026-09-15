@@ -338,6 +338,14 @@ through.
 Nothing says which is right, and showing one session under another's name is
 worse than showing it as unresolved.
 
+**A sample that is not a finite number is treated as unreadable.** Prometheus
+returns `"NaN"`, and `float()` takes it. Carried through, `json.dumps` writes a
+bare `NaN` and the cache that replaces the last good one is not JSON any more:
+the widget's parser rejects the whole file, so the spend columns go too instead
+of the quota alone. Refusing it at the parser puts it on the path below instead,
+and `allow_nan=False` on the write is the last guard - failing there leaves the
+previous cache in place, which is the one thing the reader cannot repair.
+
 **A failed query keeps the previous reading.** The cache is reprinted unchanged,
 so `generated_at` stops moving and the widget's staleness rules see it. Nothing
 is published from a half-answer.
