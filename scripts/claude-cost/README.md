@@ -57,8 +57,9 @@ spend.
 counter, and everything before the restart would be lost — five sessions in the
 measured week had one.
 
-**All three queries are evaluated at one instant** — both cost queries and the
-one that reads the names. `--time` pins them to the moment the helper captured;
+**All four kinds of query are evaluated at one instant** — the two for cost, the
+one that reads the names, and the one that reads the quota gauge. `--time` pins
+them to the moment the helper captured;
 without it each is evaluated at whatever `gcx` reaches the server, so the
 ranges start after the intended boundary, and a rename landing between two
 queries would attach one moment's labels to another moment's costs.
@@ -234,10 +235,13 @@ entire window on one session. `source` says which windows those are; the cost
 columns still stand, because a window taken slightly wrong only moves the
 amounts.
 
-**A quota that cannot be read does not fail the cost.** The range queries are 28
-of the week's calls against the cost side's 3; letting them take the cache down
-to its previous copy would let **the failure rate of the 28 decide the freshness
-of the 3**. `quota` becomes `null` and the cost columns stand.
+**A quota that cannot be read does not fail the cost.** Splitting the quota
+takes 28 range queries for a full week — fourteen for the gauge in twelve-hour
+spans, fourteen for the cost counters over the same spans — against the two
+instant queries per window that produce the cost column itself, plus the one
+that reads the names. Letting those 28 take the cache down to its previous copy
+would let **the failure rate of the 28 decide the freshness of the 3**. `quota`
+becomes `null` and the cost columns stand.
 
 ### How far to trust it
 

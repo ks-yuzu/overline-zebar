@@ -175,9 +175,9 @@ def sample_pair(raw):
 
     **strを組として扱わない。**strも添字と展開ができるので、`"1789416600"`は
     例外を出さずに`7.0`という**もっともらしいgaugeの読み**になる。この族の他の形
-    (dict、None、長さ1、3要素) はすべて`CostError`へ倒れ、**クォータが出ない**と
+    (dict、None、長さ1、3要素) はすべて`CostError`になり、**クォータが出ない**と
     いう画面から見える形で失敗する。**strだけが「読めなかった」ではなく
-    「別の答え」へ倒れ、捏造した数字で新しいcacheを公開する。**
+    「別の答え」という結果になり、捏造した数字で新しいcacheを公開する。**
     """
     if not isinstance(raw, list) or len(raw) != 2:
         raise CostError(f"cannot read a sample: {raw!r:.80}")
@@ -201,7 +201,7 @@ def parse_label_sets(payload):
     **値を使わない問い合わせに、値が読めることを要求しない。**
     `claude_session_info`は常に1を出し、読む側はlabelしか見ない。その1が
     `NaN`で届いた時に`CostError`にすると、名前を引く1本の失敗で
-    **その回のコストごと前回のcacheへ落ちる。**値がJSONへ出ない経路では、
+    **その回のコストごと前回のcacheへフォールバックする。**値がJSONへ出ない経路では、
     値の壊れ方は害を持たない。
     """
     return [item["metric"] for item in query_result(payload, "vector")]
@@ -339,7 +339,7 @@ def interval_costs(config, start_ts, now_ts):
     """`{区間の時刻: {session_id: その区間の消費}}`。生counterの差で出す。
 
     **`increase()`を区間ごとに並べない。**系列がその区間の中で始まると、
-    Prometheusは暗黙の0を見ないため最初のexportが落ちる。`window_cost`が
+    Prometheusは暗黙の0を見ないため最初のexportが欠落する。`window_cost`が
     `first_over_time ... unless`で足し戻しているのと同じ欠けだが、こちらは
     **落ちるのが額ではなく取り分なので、その区間に居た他のsessionへそのまま
     回る。**実測 (20h) で合計の11.6%、sessionごとでは-14%〜+60%ずれた。
@@ -416,7 +416,7 @@ def window_quota(config, quota_window, start_ts, now_ts, reset_ts, measured):
     **境界は1ptごとではない。**書き込みが5分に1回なので、1つの境界が2pt以上を
     まとめて運ぶ (実測7日で、増加量495ptのうち304pt=61%が2pt以上の増加)。
     **この規則が偽になる観測:** 1セッションだけが走った区間で、その区間の上昇が
-    そのsessionに付く割合。固定幅との比較は経緯 (task #106) にある。
+    そのsessionへ帰属する割合。固定幅との比較は経緯 (task #106) にある。
 
     返す合計は**この窓で実際に使った量**で、`measured` (gaugeの現在値) とは
     別物である。窓の中でresetが起きた窓では前者が大きくなり、100%を超える
@@ -459,12 +459,12 @@ def window_quota(config, quota_window, start_ts, now_ts, reset_ts, measured):
             # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
             # 前の分を捨てると、resetより前に動いていたsessionが行から消える。
             #
-            # **半分より下へ落ちたことを条件にする。下げ幅では測らない。**
+            # **半分より下まで下がったことを条件にする。下げ幅では測らない。**
             # gaugeは下方修正で1ptだけ下がることがあり、下げ幅で測ると閾値の
             # すぐ上の修正 (84→81) が「81の消費」として足し戻され、**合計が
             # ほぼ倍になる。**resetは0付近まで落ち、修正は水準の近くに留まる
             # (実測: reset後は0・0・5、修正は前の値の0.92〜0.99倍)。
-            # **この規則が偽になる観測:** 前の値の半分より下へ落ちる下方修正、
+            # **この規則が偽になる観測:** 前の値の半分より下まで下がる下方修正、
             # または半分以上で止まるreset。
             resets.add(moment)
             if after > 0:
@@ -511,9 +511,11 @@ def window_quota(config, quota_window, start_ts, now_ts, reset_ts, measured):
 def quota_for(config, quota_window, start_ts, now_ts, reset_ts, source):
     """`(session別, 帰属できない分, {used_percent, total})`。出せなければ`None`。
 
-    **クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは
-    7日で28本あり、cost側は3本である。ここの失敗でcacheごと前回の写しへ落ちると、
-    **28本ある側の失敗率が、3本しかない側の鮮度を決める。**
+    **クォータが引けないことをcost全体の失敗にしない。**按分に要るrange queryは、
+    満了した7Dの窓で**28本** (gaugeで14本、同じ刻みのコストで14本)。一方**cost列
+    そのものは窓あたりinstant query 2本**と、名前を引く1本だけである。ここの失敗で
+    cacheごと前回の内容へフォールバックすると、**28本ある側の失敗率が、3本しか
+    ない側の鮮度を決める。**
     `used_percent`が`None`であることが、按分が無いことを読む側へ伝える。
     """
     # 按分は「窓の起点で0だった」ことに全面的に乗っている。resetを1つも読めず
