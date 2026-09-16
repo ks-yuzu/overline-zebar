@@ -146,6 +146,18 @@ class ParseTests(unittest.TestCase):
     def test_an_empty_vector_is_an_answer(self):
         self.assertEqual(cost.parse_vector(vector([])), [])
 
+    def test_a_label_only_query_does_not_require_a_readable_value(self):
+        # `claude_session_info` は常に 1 を出し、読む側は label しか見ない。
+        # **その 1 が `NaN` で届いた時に落とすと、名前を引く 1 本の失敗で
+        # その回のコストごと前回の cache へ落ちる。**値が JSON へ出ない経路では、
+        # 値の壊れ方は害を持たない。
+        payload = vector([({"session_id": "s1", "project": "p"}, "NaN")])
+        self.assertEqual(cost.parse_label_sets(payload),
+                         [{"session_id": "s1", "project": "p"}])
+        # 形が合わない応答は、値を見ない経路でも 0 件ではなく例外にする。
+        with self.assertRaises(cost.CostError):
+            cost.parse_label_sets('{"status":"error"}')
+
     def test_a_sample_that_is_not_a_finite_number_is_not_a_reading(self):
         # Prometheus は `"NaN"` を返すことがあり、`float()` はそれを受ける。
         # 通すと `json.dumps` が裸の `NaN` を書き、**JSON として壊れた cache が
@@ -291,14 +303,16 @@ class RowTests(unittest.TestCase):
 
 
 class SessionInfoTests(unittest.TestCase):
-    def info_from(self, samples):
-        with mock.patch.object(cost, "run_query", return_value=samples):
+    def info_from(self, label_sets):
+        # **値は渡さない。**`session_info` は label しか見ないので、helper も
+        # 値を読まない経路 (`run_label_query`) で引く。
+        with mock.patch.object(cost, "run_label_query", return_value=label_sets):
             return cost.session_info({})
 
     def test_labels_are_copied_from_the_series(self):
-        found = self.info_from([({"session_id": "s1", "session_name": "#1 一番",
-                                  "custom_title": "#1 一番", "ai_title": "生成された題",
-                                  "task_id": "1", "project": "p", "cwd": "/home/u/p"}, 1.0)])
+        found = self.info_from([{"session_id": "s1", "session_name": "#1 一番",
+                                 "custom_title": "#1 一番", "ai_title": "生成された題",
+                                 "task_id": "1", "project": "p", "cwd": "/home/u/p"}])
         self.assertEqual(found["s1"], {"session_name": "#1 一番", "custom_title": "#1 一番",
                                        "ai_title": "生成された題", "task_id": "1",
                                        "project": "p", "cwd": "/home/u/p"})
@@ -306,16 +320,17 @@ class SessionInfoTests(unittest.TestCase):
     def test_collector_labels_are_not_copied(self):
         # session の属性ではなく、収集側の設定で変わる。読む側の絞り込みの
         # 語彙に入れると、scrape の設定変更で黙って消える。
-        found = self.info_from([({"session_id": "s1", "project": "p", "instance": "host",
-                                  "job": "integrations/node_exporter",
-                                  "agent_hostname": "box", "__name__": "claude_session_info"}, 1.0)])
+        found = self.info_from([{"session_id": "s1", "project": "p", "instance": "host",
+                                 "job": "integrations/node_exporter",
+                                 "agent_hostname": "box",
+                                 "__name__": "claude_session_info"}])
         self.assertEqual(found["s1"], {"project": "p"})
 
     def test_two_series_for_one_session_yield_no_name(self):
         # どちらが正かを決める情報が無い。名前を付けずに「不明」へ送る方が、
         # 別の session の名前を出すより軽い。
-        found = self.info_from([({"session_id": "s1", "session_name": "古い"}, 1.0),
-                                ({"session_id": "s1", "session_name": "新しい"}, 1.0)])
+        found = self.info_from([{"session_id": "s1", "session_name": "古い"},
+                                {"session_id": "s1", "session_name": "新しい"}])
         self.assertIsNone(found["s1"])
         rows, unresolved = cost.build_rows({"s1": 3.0}, {"s1": 2.0}, found)
         self.assertEqual(rows, [])
@@ -382,17 +397,20 @@ class OutputTests(unittest.TestCase):
         def fake(config, expression, at=None):
             if seen is not None:
                 seen.append(at)
-            if expression.startswith(cost.INFO_METRIC):
-                return [({"session_id": key, **labels}, 1.0)
-                        for key, labels in info.items()]
             if "increase" in expression:
                 return [({"session_id": key}, value) for key, value in costs.items()]
             return []
 
+        def fake_labels(config, expression, at=None):
+            if seen is not None:
+                seen.append(at)
+            return [{"session_id": key, **labels} for key, labels in info.items()]
+
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "usage.json"
             path.write_text(self.USAGE_CACHE)
-            with mock.patch.object(cost, "run_query", side_effect=fake):
+            with mock.patch.object(cost, "run_query", side_effect=fake), \
+                    mock.patch.object(cost, "run_label_query", side_effect=fake_labels):
                 return cost.build_output(
                     {"usage_cache": str(path)},
                     dt.datetime.fromisoformat(
@@ -426,13 +444,14 @@ class OutputTests(unittest.TestCase):
 
     def test_both_windows_are_reported(self):
         def fake(config, expression, at=None):
-            if expression.startswith(cost.INFO_METRIC):
-                return [({"session_id": "s1", "session_name": "一番"}, 1.0)]
             if "increase" in expression:
                 return [({"session_id": "s1"}, 1.0)]
             return []
 
-        with mock.patch.object(cost, "run_query", side_effect=fake):
+        with mock.patch.object(cost, "run_query", side_effect=fake), \
+                mock.patch.object(
+                    cost, "run_label_query",
+                    return_value=[{"session_id": "s1", "session_name": "一番"}]):
             built = cost.build_output(
                 {"usage_cache": "absent.json"},
                 dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
@@ -719,8 +738,6 @@ class QuotaFailureTests(unittest.TestCase):
                 if fail_on == "measured":
                     raise cost.CostError("no gauge")
                 return [] if fail_on == "silent" else [({"window": "weekly_all"}, 25.0)]
-            if expression.startswith(cost.INFO_METRIC):
-                return [({"session_id": "s1", "session_name": "一番"}, 1.0)]
             if "increase" in expression:
                 return [({"session_id": "s1"}, 4.0)]
             return []
@@ -742,6 +759,9 @@ class QuotaFailureTests(unittest.TestCase):
             if reset is not None:
                 path.write_text(json.dumps({"current_week": {"resets_at": reset}}))
             with mock.patch.object(cost, "run_query", side_effect=fake_query), \
+                    mock.patch.object(
+                        cost, "run_label_query",
+                        return_value=[{"session_id": "s1", "session_name": "一番"}]), \
                     mock.patch.object(cost, "run_range_query", side_effect=fake_range):
                 built = cost.build_output(
                     {"usage_cache": str(path)},
@@ -816,18 +836,24 @@ class CacheTests(unittest.TestCase):
             self.assertEqual((Path(root) / "cost.json").read_text(), previous)
             self.assertIn("claude cost:", complaint)
 
-    def test_a_figure_that_is_not_json_does_not_replace_the_cache(self):
+    def test_a_figure_that_is_not_json_falls_back_like_a_failed_query(self):
         # 最後の砦。**書けてしまうと、読む側には直す手段が無い** — `JSON.parse`
-        # が読めない cache が、前の正しい cache を原子的に置き換える。ここで
-        # 落ちれば cache は触られず、前回の内容がそのまま読まれ続ける。
+        # が読めない cache が、前の正しい cache を原子的に置き換える。
+        #
+        # **止まるだけでは足りない。**traceback で終わると、cache は保たれるのに
+        # cron の log に残るのは例外の山になり、**stdout へ前回の cache を出し直す
+        # 経路も通らない。**引けなかった時と同じ形で降りる。
         with tempfile.TemporaryDirectory() as root:
             previous = '{"generated_at":"2026-09-01T00:00:00+09:00","total":1}'
             (Path(root) / "cost.json").write_text(previous)
             with mock.patch.object(cost, "build_output",
                                    return_value={"total": float("nan")}):
-                with self.assertRaises(ValueError):
-                    self.helper(root, ["--force"])
+                code, printed, complaint = self.helper(root, ["--force"])
+            # 前回の cache が在れば 0。引けなかった時とまったく同じ降り方である。
+            self.assertEqual(code, 0)
+            self.assertEqual(printed, previous)
             self.assertEqual((Path(root) / "cost.json").read_text(), previous)
+            self.assertIn("claude cost:", complaint)
 
     def test_a_failed_query_without_a_previous_reading_says_so(self):
         with tempfile.TemporaryDirectory() as root:

@@ -343,8 +343,17 @@ returns `"NaN"`, and `float()` takes it. Carried through, `json.dumps` writes a
 bare `NaN` and the cache that replaces the last good one is not JSON any more:
 the widget's parser rejects the whole file, so the spend columns go too instead
 of the quota alone. Refusing it at the parser puts it on the path below instead,
-and `allow_nan=False` on the write is the last guard - failing there leaves the
-previous cache in place, which is the one thing the reader cannot repair.
+and `allow_nan=False` before the write is the last guard: finite values can
+still overflow when two of them are added, as the two cost queries are. **Both
+land on the same path as a failed query** - the previous cache is reprinted and
+one line says why. Stopping at a traceback would keep the cache but lose that
+reprint, and leave the cron log holding an exception instead of a sentence.
+
+**A query whose value is never read does not have to have a readable value.**
+`claude_session_info` always publishes 1 and only its labels are used, so
+refusing a `NaN` there would let one name lookup take the run's costs down with
+it. Its parser returns label sets and never looks at the number; the response
+envelope is still checked the same way.
 
 **A failed query keeps the previous reading.** The cache is reprinted unchanged,
 so `generated_at` stops moving and the widget's staleness rules see it. Nothing

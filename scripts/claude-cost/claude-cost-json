@@ -134,8 +134,8 @@ def finite(raw):
     return value
 
 
-def parse_vector(payload):
-    """instant queryの応答をlabel setごとの値にする。
+def vector_result(payload):
+    """instant queryの応答から結果の配列を取り出す。
 
     形が合わない応答は0件ではなく例外にする。**引けなかったことと、
     1件も無かったことを混ぜない。**混ぜると、Grafanaが答えなくなった時に
@@ -148,13 +148,31 @@ def parse_vector(payload):
             raise CostError("query did not return an instant vector")
     except (ValueError, KeyError, TypeError) as error:
         raise CostError(f"cannot read the query response: {error}")
+    return result
+
+
+def parse_vector(payload):
+    """応答をlabel setごとの値にする。値を使う側が呼ぶ。"""
     values = []
-    for item in result:
+    for item in vector_result(payload):
         try:
             values.append((item["metric"], finite(item["value"][1])))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
     return values
+
+
+def parse_label_sets(payload):
+    """応答をlabel setだけにする。
+
+    **値を使わない問い合わせに、値が読めることを要求しない。**
+    `claude_session_info`は常に1を出し、読む側はlabelしか見ない。その1が
+    `NaN`で届いた時に`CostError`にすると、名前を引く1本の失敗で
+    **その回のコストごと前回のcacheへ落ちる。**値がJSONへ出ない経路では、
+    値の壊れ方は害を持たない。
+    """
+    return [item["metric"] for item in vector_result(payload)
+            if isinstance(item.get("metric"), dict)]
 
 
 def by_session(values):
@@ -193,6 +211,12 @@ def run_query(config, expression, at=None):
     """
     extra = ["--time", str(int(at))] if at is not None else []
     return parse_vector(run_gcx(config, extra, expression))
+
+
+def run_label_query(config, expression, at=None):
+    """label setだけが要る問い合わせ。値は読まない (`parse_label_sets`)。"""
+    extra = ["--time", str(int(at))] if at is not None else []
+    return parse_label_sets(run_gcx(config, extra, expression))
 
 
 def run_gcx(config, extra, expression):
@@ -484,7 +508,7 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
 
 def session_info(config, at=None):
     found = {}
-    for metric, _ in run_query(config, INFO_METRIC, at):
+    for metric in run_label_query(config, INFO_METRIC, at):
         session_id = metric.get("session_id")
         if not session_id:
             continue
@@ -648,12 +672,20 @@ def main(argv):
         try:
             # 整形しない。widgetが60秒ごとに読み直すため、indentと\uXXXXの
             # escapeがそのまま転送量になる (題は日本語で、escapeで19%増える)。
-            # **`allow_nan=False`は最後の砦である。**ここで落ちればcacheは
-            # 触られず、前回の正しい内容がそのまま読まれ続ける。書いてしまうと
-            # 読む側には直す手段が無い。
-            atomic_write(cache, json.dumps(
-                output, separators=(",", ":"), ensure_ascii=False,
-                allow_nan=False).encode(), 0o600)
+            # **`allow_nan=False`は最後の砦である。**JSONにならない値が出来て
+            # いたら、書く前にここで止まる。書いてしまうと読む側に直す手段が無い。
+            # 有限でない値はparserが弾くが、**有限どうしの足し算が溢れることは
+            # 防げない** (`window_cost`は2本のqueryの和を取る)。
+            body = json.dumps(output, separators=(",", ":"), ensure_ascii=False,
+                              allow_nan=False).encode()
+        except ValueError as error:
+            # **引けなかった時と同じ扱いにする。**traceback で終わると、cacheは
+            # 保たれるのに、cronのlogに残るのは例外の山になり、stdoutへ前回の
+            # cacheを出し直す経路も通らない。
+            print(f"claude cost: cannot serialise the reading: {error}", file=sys.stderr)
+            return print_cache(cache, 69)
+        try:
+            atomic_write(cache, body, 0o600)
         except OSError as error:
             print(f"claude cost: cannot write {cache}: {error}", file=sys.stderr)
             return 73
