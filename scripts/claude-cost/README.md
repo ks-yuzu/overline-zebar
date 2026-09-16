@@ -79,20 +79,32 @@ dollars and the tokens agree with each other and the quota agrees with neither,
 so no single rate for the window can produce both columns.
 
 ```text
-boundaries:  window start → each moment the gauge rose → now
-each rise is split by the share of cost since the boundary before it
+boundaries = window start (value 0) / each observation where the gauge's reading
+             increased / each reset inside the window / now (value = measured)
+
+for each boundary, the increase since the boundary before it is distributed
+across sessions in proportion to what each spent over that same interval
 ```
 
-**The boundaries are the gauge's own ticks, not a fixed grid.** The gauge reports
-whole percent only, so a five-minute grid leaves buckets holding cost and no
-rise — 35% of a window's spend, measured. That spend reaches no row at all,
-while the rise it caused turns up in a later bucket and goes whole to whoever
-was running then.
+**The boundaries are the observations where the reading increased, not a fixed
+grid.** The gauge reports whole percent only, so a five-minute grid leaves
+buckets holding cost and no increase — 35% of a window's spend, measured. That
+spend is reflected in no row at all, while the increase it caused appears in a
+later bucket and goes whole to whoever was running then. Taking the boundaries
+from the increases means every cost inside the window is reflected in the
+distribution of some increase.
 
-**Both ends of the window are pinned**: zero at the start, the measured reading
-at now. Without that the total is only "first sample to last sample", which
-loses the window's head and tail (2 of 3 in a measured five-hour window, 1 of 25
-in the week). **What makes the rows add up to the gauge is the pinning, not the
+**A boundary is not one percentage point.** The gauge is written once every five
+minutes, so a single boundary carries two points or more more often than not:
+over seven days of the 5H window, 279 increases totalling 495 points, of which
+**304 points (61%) arrived two or more at a time**. **That granularity is the
+upper bound on the resolution of the split.**
+
+**Both ends of the window are fixed**: `(window start, 0)` is prepended to the
+series and `(now, measured)` appended. Without them the total is only "first
+sample to last sample", and the spend at the window's head and tail is missing
+from it (2 of 3 in a measured five-hour window, 1 of 25 in the week). **What
+makes the rows add up to the measured figure is those two points, not the
 precision of the queries.**
 
 **The increments are not built in PromQL — neither side of the split.** For the
