@@ -36,12 +36,10 @@ QUOTA_CHUNK = 12 * 3600
 # gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
 # **同じ幅だけ、reset直後に前の窓の値が返りうる。**採る側でresetの時刻を見て落とす。
 QUOTA_LOOKBACK = 900
-# 「前の窓のresetはこの窓の起点である」を確かめる時の余裕。**providerのresetは
-# 秒未満を持つ** (`...:00.808302+00:00`) ため、前の窓のresetは起点のわずかに後ろに
-# 座る。実測で起点+1秒だった。厳密な`> 起点`では前の窓の読みが通り、**窓の頭に
-# 前の窓の値がそのまま乗る** (5Hの窓で10を20と出した)。窓の長さは5時間・7日なので、
-# ここを分ける余裕はいくらでも取れる。
-RESET_SKEW = 60
+# 報告されるresetのぶれ幅。**同じresetがJSONの値の前後1秒にぶれて届く** (実測で
+# `1789948800`に対し`1789948799`・`1789948800`・`1789948801`)。読みがこの窓のものかは
+# 報告されたresetがこの窓のresetと一致するかで見るので、この幅だけ許す。
+RESET_SKEW = 2
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -359,7 +357,7 @@ def interval_costs(config, start_ts, now_ts):
     return costs
 
 
-def quota_reading(quota_window, start_ts):
+def quota_reading(quota_window, reset_ts):
     """この窓のgaugeを読む式。
 
     **読みは、その台自身のresetがこの窓を指している時だけ採る。**resetの直後、
@@ -371,20 +369,25 @@ def quota_reading(quota_window, start_ts):
     **resetは追いついた台から、値は遅れた台から**来て、18が窓の頭の消費になる。
     系列どうしを`and on (instance, window)`で組にしてから`max`を取る。
 
-    **前の窓のresetはこの窓の起点の「ほぼ」そのもの**なので、`RESET_SKEW`だけ
-    余裕を足して分ける。どの台も追いついていない間は1件も返らず、窓の外の読みも
-    同じ理由で落ちる。
+    **読みの窓は、報告されたresetがこの窓のresetと一致するかで決める。**
+    「起点より後ろ」では決めない。前の窓のresetは起点とほぼ同じ値で、しかも
+    1秒ぶれるため、境目に余裕を置くことになる。**余裕を超えてずれた日には、
+    前の窓の読みが黙って通る** (実測で5Hの窓が10を20と出した)。
+    一致で見れば、ずれた時に残るのは0件で、**クォータは出ないが嘘は出ない。**
+
+    どの台も追いついていない間も同じく0件で、窓の外の読みも同じ理由で落ちる。
     """
     selector = f'{QUOTA_METRIC}{{window="{quota_window}"}}'
     stamp = f'{RESET_METRIC}{{window="{quota_window}"}}'
     return (
         f'max by (window) (last_over_time({selector}[{QUOTA_LOOKBACK}s])'
         f' and on (instance, window)'
-        f' (last_over_time({stamp}[{QUOTA_LOOKBACK}s]) > {int(start_ts) + RESET_SKEW}))'
+        f' (abs(last_over_time({stamp}[{QUOTA_LOOKBACK}s]) - {int(reset_ts)})'
+        f' <= {RESET_SKEW}))'
     )
 
 
-def window_quota(config, quota_window, start_ts, now_ts, measured):
+def window_quota(config, quota_window, start_ts, now_ts, reset_ts, measured):
     """窓のクォータ消費をsessionごとに按分する。`(session別, 帰属できない分)`。
 
     gaugeが上がった時刻を境界にし、その1つ前の上昇から今回までに積まれた
@@ -413,7 +416,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     # `[15m]`は欠測をまたぐためのlookback。飛んでもその先で差が繋がる。
     readings = {}
     for moment, _, value in run_range_query(
-        config, quota_reading(quota_window, start_ts), start_ts, now_ts):
+        config, quota_reading(quota_window, reset_ts), start_ts, now_ts):
         readings[moment] = max(readings.get(moment, 0.0), value)
 
     # 両端を留める。窓は0から始まり、今の値が`measured`である。**留めないと
@@ -488,7 +491,7 @@ def window_quota(config, quota_window, start_ts, now_ts, measured):
     return points, unattributed, sum(rises.values())
 
 
-def quota_for(config, quota_window, start_ts, now_ts, source):
+def quota_for(config, quota_window, start_ts, now_ts, reset_ts, source):
     """`(session別, 帰属できない分, {used_percent, total})`。出せなければ`None`。
 
     **クォータが引けないことをcost全体の失敗にしない。**窓ぶんのrange queryは
@@ -506,11 +509,11 @@ def quota_for(config, quota_window, start_ts, now_ts, source):
     try:
         # 読みと同じ組み方で引く。**こちらは窓の尻尾を留める値**なので、
         # 追いついていない台の値を採ると、そのぶん合計が膨らむ。
-        measured = run_query(config, quota_reading(quota_window, start_ts), now_ts)
+        measured = run_query(config, quota_reading(quota_window, reset_ts), now_ts)
         if not measured:
             return None
         used = max(value for _, value in measured)
-        split = window_quota(config, quota_window, start_ts, now_ts, used)
+        split = window_quota(config, quota_window, start_ts, now_ts, reset_ts, used)
         if split is None:
             return None
         points, unattributed, total = split
@@ -583,8 +586,10 @@ def build_output(config, now):
     for name, length, key, quota_window in WINDOWS:
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
+        # `reset`は`fallback_length`でだけNoneで、その窓は`quota_for`が先に降りる。
         split = quota_for(
-            config, quota_window, start.timestamp(), now.timestamp(), source)
+            config, quota_window, start.timestamp(), now.timestamp(),
+            reset.timestamp() if reset else 0, source)
         points, unattributed, quota = split or ({}, 0.0, None)
         rows, unresolved = build_rows(costs, points, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、

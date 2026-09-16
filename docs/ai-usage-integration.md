@@ -398,13 +398,42 @@ resetと読むと165%になる)。**resetは0付近まで落ち、修正は水�
 持つ。**resetの直後、lookbackと同じ長さのあいだ、窓の中の刻みで引いても返るのは
 前の窓の値である (書き込みとscrapeが追いついていない)。**その値は、窓の頭の本物の
 消費と同じ形をしていて値からは見分けられない。**読みを台ごとに自分のstampと組にし、
-stampが窓の起点より後ろの組だけを集約する。
+stampがこの窓のresetと一致する組だけを集約する。
 
-**「起点そのもの」は近似なので、1分の余裕を足して比べる。**providerのresetは秒未満を
-持ち (`...:00.808302+00:00`)、実測で前の窓のresetは起点の1秒後に座っていた。厳密に
-比べると**reset前の読みがすべて通り、5Hのカードがgauge 10に対し20を出した** —
-前の窓の値が新しい窓の頭に立ち、その下降がwindow内resetとして足し戻された。
-窓の間隔は5時間・7日なので、分ける余裕はいくらでも取れる。
+**「起点より後ろか」ではなく「この窓のresetか」で見る。**前の窓のresetは窓の起点と
+ほぼ同じ値に座るので、境目で分ける形はそのずれの上に立つ。厳密な`> 起点`では
+**reset前の読みがすべて通り、5Hのカードがgauge 10に対し20を出した** — 前の窓の値が
+新しい窓の頭に立ち、その下降がwindow内resetとして足し戻された。**余裕を足して
+`> 起点+60`とする形は、ずれが余裕を超えた日に同じ事故へ黙って戻る。**一致で見れば、
+ずれた日に残るのは0件で、**クォータは出ないが、嘘は出ない。**
+
+`RESET_SKEW`が2なのは、**同じresetがJSONの値の前後1秒にぶれて届く**ため。実測で
+`current_week`の`1789948800`に対し報告は`1789948799`・`1789948800`・`1789948801`の
+3値、`current_session`の`1789560600`に対し`1789560599`と`1789560600`だった。
+resetは秒未満を持たない。**ぶれの実測が1なので、2は1秒ぶんの余地を持つ。**
+**この規則が偽になる観測:** 報告されるresetが、usage JSONの`resets_at`から
+`RESET_SKEW`を超えて離れること。**カードからその窓の`%`が消える形で見える。**再測する:
+
+```bash
+gcx --context cron metrics query \
+  'max by (window) (claude_usage_reset_timestamp_seconds)' \
+  --from $(( $(date +%s) - 86400 )) --to $(date +%s) --step 300s -o json |
+python3 -c '
+import json, sys
+seen = {}
+for s in json.load(sys.stdin)["data"]["result"]:
+    seen.setdefault(s["metric"]["window"], set()).update(
+        int(float(v)) for _, v in s["values"])
+for window, values in sorted(seen.items()):
+    print("報告", window, sorted(values))'
+python3 -c '
+import datetime as dt, json, sys
+p = json.load(sys.stdin)
+for key in ("current_session", "current_week"):
+    print("JSON", key,
+          int(dt.datetime.fromisoformat(p[key]["resets_at"]).timestamp()))' \
+  < "$HOME/.cache/claude-usage-json/usage.json"
+```
 
 **組にするのは台ごとである。queryごとではない。**値とstampを別々に`max`すると、
 **stampは追いついた台から、値は追いついていない台から**来る。実測 (reset+60秒) で、
@@ -459,7 +488,9 @@ for name, w in json.load(sys.stdin)["windows"].items():
     q = w.get("quota")
     if not q: print(name, "quota unavailable"); continue
     parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
-    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs total {q[\"total\"]:.2f} (gauge {q[\"used_percent\"]:.2f})")'
+    whole = parts + q["unattributed"]
+    print("%s: %.2f vs total %.2f (gauge %.2f)"
+          % (name, whole, q["total"], q["used_percent"]))'
 ```
 
 **行ごとの値は近似である。**刻みを5分から15分へ動かすと、行の値は窓の合計の1割ほど

@@ -163,17 +163,30 @@ lookback, a query inside a new window still returns the previous window's gauge:
 the write and its scrape have not caught up, and the value that comes back is
 indistinguishable from real consumption at the head of the window. Each reading
 is paired with its own host's stamp, and only the pairs whose stamp is past the
-window start are aggregated - the previous window's reset being this window's
-start, that is exactly the ones that have caught up.
+this window's own reset are aggregated - those are exactly the hosts that have
+caught up.
 
-**"Being this window's start" is only approximate, so the comparison carries a
-minute of slack.** The provider's resets carry sub-second precision
-(`...:00.808302+00:00`), and the previous window's reset was measured sitting one
-second past the boundary; compared strictly, every reading from before the reset
-passed the test, and **the 5H card read 20 against a gauge of 10** - the previous
-window's figure standing at the head of the new one and its fall being added
-back as an in-window reset. Windows are five hours and seven days apart, so there
-is any amount of room to separate them.
+**The test is "is this the window's reset", not "is it past the window
+start".** The previous window's reset sits at very nearly the window start, so
+anything that separates them at that boundary stands on how far apart they
+happen to be. Compared strictly, every reading from before the reset passed, and
+**the 5H card read 20 against a gauge of 10** - the previous window's figure
+standing at the head of the new one and its fall being added back as an
+in-window reset. **Adding slack and comparing against `start + 60` returns
+silently to that same accident on the day the gap exceeds the slack.** Matching
+on the reset leaves nothing at all on such a day: the quota is withheld, but it
+is never wrong.
+
+`RESET_SKEW` is 2 because **the same reset arrives wobbling one second either
+side of the JSON's value**: against `current_week`'s `1789948800` the reported
+stamps were `1789948799`, `1789948800` and `1789948801`, and against
+`current_session`'s `1789560600` they were `1789560599` and `1789560600`. The
+stamps carry no fractional part. **The measured wobble is 1, so 2 leaves a
+second of room.**
+**The observation that falsifies this:** a reported reset further than
+`RESET_SKEW` from the `resets_at` in the usage JSON. It shows up as that
+window's `%` disappearing from the card. See the Japanese document for the
+command that re-measures it.
 
 **The pairing is per host, not per query.** Taking the maximum value and the
 maximum stamp separately lets the stamp come from a host that has caught up
@@ -238,8 +251,9 @@ for name, w in json.load(sys.stdin)["windows"].items():
     q = w.get("quota")
     if not q: print(name, "quota unavailable"); continue
     parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
-    print(f"{name}: {parts + q[\"unattributed\"]:.2f} vs total {q[\"total\"]:.2f}"
-          f"  (gauge {q[\"used_percent\"]:.2f})")'
+    whole = parts + q["unattributed"]
+    print("%s: %.2f vs total %.2f (gauge %.2f)"
+          % (name, whole, q["total"], q["used_percent"]))'
 ```
 
 **A single row is an approximation.** Moving the spacing from five minutes to

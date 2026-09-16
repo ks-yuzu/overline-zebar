@@ -568,7 +568,8 @@ class QuotaTests(unittest.TestCase):
                     for moment, row in costs.items() for key, value in row.items()]
 
         with mock.patch.object(cost, "run_range_query", side_effect=fake):
-            return cost.window_quota(self.CONFIG, "session", start, now, measured)
+            return cost.window_quota(self.CONFIG, "session", start, now,
+                                     start + SESSION_SECONDS, measured)
 
     def test_the_parts_add_up_to_the_total(self):
         # 達成条件。行と「帰属できない分」の合計が、按分した相手そのものに
@@ -750,12 +751,26 @@ class QueryShapeTests(unittest.TestCase):
         self.assertIn("and on (instance, window)", expression)
         self.assertIn(cost.QUOTA_METRIC, expression)
         self.assertIn(cost.RESET_METRIC, expression)
-        # **前の窓の reset は起点の「ほぼ」そのものである。**provider の reset は
-        # 秒未満を持ち、実測で起点 +1 秒に座っていた。厳密な `> 起点` では前の窓の
-        # 読みが通り、**窓の頭に前の窓の値がそのまま乗る** (5H の窓で 10 を 20 と
-        # 出した)。窓の長さは 5 時間・7 日なので、分ける余裕はいくらでも取れる。
-        self.assertIn(f"> {1789416600 + cost.RESET_SKEW}", expression)
-        self.assertGreaterEqual(cost.RESET_SKEW, 2)
+        # **読みの窓は「この窓の reset と一致するか」で決める。「起点より後ろ」
+        # では決めない。**前の窓の reset は起点とほぼ同じ値で、しかも 1 秒ぶれる。
+        # 境目に余裕を置く形だと、**余裕を超えてずれた日に前の窓の読みが黙って
+        # 通る** (実測で 5H の窓が 10 を 20 と出した)。一致で見れば、ずれた時に
+        # 残るのは 0 件で、クォータは出ないが嘘は出ない。
+        self.assertIn(f"- 1789416600", expression)
+        self.assertIn(f"<= {cost.RESET_SKEW}", expression)
+        self.assertNotIn(">", expression.replace("<=", ""))
+        # **差の向きを見ない。**`abs` を外すと差が負の側が全て通り、前の窓の
+        # 読みどころか、それより前の読みまで一致扱いになる。
+        self.assertIn("abs(", expression)
+
+    def test_the_slack_is_wider_than_the_wobble_and_narrower_than_the_window(self):
+        # 下: 報告される reset は JSON の値の前後 1 秒にぶれる (`1789948800` に
+        # 対し `...799` `...800` `...801`)。0 にすると**ぶれた日に 1 件も残らず、
+        # その窓の `%` が消える。**
+        self.assertGreaterEqual(cost.RESET_SKEW, 1)
+        # 上: 前の窓の reset はこの窓の reset から窓の長さだけ離れている。そこまで
+        # 広げると**前の窓の読みが再び一致し、直した live バグへ戻る**
+        # (5H のカードが gauge 10 に対し 20 を出した)。
         self.assertLess(cost.RESET_SKEW, SESSION_SECONDS)
 
     def test_both_sides_of_the_pairing_read_over_the_same_lookback(self):
@@ -817,8 +832,10 @@ class QuotaFailureTests(unittest.TestCase):
 
     def build(self, fail_on=None, reset="2026-09-14T09:00:00+09:00"):
         ranges = []
+        instants = []
 
         def fake_query(config, expression, at=None):
+            instants.append(expression)
             if cost.QUOTA_METRIC in expression:
                 if fail_on == "measured":
                     raise cost.CostError("no gauge")
@@ -851,6 +868,7 @@ class QuotaFailureTests(unittest.TestCase):
                 built = cost.build_output(
                     {"usage_cache": str(path)},
                     dt.datetime.fromisoformat("2026-09-13T12:00:00+09:00"))
+        self.sent = [e for e in instants + ranges if cost.QUOTA_METRIC in e]
         return built["windows"]["week"], ranges
 
     def assert_cost_still_there(self, built):
@@ -876,6 +894,19 @@ class QuotaFailureTests(unittest.TestCase):
         self.assertEqual(built["quota"]["used_percent"], 25.0)
         self.assertEqual(built["quota"]["total"], 115.0)
         self.assertEqual(built["total"], 4.0)
+
+    def test_the_gauge_is_read_against_this_windows_reset_not_the_window_start(self):
+        # 式の形は `QueryShapeTests` が見る。ここが見るのは**どちらの時刻を
+        # 渡すか**で、起点を渡すと式は同じ形のまま前の窓の reset に一致する
+        # (前の窓の reset は起点とほぼ同値)。**それが 5H のカードに gauge 10 に
+        # 対し 20 を出させた live バグである。**
+        self.build()
+        reset_ts = int(dt.datetime.fromisoformat(
+            "2026-09-14T09:00:00+09:00").timestamp())
+        self.assertTrue(self.sent)
+        for expression in self.sent:
+            self.assertIn(str(reset_ts), expression)
+            self.assertNotIn(str(reset_ts - WEEK_SECONDS), expression)
 
     def test_a_window_whose_start_is_not_a_reset_gets_no_quota(self):
         # 按分は「窓の起点で 0 だった」ことに全面的に乗っている。reset を 1 つも
