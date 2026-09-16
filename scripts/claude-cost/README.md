@@ -387,6 +387,25 @@ failures while the cost path does not - **the same bug would surface as a stale
 cache or as a fresh cache with the quota missing, depending on which query hit
 it.** Both look like a successful refresh.
 
+**What that enumeration shows is only that nothing escapes as something other
+than a `CostError`.** A shape that parses without raising is counted as correct,
+so **the side where a malformed shape is quietly readable was never checked** -
+and one had escaped. Where a `[timestamp, value]` pair belongs, a string is both
+indexable and unpackable, so `"1789416600"` is read, without any exception, as
+**a gauge of `7.0`.** Every other way the pair can be broken - a dict, a `null`,
+one element, three - lands on `CostError`, and the quota simply does not appear:
+a failure the card shows. **A string alone falls the other way, publishing a
+fresh cache built on a fabricated number.** A pair must be a list, of length two.
+
+**The length is part of it.** Without it, `[1, 2, 3]` is a `CostError` on the
+matrix path and readable on the vector path, where index 1 still resolves - so
+**one and the same response falls back to the old cache or publishes a new one
+depending on which query hit it.** That is the shape that made the catch-all
+worth removing.
+**The observation that falsifies this:** Prometheus returning a sample in any
+form other than `[timestamp, value]`; every response held in the retention
+window has two elements.
+
 **A malformed cache is not something to check for on the way out.** Nothing can
 write one: the only path that writes has `allow_nan=False` in front of it, so
 "the cache is valid JSON" is held where the cache is written. Re-checking it on

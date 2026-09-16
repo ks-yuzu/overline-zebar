@@ -170,12 +170,26 @@ def query_result(payload, kind):
     return result
 
 
+def sample_pair(raw):
+    """`[時刻, 値]`の組として読めることを確かめる。
+
+    **strを組として扱わない。**strも添字と展開ができるので、`"1789416600"`は
+    例外を出さずに`7.0`という**もっともらしいgaugeの読み**になる。この族の他の形
+    (dict、None、長さ1、3要素) はすべて`CostError`へ倒れ、**クォータが出ない**と
+    いう画面から見える形で失敗する。**strだけが「読めなかった」ではなく
+    「別の答え」へ倒れ、捏造した数字で新しいcacheを公開する。**
+    """
+    if not isinstance(raw, list) or len(raw) != 2:
+        raise CostError(f"cannot read a sample: {raw!r:.80}")
+    return raw
+
+
 def parse_vector(payload):
     """応答をlabel setごとの値にする。値を使う側が呼ぶ。"""
     values = []
     for item in query_result(payload, "vector"):
         try:
-            values.append((item["metric"], finite(item["value"][1])))
+            values.append((item["metric"], finite(sample_pair(item["value"])[1])))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
     return values
@@ -269,7 +283,8 @@ def parse_matrix(payload):
     samples = []
     for item in query_result(payload, "matrix"):
         try:
-            for moment, value in item["values"]:
+            for raw in item["values"]:
+                moment, value = sample_pair(raw)
                 samples.append((int(moment), item["metric"], finite(value)))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
