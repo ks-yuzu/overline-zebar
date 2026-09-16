@@ -36,6 +36,12 @@ QUOTA_CHUNK = 12 * 3600
 # gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
 # **同じ幅だけ、reset直後に前の窓の値が返りうる。**採る側でresetの時刻を見て落とす。
 QUOTA_LOOKBACK = 900
+# 「前の窓のresetはこの窓の起点である」を確かめる時の余裕。**providerのresetは
+# 秒未満を持つ** (`...:00.808302+00:00`) ため、前の窓のresetは起点のわずかに後ろに
+# 座る。実測で起点+1秒だった。厳密な`> 起点`では前の窓の読みが通り、**窓の頭に
+# 前の窓の値がそのまま乗る** (5Hの窓で10を20と出した)。窓の長さは5時間・7日なので、
+# ここを分ける余裕はいくらでも取れる。
+RESET_SKEW = 60
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -134,31 +140,42 @@ def finite(raw):
     return value
 
 
-def vector_result(payload):
-    """instant queryの応答から結果の配列を取り出す。
+def query_result(payload, kind):
+    """応答から結果の配列を取り出し、**各項目が`metric`を持つことまで確かめる。**
 
     形が合わない応答は0件ではなく例外にする。**引けなかったことと、
     1件も無かったことを混ぜない。**混ぜると、Grafanaが答えなくなった時に
     全部の行が消えた画面を、正しい答えとして公開してしまう。
+
+    **`CostError`にならずに抜ける形を1つも残さない。**`main`と`quota_for`は
+    `CostError`しか捕まえないため、抜けた例外は前回のcacheを出し直す退避経路を
+    素通りして実行ごと落とす。JSONの値は6通りしか無いので、ここは列挙で閉じる
+    (`test_no_json_shape_escapes_as_something_other_than_a_cost_error`)。
+    **例外をまとめて`CostError`へ変える形は採らない。**parser自身の誤りや
+    `MemoryError`まで「読めなかった」に見え、**呼ぶ側によって、cacheごと落ちるか
+    クォータだけ落ちるかが変わる。**
     """
     try:
         data = json.loads(payload)
         result = data["data"]["result"]
-        if data["data"].get("resultType") != "vector":
-            raise CostError("query did not return an instant vector")
+        if data["data"].get("resultType") != kind:
+            raise CostError(f"query did not return {kind} data")
     except (ValueError, KeyError, TypeError) as error:
         raise CostError(f"cannot read the query response: {error}")
-    # **`result`がlistであることまで確かめる。**`null`が来ると、反復は
-    # `try`の外で`TypeError`になり、**CostErrorの退避経路を素通りする。**
     if not isinstance(result, list):
         raise CostError(f"query did not return a list of samples: {result!r:.80}")
+    for item in result:
+        # 項目もlabel setもdictであることを、**値を読む前に**確かめる。読む側は
+        # `metric.get`を呼ぶので、scalarが紛れると`read`の外で落ちる。
+        if not isinstance(item, dict) or not isinstance(item.get("metric"), dict):
+            raise CostError(f"cannot read a sample: {item!r:.80}")
     return result
 
 
 def parse_vector(payload):
     """応答をlabel setごとの値にする。値を使う側が呼ぶ。"""
     values = []
-    for item in vector_result(payload):
+    for item in query_result(payload, "vector"):
         try:
             values.append((item["metric"], finite(item["value"][1])))
         except (KeyError, IndexError, TypeError, ValueError) as error:
@@ -175,20 +192,7 @@ def parse_label_sets(payload):
     **その回のコストごと前回のcacheへ落ちる。**値がJSONへ出ない経路では、
     値の壊れ方は害を持たない。
     """
-    # **形が合わない項目は落とさず例外にする。**`parse_vector`と同じ扱いである。
-    # 黙って飛ばすと、名前が引けなかったsessionが`unresolved`として画面に並び、
-    # **応答が壊れていたことはどこにも出ない。**寛容にするのは値だけで、
-    # 値はここでは読まない。
-    label_sets = []
-    for item in vector_result(payload):
-        # **項目そのものがdictかも確かめる。**`result`にscalarが並ぶ応答では
-        # `item.get`がAttributeErrorになり、**CostErrorの退避経路を素通りして
-        # 実行ごと落ちる。**`main`はCostErrorしか捕まえない。
-        metric = item.get("metric") if isinstance(item, dict) else None
-        if not isinstance(metric, dict):
-            raise CostError(f"cannot read a label set: {item!r:.80}")
-        label_sets.append(metric)
-    return label_sets
+    return [item["metric"] for item in query_result(payload, "vector")]
 
 
 def by_session(values):
@@ -217,26 +221,6 @@ def failure_detail(stdout, stderr, code):
     return " ".join(line.split())[:300] or f"exit status {code}"
 
 
-def read_response(parse, payload):
-    """応答を読む。**読めない形はすべて`CostError`にする。**
-
-    parserは形ごとに検査を持つが、**列挙できるのは既に見た形だけである。**
-    知らない形は`TypeError`や`AttributeError`になり、`main`と`quota_for`は
-    `CostError`しか捕まえないので、**前回のcacheを出し直す退避経路を素通りして
-    実行ごと落ちる。**同じ種類の穴が3巡続けて出たので、個別に塞ぐのをやめた。
-
-    **代償は、parser自身の実装の誤りも「読めなかった」に見えることである。**
-    parserは小さく、壊し方を当てたテストがあるので、外の系の応答を読む境界では
-    こちらへ倒す。
-    """
-    try:
-        return parse(payload)
-    except CostError:
-        raise
-    except Exception as error:
-        raise CostError(f"cannot read the query response: {error}")
-
-
 def run_query(config, expression, at=None):
     """instant queryを1本投げる。
 
@@ -246,13 +230,13 @@ def run_query(config, expression, at=None):
     間の消費がどちらにも入らない。
     """
     extra = ["--time", str(int(at))] if at is not None else []
-    return read_response(parse_vector, run_gcx(config, extra, expression))
+    return parse_vector(run_gcx(config, extra, expression))
 
 
 def run_label_query(config, expression, at=None):
     """label setだけが要る問い合わせ。値は読まない (`parse_label_sets`)。"""
     extra = ["--time", str(int(at))] if at is not None else []
-    return read_response(parse_label_sets, run_gcx(config, extra, expression))
+    return parse_label_sets(run_gcx(config, extra, expression))
 
 
 def run_gcx(config, extra, expression):
@@ -284,18 +268,8 @@ def parse_matrix(payload):
 
     `parse_vector`と同じく、形が合わない応答は0件ではなく例外にする。
     """
-    try:
-        data = json.loads(payload)
-        result = data["data"]["result"]
-        if data["data"].get("resultType") != "matrix":
-            raise CostError("query did not return a range vector")
-    except (ValueError, KeyError, TypeError) as error:
-        raise CostError(f"cannot read the query response: {error}")
-    # `vector_result`と同じ理由でlistであることを確かめる。
-    if not isinstance(result, list):
-        raise CostError(f"query did not return a list of samples: {result!r:.80}")
     samples = []
-    for item in result:
+    for item in query_result(payload, "matrix"):
         try:
             for moment, value in item["values"]:
                 samples.append((int(moment), item["metric"], finite(value)))
@@ -316,7 +290,7 @@ def run_range_query(config, expression, start_ts, end_ts):
     samples = []
     while moment < end:
         stop = min(moment + QUOTA_CHUNK, end)
-        samples += read_response(parse_matrix, run_gcx(config, [
+        samples += parse_matrix(run_gcx(config, [
             "--from", str(moment), "--to", str(stop), "--step", f"{QUOTA_STEP}s",
         ], expression))
         moment = stop
@@ -397,15 +371,16 @@ def quota_reading(quota_window, start_ts):
     **resetは追いついた台から、値は遅れた台から**来て、18が窓の頭の消費になる。
     系列どうしを`and on (instance, window)`で組にしてから`max`を取る。
 
-    **前の窓のresetはこの窓の起点そのもの**なので、`> 起点`がちょうど効く。
-    どの台も追いついていない間は1件も返らず、窓の外の読みも同じ理由で落ちる。
+    **前の窓のresetはこの窓の起点の「ほぼ」そのもの**なので、`RESET_SKEW`だけ
+    余裕を足して分ける。どの台も追いついていない間は1件も返らず、窓の外の読みも
+    同じ理由で落ちる。
     """
     selector = f'{QUOTA_METRIC}{{window="{quota_window}"}}'
     stamp = f'{RESET_METRIC}{{window="{quota_window}"}}'
     return (
         f'max by (window) (last_over_time({selector}[{QUOTA_LOOKBACK}s])'
         f' and on (instance, window)'
-        f' (last_over_time({stamp}[{QUOTA_LOOKBACK}s]) > {int(start_ts)}))'
+        f' (last_over_time({stamp}[{QUOTA_LOOKBACK}s]) > {int(start_ts) + RESET_SKEW}))'
     )
 
 

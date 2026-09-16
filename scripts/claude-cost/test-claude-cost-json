@@ -147,25 +147,59 @@ class ParseTests(unittest.TestCase):
             with self.assertRaises(cost.CostError, msg=payload):
                 cost.parse_vector(payload)
 
-    def test_a_shape_no_parser_anticipated_is_still_a_cost_error(self):
-        # parser が持つ検査は、**既に見た形にしか効かない。**知らない形が
-        # `TypeError` や `AttributeError` になると、`main` と `quota_for` は
-        # `CostError` しか捕まえないので、**前回の cache を出し直す退避経路を
-        # 素通りして実行ごと落ちる。**同じ種類の穴が 3 巡続けて出た。
-        def parser(payload):
-            raise TypeError("a shape nobody wrote a check for")
+    def test_no_json_shape_escapes_as_something_other_than_a_cost_error(self):
+        """応答の形を総当たりする。**`CostError` 以外で抜ける形を 1 つも残さない。**
 
-        with self.assertRaises(cost.CostError):
-            cost.read_response(parser, "{}")
+        `main` と `quota_for` は `CostError` しか捕まえないので、抜けた例外は
+        前回の cache を出し直す退避経路を素通りして実行ごと落とす。同じ種類の穴が
+        3 巡続けて出たので、**例外をまとめて変換するのではなく、列挙で閉じた。**
+        JSON の値は 6 通りしか無い。
 
-    def test_a_cost_error_keeps_the_reason_it_was_raised_with(self):
-        # 包み直すと、どの検査が落ちたのかが失われる。
-        def parser(payload):
-            raise cost.CostError("first sample has no metric")
+        まとめて変換する形を採らないのは、parser 自身の誤りや `MemoryError` まで
+        「読めなかった」に見え、**呼ぶ側によって cache ごと落ちるかクォータだけ
+        落ちるかが変わる**ためである。
+        """
+        values = [{}, [], "s", 1, True, None]
 
-        with self.assertRaises(cost.CostError) as caught:
-            cost.read_response(parser, "{}")
-        self.assertEqual(str(caught.exception), "first sample has no metric")
+        def envelope(result, kind):
+            return json.dumps({"status": "success",
+                               "data": {"resultType": kind, "result": result}})
+
+        cases = []
+        for value in values:
+            cases.append(("vector", envelope(value, "vector")))
+            cases.append(("vector", envelope([value], "vector")))
+            cases.append(("vector", envelope([{"metric": {}, "value": [0, value]}],
+                                             "vector")))
+            cases.append(("matrix", envelope(value, "matrix")))
+            cases.append(("matrix", envelope([value], "matrix")))
+            cases.append(("matrix", envelope([{"metric": {}, "values": [value]}],
+                                             "matrix")))
+        for metric in values:
+            for value in values:
+                cases.append(("vector", envelope([{"metric": metric, "value": value}],
+                                                 "vector")))
+                # **metric と values の組み合わせを漏らしていた。**scalar の metric が
+                # 通り、読む側の `metric.get` が parser の外で落ちていた。
+                cases.append(("matrix", envelope([{"metric": metric, "values": value}],
+                                                 "matrix")))
+
+        readers = {"vector": (cost.parse_vector, cost.parse_label_sets),
+                   "matrix": (cost.parse_matrix,)}
+        checked = 0
+        for kind, payload in cases:
+            for reader in readers[kind]:
+                try:
+                    reader(payload)
+                except cost.CostError:
+                    checked += 1
+                except Exception as error:      # noqa: BLE001 - 抜けた形を報告する
+                    self.fail(f"{reader.__name__} let {payload} escape as "
+                              f"{type(error).__name__}: {error}")
+                else:
+                    checked += 1                # 読めた形は形として正しい
+        # 空回りしていないことだけを見る (実測 162 通り)。
+        self.assertGreater(checked, 150)
 
     def test_a_range_response_whose_result_is_not_a_list_is_refused(self):
         for result in (None, {}, "rows"):
@@ -716,8 +750,13 @@ class QueryShapeTests(unittest.TestCase):
         self.assertIn("and on (instance, window)", expression)
         self.assertIn(cost.QUOTA_METRIC, expression)
         self.assertIn(cost.RESET_METRIC, expression)
-        # 前の窓の reset はこの窓の起点そのもの。`>` でちょうど外れる。
-        self.assertIn("> 1789416600", expression)
+        # **前の窓の reset は起点の「ほぼ」そのものである。**provider の reset は
+        # 秒未満を持ち、実測で起点 +1 秒に座っていた。厳密な `> 起点` では前の窓の
+        # 読みが通り、**窓の頭に前の窓の値がそのまま乗る** (5H の窓で 10 を 20 と
+        # 出した)。窓の長さは 5 時間・7 日なので、分ける余裕はいくらでも取れる。
+        self.assertIn(f"> {1789416600 + cost.RESET_SKEW}", expression)
+        self.assertGreaterEqual(cost.RESET_SKEW, 2)
+        self.assertLess(cost.RESET_SKEW, SESSION_SECONDS)
 
     def test_both_sides_of_the_pairing_read_over_the_same_lookback(self):
         # 幅が食い違うと、片方だけが欠測をまたいだ時に組が外れ、**その刻みの

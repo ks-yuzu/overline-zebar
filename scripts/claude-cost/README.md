@@ -162,9 +162,18 @@ point past the line reads as a reset.
 lookback, a query inside a new window still returns the previous window's gauge:
 the write and its scrape have not caught up, and the value that comes back is
 indistinguishable from real consumption at the head of the window. Each reading
-is paired with its own host's stamp, and only the pairs whose stamp is later
-than the window start are aggregated - the previous window's reset being this
-window's start, that is exactly the ones that have caught up.
+is paired with its own host's stamp, and only the pairs whose stamp is past the
+window start are aggregated - the previous window's reset being this window's
+start, that is exactly the ones that have caught up.
+
+**"Being this window's start" is only approximate, so the comparison carries a
+minute of slack.** The provider's resets carry sub-second precision
+(`...:00.808302+00:00`), and the previous window's reset was measured sitting one
+second past the boundary; compared strictly, every reading from before the reset
+passed the test, and **the 5H card read 20 against a gauge of 10** - the previous
+window's figure standing at the head of the new one and its fall being added
+back as an in-window reset. Windows are five hours and seven days apart, so there
+is any amount of room to separate them.
 
 **The pairing is per host, not per query.** Taking the maximum value and the
 maximum stamp separately lets the stamp come from a host that has caught up
@@ -349,16 +358,20 @@ land on the same path as a failed query** - the previous cache is reprinted and
 one line says why. Stopping at a traceback would keep the cache but lose that
 reprint, and leave the cron log holding an exception instead of a sentence.
 
-**Any shape that cannot be read becomes a `CostError`, whether a parser
-anticipated it or not.** Each parser checks the shapes that have been seen, but
-an unanticipated one surfaces as `TypeError` or `AttributeError`, and neither
-`main` nor the quota path catches those: the run ends in a traceback rather than
-reprinting the last cache. Three rounds of review found three of these in a row
-- a dropped label set, a scalar where an object was expected, a `null` where a
-list was - so the class is closed at the boundary instead of one shape at a
-time. **The price is that a mistake inside a parser also reads as "could not be
-read"**; the parsers are small and every rule in them has been broken to check
-that a test fails.
+**No shape of response leaves by anything but a `CostError`.** Neither `main`
+nor the quota path catches anything else, so a `TypeError` or `AttributeError`
+ends the run in a traceback rather than reprinting the last cache. Three rounds
+found three of these in a row - a dropped label set, a scalar where an object
+was expected, a `null` where a list was - so the envelope, the list, and each
+item's `metric` are all checked in one place, before any value is read.
+
+**The class is closed by enumeration, not by catching everything.** A JSON value
+is one of six things, so the combinations can be listed and tested (162 of them).
+Translating every exception into a `CostError` instead would also swallow a
+mistake in a parser and a `MemoryError`, and - because the quota path narrows its
+failures while the cost path does not - **the same bug would surface as a stale
+cache or as a fresh cache with the quota missing, depending on which query hit
+it.** Both look like a successful refresh.
 
 **A malformed cache is not something to check for on the way out.** Nothing can
 write one: the only path that writes has `allow_nan=False` in front of it, so
