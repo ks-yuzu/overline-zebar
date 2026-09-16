@@ -349,6 +349,23 @@ land on the same path as a failed query** - the previous cache is reprinted and
 one line says why. Stopping at a traceback would keep the cache but lose that
 reprint, and leave the cron log holding an exception instead of a sentence.
 
+**Any shape that cannot be read becomes a `CostError`, whether a parser
+anticipated it or not.** Each parser checks the shapes that have been seen, but
+an unanticipated one surfaces as `TypeError` or `AttributeError`, and neither
+`main` nor the quota path catches those: the run ends in a traceback rather than
+reprinting the last cache. Three rounds of review found three of these in a row
+- a dropped label set, a scalar where an object was expected, a `null` where a
+list was - so the class is closed at the boundary instead of one shape at a
+time. **The price is that a mistake inside a parser also reads as "could not be
+read"**; the parsers are small and every rule in them has been broken to check
+that a test fails.
+
+**A malformed cache is not something to check for on the way out.** Nothing can
+write one: the only path that writes has `allow_nan=False` in front of it, so
+"the cache is valid JSON" is held where the cache is written. Re-checking it on
+every read - including the `--cached-only` the widget runs each minute - would
+be testing a promise the writer already keeps.
+
 **A query whose value is never read does not have to have a readable value.**
 `claude_session_info` always publishes 1 and only its labels are used, so
 refusing a `NaN` there would let one name lookup take the run's costs down with

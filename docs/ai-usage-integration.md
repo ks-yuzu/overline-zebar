@@ -553,6 +553,18 @@ emitterは`session_id`以外のlabelを任意にしているため、cwdが`/`�
 **どちらも「引けなかった時」と同じ経路で降りる。**traceback で終わるとcacheは残るが、
 前回のcacheを出し直す経路を通らず、cronのlogには文ではなく例外が残る。
 
+**読めない形はすべて`CostError`にする。parserが想定していたかによらない。**
+parserは見た形ごとに検査を持つが、想定外の形は`TypeError`や`AttributeError`に
+なり、`main`も`quota_for`もそれを捕まえない。**前回のcacheを出し直す経路を素通り
+してtracebackで終わる。**レビュー3巡で3件 (label setを黙って落とす / objectの所に
+scalar / listの所に`null`) 続けて出たため、形ごとに塞ぐのをやめ、境界で種類ごと
+閉じた。**代償はparser自身の誤りも「読めなかった」に見えることである。**
+
+**壊れたcacheは、出す時に検査しない。**書ける経路が無い — 唯一書く所の手前に
+`allow_nan=False`が在るので、「cacheはJSONである」は書く側で保たれている。
+読むたびに (widgetが毎分呼ぶ`--cached-only`も含めて) 検査するのは、書く側が
+既に守っている約束を測り直すことになる。
+
 **値を読まない問い合わせに、値が読めることを要求しない。**`claude_session_info`は
 常に1を出し、読む側はlabelしか見ない。ここで`NaN`を拒むと、**名前を引く1本の失敗が
 その回のコストごと落とす。**label setだけを返すparserを使い、応答の形の検査は同じに保つ。

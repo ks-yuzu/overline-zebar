@@ -139,9 +139,42 @@ class ParseTests(unittest.TestCase):
                                                                   "result": [{"metric": {}}]}}),
                         json.dumps({"status": "success", "data": {"resultType": "vector",
                                                                   "result": [{"metric": {},
-                                                                              "value": [1, "x"]}]}})):
+                                                                              "value": [1, "x"]}]}}),
+                        # `result` が list でない応答。**反復は try の外にあるので
+                        # `TypeError` が CostError の退避経路を素通りする。**
+                        json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                                  "result": None}})):
             with self.assertRaises(cost.CostError, msg=payload):
                 cost.parse_vector(payload)
+
+    def test_a_shape_no_parser_anticipated_is_still_a_cost_error(self):
+        # parser が持つ検査は、**既に見た形にしか効かない。**知らない形が
+        # `TypeError` や `AttributeError` になると、`main` と `quota_for` は
+        # `CostError` しか捕まえないので、**前回の cache を出し直す退避経路を
+        # 素通りして実行ごと落ちる。**同じ種類の穴が 3 巡続けて出た。
+        def parser(payload):
+            raise TypeError("a shape nobody wrote a check for")
+
+        with self.assertRaises(cost.CostError):
+            cost.read_response(parser, "{}")
+
+    def test_a_cost_error_keeps_the_reason_it_was_raised_with(self):
+        # 包み直すと、どの検査が落ちたのかが失われる。
+        def parser(payload):
+            raise cost.CostError("first sample has no metric")
+
+        with self.assertRaises(cost.CostError) as caught:
+            cost.read_response(parser, "{}")
+        self.assertEqual(str(caught.exception), "first sample has no metric")
+
+    def test_a_range_response_whose_result_is_not_a_list_is_refused(self):
+        for result in (None, {}, "rows"):
+            with self.subTest(result=result):
+                with self.assertRaises(cost.CostError):
+                    cost.parse_matrix(json.dumps({
+                        "status": "success",
+                        "data": {"resultType": "matrix", "result": result},
+                    }))
 
     def test_an_empty_vector_is_an_answer(self):
         self.assertEqual(cost.parse_vector(vector([])), [])
@@ -155,8 +188,21 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(cost.parse_label_sets(payload),
                          [{"session_id": "s1", "project": "p"}])
         # 形が合わない応答は、値を見ない経路でも 0 件ではなく例外にする。
-        with self.assertRaises(cost.CostError):
-            cost.parse_label_sets('{"status":"error"}')
+        # **黙って飛ばすと、名前が引けなかった session が `unresolved` として
+        # 画面に並び、応答が壊れていたことはどこにも出ない。**
+        for payload in (
+            '{"status":"error"}',
+            json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                      "result": [{"value": [1, "1"]}]}}),
+            json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                      "result": [{"metric": "not a dict"}]}}),
+            # 項目そのものが dict でない応答。**`item.get` が AttributeError に
+            # なると CostError の退避経路を素通りして実行ごと落ちる。**
+            json.dumps({"status": "success", "data": {"resultType": "vector",
+                                                      "result": ["scalar", 42]}}),
+        ):
+            with self.assertRaises(cost.CostError, msg=payload):
+                cost.parse_label_sets(payload)
 
     def test_a_sample_that_is_not_a_finite_number_is_not_a_reading(self):
         # Prometheus は `"NaN"` を返すことがあり、`float()` はそれを受ける。
