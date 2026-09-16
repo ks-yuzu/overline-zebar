@@ -1190,6 +1190,17 @@ Claudeの`refresh_status: "last_known"`は、cacheが新しくてもsource側の
 | Codex cron timeout          | 30秒          |
 | Claude helper内部timeout    | 45秒          |
 | Codex app-server応答timeout | 15秒/応答     |
+| Claude cost cron timeout    | 200秒         |
+| Claude cost helper内部timeout | 30秒/query  |
+
+**cost helperのtimeoutだけ桁が違うのは、所要が窓の長さに比例するためである。**
+range queryは12時間ずつに割るので、7Dの窓は満了時にgaugeとコストで28本になり、
+窓が若いうちはそれより少ない。実測で、**7Dの窓が68時間の時点でrange 14本・instant
+7本・32〜41秒**だった。満了に近い窓はこれより長くなる。**内側は1 queryあたりで、
+外側は1回の更新ぜんぶを覆う。**外側がrange queryを覆わないと、helperは理由を
+logへ書く前に殺される。
+**この規則が偽になる観測:** 満了した7Dの窓で200秒を超えること。cronのlogに
+`claude-cost.cron`の行が出ないまま`--cached-only`の鮮度だけが古くなる形で現れる。
 
 `@reboot`はWindows起動そのものではなく、WSL内でcron daemonが起動した時点で
 実行される。

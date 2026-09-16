@@ -9,9 +9,11 @@
 # plus one for the quota gauge in each of the two windows - and two range
 # queries per twelve hours of each window - one of them the cost counters
 # unaggregated - which is 28 more for a full week.
-# About 60 seconds in all. The outer timeout has to cover the range queries too,
-# or it kills the helper before it can log why it gave up and the refresh goes
-# quiet. It has to stay under the five-minute period as well: a refresh still
-# running when the next one starts is held off by the helper's own lock.
+# A refresh therefore takes longer the older the window is: measured with the 7D
+# window 68 hours old (14 range queries), three runs took 32, 41 and 32 seconds.
+# The outer timeout has to cover the range queries too, or it kills the helper
+# before it can log why it gave up and the refresh goes quiet. It has to stay
+# under the five-minute period as well: a refresh still running when the next
+# one starts is held off by the helper's own lock.
 @reboot     CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron
 */5 * * * * CLAUDE_COST_GCX_BIN="$HOME/.local/share/aquaproj-aqua/bin/gcx" CLAUDE_COST_GCX_CONTEXT=cron /usr/bin/timeout 200s "$HOME/bin/claude-cost-json" --force 2>&1 >/dev/null | /usr/bin/logger -t claude-cost.cron

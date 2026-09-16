@@ -459,9 +459,13 @@ claude-cost-json --cached-only  # what the widget runs; never queries
 Each refresh makes seven instant queries — one for the names, and for each
 window two for the cost and one for the quota gauge — plus two per twelve hours of each window, one of which
 fetches the cost counters unaggregated (62 series and 0.5 MB over a measured 20
-hours). A full seven-day week is 28 of those, about 60 seconds in all. **An outer timeout has to cover the range queries too**, or it
-kills the helper before it can say why it gave up; the cron example allows 200
-seconds.
+hours). A full seven-day week is 28 of those, so **how long a refresh takes
+follows the age of the window**: measured with the 7D window 68 hours old - 14
+range queries and the 7 instant ones - three runs took 32, 41 and 32 seconds. A
+window near its reset takes longer. **An outer timeout has to cover the range
+queries too**, or it kills the helper before it can say why it gave up; the cron
+example allows 200 seconds, and the helper's own timeout is 30 seconds per
+query.
 
 `gcx` must be authenticated for the user that runs this. Browser OAuth cannot
 carry a cron job — its refresh token expires in a month and the job then stops
