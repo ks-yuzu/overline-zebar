@@ -416,12 +416,18 @@ stampがこの窓のresetと一致する組だけを集約する。
 (警告は出ない)。**一致で判定すれば、ずれた日に残る読みは0件になり、**クォータは
 出ないが、誤った値も出ない。**
 
-`RESET_SKEW`が2なのは、**同じresetがJSONの値の前後1秒にぶれて届く**ため。実測で
-`current_week`の`1789948800`に対し報告は`1789948799`・`1789948800`・`1789948801`の
-3値、`current_session`の`1789560600`に対し`1789560599`と`1789560600`だった。
-resetは秒未満を持たない。**ぶれの実測値が1なので、2には1秒の余裕がある。**
-**この規則が偽になる観測:** 報告されるresetが、usage JSONの`resets_at`から
-`RESET_SKEW`を超えて離れること。**カードからその窓の`%`が消える形で見える。**再測する:
+`RESET_SKEW`は**報告されるresetのぶれ幅**である。resetは秒未満を持たないが、
+**同じ窓のresetが複数の値で届く。**`samples.ndjson`13日ぶんで測ると、多くは
+±1秒 (`1789948799`/`1789948800`/`1789948801`) だが、**最頻値より60秒早い報告が
+混じる** — 7Dは3窓中2窓 (11回)、5Hは61窓中3窓 (4回) にあった。
+
+**120にしてある。**ぶれの実測の倍で、**前の窓のresetは18000秒 (5H) 以上離れている**
+ので、広げたことで前の窓を拾う余地は無い。
+**狭い側の失敗は「出せるはずのクォータが出ない」で現れる。**2のままだと、60秒ずれた
+報告が来た更新でその窓の読みが1件も残らず、カードから`%`が消える。
+**この規則が偽になる観測:** 最頻値から120秒を超えて離れたresetの報告。上の
+バックテストのコマンドを`week_resets_at`のぶれを見る向きに変えれば数え直せる。
+reset stampそのものを引き直すなら:
 
 ```bash
 gcx --context cron metrics query \
@@ -488,13 +494,56 @@ gaugeの現在値 (chipが出している数字) で、窓の中でresetが起�
 大きくなり100%を超える。
 
 **下方修正でも、その幅だけ離れる。**修正の前の上昇は既に数えてあり、返さない。
-**1つの窓に何度も入るので、差は1ptに留まらない。**実測 (11日) で下方修正は3件、
-いずれも1pt (週あたり1.9件)。**3件とも同じ7Dの窓に入り、その窓は`total 47`に対し
-gauge 44**だった。返すには、既に付けたsessionからその1ptを引く必要があるが、
-**どのsessionの上昇が修正されたのかは分からない。**引く相手を決められない以上、
-機構を足しても恣意的な配り直しにしかならない。
-**この規則が偽になる観測:** 1ptより大きい下方修正 (実測の3件はすべて1pt)。
-差が窓の消費に対して無視できない割合になれば、判断は変わりうる。再測する:
+**1つの窓に何度も入るので、差は1ptに留まらない。**返すには、既に付けたsessionから
+その1ptを引く必要があるが、**どのsessionの上昇が修正されたのかは分からない。**
+引く相手を決められない以上、機構を足しても恣意的な配り直しにしかならない。
+
+**下方修正は取得側の産物ではない。**`max by (window)`は、高い値を報告していた台が
+欠測すると残った台の低い値へ落ちるので、下降がscrapeの穴でも起こりうる。
+**そうではないことを、`samples.ndjson`と突き合わせて確かめた。**これはusage helperが
+APIから直に書いた1本の系列で、台ごとのmaxもscrapeも挟まっていない。Prometheus側で
+見えた3件の下降 (`34→33`、`39→38`、`39→38`) は、**時刻まで含めてこちらにも在った。**
+
+**どれくらい乖離するかをバックテストした** (`samples.ndjson`、09-05〜09-17)。
+被覆9割以上の完了窓で見る。
+
+| 窓 | 完了窓 | 乖離のあった窓 | 最大 | 中央値 |
+| --- | --- | --- | --- | --- |
+| 5H | 59 | 1 (2%) | +1pt (消費の1%) | +0pt |
+| 7D | 1 | 1 | +2pt (消費の2%) | +2pt |
+
+**5Hではほぼ起きない。7Dは完了窓が1つしか無く、判断の材料になっていない。**
+進行中の窓は被覆46%の時点で既に+3pt (消費の6%) で、**窓が長いほど修正を拾う機会が
+増えるため、7Dの方が大きく出る。**
+**この規則が偽になる観測:** 1ptより大きい下方修正 (これまでの実測はすべて1pt)、
+または7Dの完了窓で差が消費の1割を超えること。再測する:
+
+```bash
+python3 - <<'PY'
+import datetime as dt, json, os
+rows = sorted((json.loads(l) for l in open(
+    os.path.expanduser("~/.cache/claude-usage-json/samples.ndjson")) if l.strip()),
+    key=lambda r: r["recorded_at"])
+keys, windows = set(), {}
+for row in rows:                      # resetは前後1秒ぶれるので寄せる
+    stamp = int(dt.datetime.fromisoformat(row["week_resets_at"]).timestamp())
+    key = next((k for k in keys if abs(k - stamp) <= 2), None)
+    if key is None:
+        keys.add(stamp); key = stamp
+    windows.setdefault(key, []).append((row["recorded_at"], float(row["week_used_percent"])))
+for key in sorted(windows):
+    s = sorted(windows[key]); total = s[0][1]; rev = []
+    for (_, b), (m, a) in zip(s, s[1:]):
+        if a > b: total += a - b
+        elif a * 2 < b: total += a
+        elif a < b: rev.append((m, b, a))
+    print("%s total %3.0f gauge %3.0f 差 %+3.0f 下方修正 %d件 被覆 %3.0f%%" % (
+        dt.datetime.fromtimestamp(key).strftime("%m-%d"), total, s[-1][1],
+        total - s[-1][1], len(rev), min((s[-1][0]-s[0][0])/604800, 1) * 100))
+PY
+```
+
+窓ごとの一致 (行の合計が`quota.total`になること) は別に確かめる:
 
 ```bash
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '

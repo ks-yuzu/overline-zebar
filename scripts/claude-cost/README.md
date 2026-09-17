@@ -190,16 +190,22 @@ silently to that same accident on the day the gap exceeds the slack.** Matching
 on the reset leaves nothing at all on such a day: the quota is withheld, but it
 is never wrong.
 
-`RESET_SKEW` is 2 because **the same reset arrives wobbling one second either
-side of the JSON's value**: against `current_week`'s `1789948800` the reported
-stamps were `1789948799`, `1789948800` and `1789948801`, and against
-`current_session`'s `1789560600` they were `1789560599` and `1789560600`. The
-stamps carry no fractional part. **The measured wobble is 1, so 2 leaves a
-second of room.**
-**The observation that falsifies this:** a reported reset further than
-`RESET_SKEW` from the `resets_at` in the usage JSON. It shows up as that
-window's `%` disappearing from the card. See the Japanese document for the
-command that re-measures it.
+`RESET_SKEW` is **how far the reported reset is allowed to wobble**. The stamps
+carry no fractional part, but the same window's reset does arrive as more than
+one value. Measured over thirteen days of `samples.ndjson`, most of the spread
+is a second either way (`1789948799` / `1789948800` / `1789948801`) - but
+**reports sixty seconds ahead of the modal value turn up as well**: in two of
+three 7D windows (eleven times) and three of sixty-one 5H windows (four times).
+
+**It is set to 120**, twice the measured wobble, and **the previous window's
+reset is at least 18000 seconds away**, so widening it leaves no room to catch
+that window instead.
+**Failing narrow shows up as a quota that could have been produced and was
+not**: at 2, an update carrying a sixty-second-early report keeps no readings at
+all and the `%` leaves the card.
+**The observation that falsifies this:** a reported reset more than 120 seconds
+from the modal value. The Japanese document carries the backtest this was
+measured with.
 
 **The pairing is per host, not per query.** Taking the maximum value and the
 maximum stamp separately lets the stamp come from a host that has caught up
@@ -255,15 +261,35 @@ gauge ends up reading, and the total then passes 100%.
 
 **A downward revision separates them too, by its own size, and they
 accumulate.** The rise before a revision is already counted and is not given
-back, so the total stays at what the gauge had reached. Measured over eleven
-days: three revisions, each of one point, 1.9 per week - and **all three landed
-in the same 7D window, which read `total 47` against a gauge of 44**. Giving a
-point back would mean taking it off a session already credited with it, and
-**there is nothing to say whose rise was revised**; with no way to choose, the
-machinery would only redistribute arbitrarily.
+back, so the total stays at what the gauge had reached. Giving a point back
+would mean taking it off a session already credited with it, and **there is
+nothing to say whose rise was revised**; with no way to choose, the machinery
+would only redistribute arbitrarily.
+
+**The revisions are not an artefact of how the gauge is read.** `max by
+(window)` falls to the lower host when the one reporting the higher value goes
+missing, so a drop could be a hole in the scrape rather than the provider. It is
+not: checked against `samples.ndjson`, the single series the usage helper writes
+straight from the API with no per-host maximum and no scrape in between, the
+three drops seen in Prometheus (`34→33`, `39→38`, `39→38`) are **there too, at
+the same times**.
+
+**Backtested over that history** (09-05 to 09-17), across windows covered 90% or
+more:
+
+| window | completed | with a gap | largest | median |
+| --- | --- | --- | --- | --- |
+| 5H | 59 | 1 (2%) | +1pt (1% of the spend) | +0pt |
+| 7D | 1 | 1 | +2pt (2% of the spend) | +2pt |
+
+**On the 5H window this barely happens. For 7D there is exactly one completed
+window, which is not enough to judge by**; the window in progress is already
++3pt (6%) at 46% coverage, and **a longer window has more chances to collect a
+revision**, so 7D runs larger.
 **The observation that falsifies this:** a downward revision larger than one
-point (all three measured were one). Should the gap grow to a material share of
-a window's spend, the decision is worth revisiting.
+point (every one measured so far is one), or a completed 7D window whose gap
+passes a tenth of its spend. The Japanese document carries the command that
+re-runs the backtest.
 
 ```sh
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '

@@ -813,10 +813,10 @@ class QueryShapeTests(unittest.TestCase):
         self.assertIn("abs(", expression)
 
     def test_the_slack_is_wider_than_the_wobble_and_narrower_than_the_window(self):
-        # 下: 報告される reset は JSON の値の前後 1 秒にぶれる (`1789948800` に
-        # 対し `...799` `...800` `...801`)。0 にすると**ぶれた日に 1 件も残らず、
-        # その窓の `%` が消える。**
-        self.assertGreaterEqual(cost.RESET_SKEW, 1)
+        # 下: **実測のぶれは最大 60 秒** (`samples.ndjson` 13 日で、7D は 3 窓中
+        # 2 窓、5H は 61 窓中 3 窓に、最頻値より 60 秒早い reset が届いていた)。
+        # これ以下にすると**ずれた回に 1 件も残らず、その窓の `%` が消える。**
+        self.assertGreater(cost.RESET_SKEW, 60)
         # 上: 前の窓の reset はこの窓の reset から窓の長さだけ離れている。そこまで
         # 広げると**前の窓の読みが再び一致し、直した live バグへ戻る**
         # (5H のカードが gauge 10 に対し 20 を出した)。
