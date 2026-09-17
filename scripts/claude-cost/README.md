@@ -197,15 +197,17 @@ is a second either way (`1789948799` / `1789948800` / `1789948801`) - but
 **reports sixty seconds ahead of the modal value turn up as well**: in two of
 three 7D windows (eleven times) and three of sixty-one 5H windows (four times).
 
-**It is set to 120**, twice the measured wobble, and **the previous window's
-reset is at least 18000 seconds away**, so widening it leaves no room to catch
-that window instead.
-**Failing narrow shows up as a quota that could have been produced and was
-not**: at 2, an update carrying a sixty-second-early report keeps no readings at
-all and the `%` leaves the card.
+**It is set to 120.** The ceiling is **the distance to the previous window's
+reset less the observed wobble** - for 5H, `18000 - 60 = 17940` seconds. Above
+that, a previous reset reported late matches instead, which is the live bug this
+rule was written for. The floor is the observed wobble of 60, below which a
+skewed report leaves no readings at all and the `%` leaves the card. 120 sits
+inside both, with room for the fact that the observation is only thirteen days
+long - **there is no rule that it be a multiple of anything.**
 **The observation that falsifies this:** a reported reset more than 120 seconds
-from the modal value. The Japanese document carries the backtest this was
-measured with.
+from the modal value. The Japanese document carries the command that counts
+them; it prints the maximum deviation and the number of windows showing one, for
+both windows.
 
 **The pairing is per host, not per query.** Taking the maximum value and the
 maximum stamp separately lets the stamp come from a host that has caught up

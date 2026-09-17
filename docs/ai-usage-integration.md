@@ -421,13 +421,47 @@ stampがこの窓のresetと一致する組だけを集約する。
 ±1秒 (`1789948799`/`1789948800`/`1789948801`) だが、**最頻値より60秒早い報告が
 混じる** — 7Dは3窓中2窓 (11回)、5Hは61窓中3窓 (4回) にあった。
 
-**120にしてある。**ぶれの実測の倍で、**前の窓のresetは18000秒 (5H) 以上離れている**
-ので、広げたことで前の窓を拾う余地は無い。
-**狭い側の失敗は「出せるはずのクォータが出ない」で現れる。**2のままだと、60秒ずれた
-報告が来た更新でその窓の読みが1件も残らず、カードから`%`が消える。
-**この規則が偽になる観測:** 最頻値から120秒を超えて離れたresetの報告。上の
-バックテストのコマンドを`week_resets_at`のぶれを見る向きに変えれば数え直せる。
-reset stampそのものを引き直すなら:
+**120にしてある。**上は、**前の窓のresetまでの距離から観測したぶれを引いた分**
+より狭くなければならない。5Hなら`18000 - 60 = 17940`秒で、これを超えると
+**前の窓のresetが遅れて報告された時に一致し**、直したlive バグへ戻る。
+下は観測した60秒より広くなければならず、狭いと**ずれた回に読みが1件も残らず、
+カードから`%`が消える。**120は両端の内側で、観測が13日ぶんしかないことへの
+余裕を持たせた値である (**倍にする決まりがあるわけではない**)。
+
+**この規則が偽になる観測:** 最頻値から120秒を超えて離れたresetの報告。数え直す:
+
+```bash
+python3 - <<'PY'
+import collections, datetime as dt, json, os
+rows = sorted((json.loads(l) for l in open(
+    os.path.expanduser("~/.cache/claude-usage-json/samples.ndjson")) if l.strip()),
+    key=lambda r: r["recorded_at"])
+for key, length, label in (("session_resets_at", 5 * 3600, "5H"),
+                           ("week_resets_at", 7 * 86400, "7D")):
+    groups = []                       # 窓の長さの半分より近い報告を同じ窓とみなす
+    for row in rows:
+        if not row.get(key):
+            continue
+        stamp = int(dt.datetime.fromisoformat(row[key]).timestamp())
+        for g in groups:
+            if abs(g[0] - stamp) < length / 2:
+                g[1].append(stamp)
+                break
+        else:
+            groups.append((stamp, [stamp]))
+    worst, hit = 0, 0
+    for _, stamps in groups:
+        mode = collections.Counter(stamps).most_common(1)[0][0]
+        worst = max([worst] + [abs(s - mode) for s in stamps])
+        hit += any(s != mode for s in stamps)
+    print("%s: %d 窓、最頻値からのずれの最大 %d 秒、ぶれのあった窓 %d"
+          % (label, len(groups), worst, hit))
+PY
+```
+
+実行すると `5H: 61 窓、最頻値からのずれの最大 60 秒、ぶれのあった窓 47` /
+`7D: 3 窓、... 60 秒、... 3` が出る。**この最大が120を超えたら`RESET_SKEW`を
+見直す。**metricsの側のstampを直に見るなら:
 
 ```bash
 gcx --context cron metrics query \
