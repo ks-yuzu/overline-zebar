@@ -253,12 +253,17 @@ consumed during the window; the second is what the gauge reads now, which is
 what the chip shows. A window the provider reset mid-way consumes more than the
 gauge ends up reading, and the total then passes 100%.
 
-**A downward revision separates them too, by its own size.** The rise before a
-revision is already counted and is not given back, so the total stays at what
-the gauge had reached. Measured, revisions are one point and arrive about once
-a week: the 7D window read `total 37` against a gauge of 36 the day after a
-34→33 revision. Giving the point back would mean taking it off a session that
-has already been credited with it, which is machinery for a point a week.
+**A downward revision separates them too, by its own size, and they
+accumulate.** The rise before a revision is already counted and is not given
+back, so the total stays at what the gauge had reached. Measured over eleven
+days: three revisions, each of one point, 1.9 per week - and **all three landed
+in the same 7D window, which read `total 47` against a gauge of 44**. Giving a
+point back would mean taking it off a session already credited with it, and
+**there is nothing to say whose rise was revised**; with no way to choose, the
+machinery would only redistribute arbitrarily.
+**The observation that falsifies this:** a downward revision larger than one
+point (all three measured were one). Should the gap grow to a material share of
+a window's spend, the decision is worth revisiting.
 
 ```sh
 CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
