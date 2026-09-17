@@ -1167,6 +1167,18 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
   - 判定にはmonitorのpixelではなく`document.documentElement.scrollWidth`を使う。
     barはmonitorいっぱいに広がっており、この値は幅やmarginと同じCSS pixelである。
     `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
+  - **縦の`offsetY`も同じくdocumentから取る** (`clientHeight`)。**規則は「この
+    placementに物理pixelを混ぜない」であって、横だけの話ではない。**zebarは
+    placementの`px`をmonitorのscale factorで掛けるため (`widget_factory.rs`の
+    `to_px_scaled`)、物理pixelを渡すと拡大率が二重に掛かる。
+    - barのrootは`h-screen`なので、documentのviewportはbarのwindowの高さである
+    - **`scrollHeight`ではなく`clientHeight`を使う。**子が縦にはみ出すと
+      `scrollHeight`はviewportを超える。欲しいのはbarのwindowの高さである
+    - **偽になる観測は「拡大率の違うmonitorでパネルのyが揃わない」。**実測では
+      拡大率1のmonitorで`y=40` (bar 34 + 隙間 6) に対し、1.25のmonitorで`y=48`と
+      8px下へずれていた
+    - 再測: zebarを再起動してchipを押し、`EnumWindows` + `GetWindowRect`で
+      パネルの矩形を拾う。拡大率の違う2枚で`y`が一致すればよい
   - **開くmonitorは、押したchipが乗っているbarのmonitorを名前で指す。**上限の元は
     呼び出し元のbarの幅であり、別のmonitorへ開くとその幅がそこの画面幅と合わない。
     monitorごとにbarが立つ (`zpack.json`のpresetが`monitorSelection: all`) ため、
