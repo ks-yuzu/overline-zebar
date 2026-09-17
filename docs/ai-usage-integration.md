@@ -1179,6 +1179,10 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
       8px下へずれていた
     - 再測: zebarを再起動してchipを押し、`EnumWindows` + `GetWindowRect`で
       パネルの矩形を拾う。拡大率の違う2枚で`y`が一致すればよい
+    - **`dockToEdge.windowMargin`はbarの高さではない。**zebarがwindowの「後ろ」に
+      予約する量で、`enabled`がtrueの間しか読まない (`widget_factory.rs`)。
+      ここはdockしないので`0px`を置く。**不活性な設定に動的な値を結ぶと、dockを
+      有効にした時に検証していない規則が黙って効き始める**
   - **開くmonitorは、押したchipが乗っているbarのmonitorを名前で指す。**上限の元は
     呼び出し元のbarの幅であり、別のmonitorへ開くとその幅がそこの画面幅と合わない。
     monitorごとにbarが立つ (`zpack.json`のpresetが`monitorSelection: all`) ため、

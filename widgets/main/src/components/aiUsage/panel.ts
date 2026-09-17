@@ -50,10 +50,13 @@ export async function openUsagePanel(marginX: number) {
     monitorSelection: monitor?.name
       ? { type: 'name', match: monitor.name }
       : { type: 'primary' },
+    /* `windowMargin` is what zebar reserves *after* the window, and it reads
+       it only while `enabled` is true. Nothing is docked here, so there is
+       nothing to reserve. */
     dockToEdge: {
       enabled: false,
       edge: 'top',
-      windowMargin: `${barHeight}px`,
+      windowMargin: '0px',
     },
   } satisfies WidgetPlacement;
 
