@@ -20,6 +20,8 @@ function formatMoment(epochMs: number, timeZone: string | undefined) {
 }
 
 export type UsageProjection = {
+  /** Whether `text` names a moment the window runs out. */
+  exhausts: boolean;
   /** The point the chart runs its dashed line to, in epoch seconds. */
   point: { recordedAt: number; value: number };
   /** The same projection as the card's second line. */
@@ -42,6 +44,7 @@ export function usageProjection(
 
   if (pace.exhaustsAt === null) {
     return {
+      exhausts: false,
       point: {
         recordedAt: window.resetsAt / 1000,
         value: pace.valueAtReset,
@@ -53,6 +56,7 @@ export function usageProjection(
   }
 
   return {
+    exhausts: true,
     point: { recordedAt: pace.exhaustsAt / 1000, value: 100 },
     text:
       window.windowSeconds < RELATIVE_WINDOW_SECONDS

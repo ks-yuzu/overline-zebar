@@ -1014,12 +1014,40 @@ StatProviders（CPU/RAMなど） → Claude usage → Codex usage → Volumeな�
       行を消さずに意味を切り替える。消すと、欠損なのか余裕があるのか読めない。
     - **1日未満のwindowは文言を相対にする** (`RELATIVE_WINDOW_SECONDS`)。
       resetを残り時間で数えているcardが枯渇だけ日付で言うと、2つの時計に読める。
+    - **`Runs out`の側だけを強調する。**アイコン用の18pxへ警告アイコンを描き、
+      行に色を付ける。`N% left at reset`はmutedのままとし、アイコンの有無と色の
+      2点で区別する。2行が同じ書式で並ぶと、枯渇を述べる行が常に出ているreset行と
+      区別できない。その場合、cardが出す警告は大きな数字の閾値色だけになり、
+      これは**現在の使用率**を入力とするため、予測が枯渇を述べていても現在値が
+      閾値未満なら強調は何も出ない。
+    - **色は`thresholds`から決める。**`getThresholdColor(100, thresholds)`を使う。
+      この行が述べているのはwindowが100%へ達することなので、色を決める入力も100とする。
+      chipの`ProjectionFill`も同じ`thresholds`を`getThresholdColor`へ渡しており、
+      **予測だからという理由で1段弱めることはしない。**`thresholds`は
+      `useWidgetSetting('main', 'systemStatThresholds')`で読むユーザー設定であり、
+      ここを`--danger`で固定すると、設定を変えた利用者の画面でcardとchipが異なる色を
+      出す。既定の設定では`--danger`になる。
+      - **この規則が偽になる観測**: `Runs out`を出しているcardの2行目の色tokenが、
+        同じ`thresholds`で`getThresholdColor(100, thresholds)`を評価した結果と
+        一致しない。
+      - 再測: `usageProjection`が`exhausts: true`を返す状態を作り、2行目の`color`を
+        読む。色の実値はテーマごとに異なる
+        (`packages/config/src/defaults/theme-presets.ts`) ため、token名で比べる。
+      - **fillの`--text`→`--success`の置換はしない。**`ProjectionFill`がこれを行うのは
+        背景の塗りだからで、文字色では`--text`がそのまま「強調しない」を表す。
+        cardの大きな数字も`getThresholdColor`の結果をそのまま文字色に使い、
+        置換するのはProgressのindicatorだけである。
+      - 85〜100%で終わる予測に`--warning`を出す拡張は、この規則の上で書けるが
+        **今は実装していない。**cardが今答えているのは、枯渇するかどうかだけである。
     - **概算である旨の記号は付けない。**予測であることは文脈から明らかで、
       記号は丸め誤差しか表せない。この値の不確かさは丸めではなくpaceにある。
     - **出さない場合も行の領域は確保する。**cardの下端は`mt-auto`で押し下げており、
       2行目を落とすとreset行がそのぶん下がって、段の中でreset行が揃わなくなる。
       高さと行送りは同じ段 (12px) を明示する。`1lh`は単位を解さないwebviewで
       宣言ごと落ち、確保したはずの行が無くなる。
+    - **アイコンを描かない時も、その18pxを空けたままにする。**`w-3` (12px) と
+      `gap-1.5` (6px) で文字の開始位置は左端から18pxとなり、reset行の`Clock3`の
+      後ろと一致する。この領域を削ると、2つの文言で文字の開始位置が変わる。
   - **graphの破線**
     - 最後の実測点から伸ばし、100%に達する点で止める。上端を横に走らせると
       「その水準を保つ」という別の意味に読める。
