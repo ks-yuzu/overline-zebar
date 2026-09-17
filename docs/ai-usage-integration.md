@@ -1167,6 +1167,39 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
   - 判定にはmonitorのpixelではなく`document.documentElement.scrollWidth`を使う。
     barはmonitorいっぱいに広がっており、この値は幅やmarginと同じCSS pixelである。
     `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
+  - **縦の`offsetY`も同じくdocumentから取る** (`clientHeight`)。**規則は「この
+    placementに物理pixelを混ぜない」であって、横だけの話ではない。**zebarは
+    placementの`px`をmonitorのscale factorで掛けるため (`widget_factory.rs`の
+    `to_px_scaled`)、物理pixelを渡すと拡大率が二重に掛かる。
+    - barのrootは`h-screen`なので、documentのviewportはbarのwindowの高さである
+    - **`scrollHeight`ではなく`clientHeight`を使う。**子が縦にはみ出すと
+      `scrollHeight`はviewportを超える。欲しいのはbarのwindowの高さである
+    - **偽になる観測は「拡大率の違うmonitorでパネルのyが揃わない」。**実測では
+      拡大率1のmonitorで`y=40` (bar 34 + 隙間 6) に対し、1.25のmonitorで`y=48`と
+      8px下へずれていた
+    - 再測: zebarを再起動してchipを押し、`EnumWindows` + `GetWindowRect`で
+      パネルの矩形を拾う。拡大率の違う2枚で`y`が一致すればよい
+    - **`dockToEdge.windowMargin`はbarの高さではない。**zebarがwindowの「後ろ」に
+      予約する量で、`enabled`がtrueの間しか読まない (`widget_factory.rs`)。
+      ここはdockしないので`0px`を置く。**不活性な設定に動的な値を結ぶと、dockを
+      有効にした時に検証していない規則が黙って効き始める**
+  - **開くmonitorは、押したchipが乗っているbarのmonitorを名前で指す。**上限の元は
+    呼び出し元のbarの幅であり、別のmonitorへ開くとその幅がそこの画面幅と合わない。
+    monitorごとにbarが立つ (`zpack.json`のpresetが`monitorSelection: all`) ため、
+    サブmonitorのchipもここを通る。
+    - 名前は`@tauri-apps/api`の`currentMonitor()`から取る。zebar側の照合は
+      `monitor.name.as_deref() == Some(name)`で、この`name`はtauriの
+      `Monitor::name()`である。JS側の`currentMonitor().name`と出所が同じ。
+      **偽になる観測は「chipを押してもパネルが1枚も開かない」。**照合に外れると
+      `monitors_by_selection`が空を返し、開く対象が1つも無くなる
+    - **`monitorSelection`に`index`は使わない。**zebarはmonitorを左から右・上から下へ
+      並べ替えて保持しており、Tauriの`availableMonitors()`の順とは別である。
+      ここで採った添字は別の画面を指しうる
+    - **名前がnullの時はprimaryへ倒す。**Tauriは`name`をnullableで返す。照合する
+      文字列が無いため、変更前と同じ挙動に戻す
+    - 再測: `curl -sL https://raw.githubusercontent.com/glzr-io/zebar/v3.3.1/packages/desktop/src/monitor_state.rs`
+      の`monitors_by_selection`と`available_monitors`。**tagは使っているzebarの版に
+      合わせる**
   - 起動は`widgets/main/src/components/aiUsage/panel.ts`の1箇所に置く。どのwidgetを
     どの大きさでどこへ開くかが2つのchipで割れないようにする。
 - **5段目は週と5Hの消費の内訳で、Claudeのblockだけが持つ。**Codexはusageのmetricを
