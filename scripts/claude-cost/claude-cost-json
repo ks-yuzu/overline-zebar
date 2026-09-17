@@ -3,6 +3,7 @@
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 import subprocess
 import sys
@@ -13,14 +14,34 @@ from pathlib import Path
 
 COST_METRIC = "claude_code_cost_usage_USD_total"
 INFO_METRIC = "claude_session_info"
+QUOTA_METRIC = "claude_usage_used_percent"
+# 同じ読みがどの窓のものかを持つ。値の側にはその情報が無い。
+RESET_METRIC = "claude_usage_reset_timestamp_seconds"
 
-# 名前・窓の長さ・usage cache内のkey。**window長はhelperの外にも写しがある**
+# 名前・窓の長さ・usage cache内のkey・quota gaugeの`window` label。
+# **window長はhelperの外にも写しがある**
 # (docs/ai-usage-integration.md「window長は複数箇所に重複している」)。
 # providerが変えた時は揃える。
 WINDOWS = (
-    ("session", 5 * 3600, "current_session"),
-    ("week", 7 * 86400, "current_week"),
+    ("session", 5 * 3600, "current_session", "session"),
+    ("week", 7 * 86400, "current_week", "weekly_all"),
 )
+
+# quotaの按分で使うrange queryの刻みと、1本で引く長さの上限。
+# **gcxはrangeの点数でstepを勝手に上げる** (実測: 300sが通るのは12hまでの145点。
+# 18hを投げると600sへ、7dを1発で投げると900sになる)。上がったことは応答からは
+# 分からないため、12hずつに割って繋ぐ。
+QUOTA_STEP = 300
+QUOTA_CHUNK = 12 * 3600
+# gaugeを引く時のlookback。欠測をまたぐためで、幅を変えても合計は動かない。
+# **同じ幅だけ、reset直後に前の窓の値が返りうる。**採る側でresetの時刻を見て落とす。
+QUOTA_LOOKBACK = 900
+# 報告されるresetのぶれ幅。読みがこの窓のものかは、報告されたresetがこの窓のresetと
+# 一致するかで見るので、この幅だけ許す。**実測のぶれは最大60秒** (`samples.ndjson`
+# 13日: 7Dは3窓中2窓、5Hは61窓中3窓で、最頻値より60秒早いresetが届いた)。
+# **窓の長さは5時間・7日なので、前の窓のresetは18000秒以上離れている。**
+# 広げる側の危険は無く、狭い側は「出せるはずのクォータが出ない」で現れる。
+RESET_SKEW = 120
 
 DEFAULT_DATASOURCE = "grafanacloud-prom"
 DEFAULT_TIMEOUT = 30.0
@@ -104,27 +125,88 @@ def window_bounds(payload, key, length, now):
     return reset - dt.timedelta(seconds=length), reset, source
 
 
-def parse_vector(payload):
-    """instant queryの応答をlabel setごとの値にする。
+def finite(raw):
+    """数として読める値だけを返す。**`NaN`と`Inf`は読めなかった側へ送る。**
+
+    Prometheusは`"NaN"`を返すことがあり、`float()`はそれを受ける。通すと
+    `json.dumps`が裸の`NaN`を書き、**JSONとして壊れたcacheが前の正しいcacheを
+    原子的に置き換える。**widgetの`JSON.parse`はそれを読めないので、
+    クォータだけでなくコスト列まで消える (docsに書いた退避経路を通らない)。
+    ここで弾けば、引けなかった時と同じく前回のcacheがそのまま出る。
+    """
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(f"not a finite number: {raw!r}")
+    return value
+
+
+def query_result(payload, kind):
+    """応答から結果の配列を取り出し、**各項目が`metric`を持つことまで確かめる。**
 
     形が合わない応答は0件ではなく例外にする。**引けなかったことと、
     1件も無かったことを混ぜない。**混ぜると、Grafanaが答えなくなった時に
     全部の行が消えた画面を、正しい答えとして公開してしまう。
+
+    **`CostError`にならずに抜ける形を1つも残さない。**`main`と`quota_for`は
+    `CostError`しか捕まえないため、抜けた例外は前回のcacheを出し直す退避経路を
+    素通りして実行ごと落とす。JSONの値は6通りしか無いので、ここは列挙で閉じる
+    (`test_no_json_shape_escapes_as_something_other_than_a_cost_error`)。
+    **例外をまとめて`CostError`へ変える形は採らない。**parser自身の誤りや
+    `MemoryError`まで「読めなかった」に見え、**呼ぶ側によって、cacheごと落ちるか
+    クォータだけ落ちるかが変わる。**
     """
     try:
         data = json.loads(payload)
         result = data["data"]["result"]
-        if data["data"].get("resultType") != "vector":
-            raise CostError("query did not return an instant vector")
+        if data["data"].get("resultType") != kind:
+            raise CostError(f"query did not return {kind} data")
     except (ValueError, KeyError, TypeError) as error:
         raise CostError(f"cannot read the query response: {error}")
-    values = []
+    if not isinstance(result, list):
+        raise CostError(f"query did not return a list of samples: {result!r:.80}")
     for item in result:
+        # 項目もlabel setもdictであることを、**値を読む前に**確かめる。読む側は
+        # `metric.get`を呼ぶので、scalarが紛れると`read`の外で落ちる。
+        if not isinstance(item, dict) or not isinstance(item.get("metric"), dict):
+            raise CostError(f"cannot read a sample: {item!r:.80}")
+    return result
+
+
+def sample_pair(raw):
+    """`[時刻, 値]`の組として読めることを確かめる。
+
+    **strを組として扱わない。**strも添字と展開ができるので、`"1789416600"`は
+    例外を出さずに`7.0`という**もっともらしいgaugeの読み**になる。この族の他の形
+    (dict、None、長さ1、3要素) はすべて`CostError`になり、**クォータが出ない**と
+    いう画面から見える形で失敗する。**strだけが「読めなかった」ではなく
+    「別の答え」という結果になり、捏造した数字で新しいcacheを公開する。**
+    """
+    if not isinstance(raw, list) or len(raw) != 2:
+        raise CostError(f"cannot read a sample: {raw!r:.80}")
+    return raw
+
+
+def parse_vector(payload):
+    """応答をlabel setごとの値にする。値を使う側が呼ぶ。"""
+    values = []
+    for item in query_result(payload, "vector"):
         try:
-            values.append((item["metric"], float(item["value"][1])))
+            values.append((item["metric"], finite(sample_pair(item["value"])[1])))
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise CostError(f"cannot read a sample: {error}")
     return values
+
+
+def parse_label_sets(payload):
+    """応答をlabel setだけにする。
+
+    **値を使わない問い合わせに、値が読めることを要求しない。**
+    `claude_session_info`は常に1を出し、読む側はlabelしか見ない。その1が
+    `NaN`で届いた時に`CostError`にすると、名前を引く1本の失敗で
+    **その回のコストごと前回のcacheへフォールバックする。**値がJSONへ出ない経路では、
+    値の壊れ方は害を持たない。
+    """
+    return [item["metric"] for item in query_result(payload, "vector")]
 
 
 def by_session(values):
@@ -161,11 +243,22 @@ def run_query(config, expression, at=None):
     後ろへずれ、窓の起点に在った系列 (足し戻しを抑止する側) では、そのずれの
     間の消費がどちらにも入らない。
     """
+    extra = ["--time", str(int(at))] if at is not None else []
+    return parse_vector(run_gcx(config, extra, expression))
+
+
+def run_label_query(config, expression, at=None):
+    """label setだけが要る問い合わせ。値は読まない (`parse_label_sets`)。"""
+    extra = ["--time", str(int(at))] if at is not None else []
+    return parse_label_sets(run_gcx(config, extra, expression))
+
+
+def run_gcx(config, extra, expression):
+    """gcxを1回呼び、応答のJSONを返す。"""
     command = [config["gcx"], "metrics", "query", "-d", config["datasource"], "-o", "json"]
     if config["context"]:
         command += ["--context", config["context"]]
-    if at is not None:
-        command += ["--time", str(int(at))]
+    command += extra
     command.append(expression)
     try:
         completed = subprocess.run(
@@ -181,7 +274,42 @@ def run_query(config, expression, at=None):
             completed.stderr.decode("utf-8", "replace"),
             completed.returncode,
         ))
-    return parse_vector(completed.stdout.decode("utf-8", "replace"))
+    return completed.stdout.decode("utf-8", "replace")
+
+
+def parse_matrix(payload):
+    """range queryの応答を`(時刻, label set, 値)`にする。
+
+    `parse_vector`と同じく、形が合わない応答は0件ではなく例外にする。
+    """
+    samples = []
+    for item in query_result(payload, "matrix"):
+        try:
+            for raw in item["values"]:
+                moment, value = sample_pair(raw)
+                samples.append((int(moment), item["metric"], finite(value)))
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise CostError(f"cannot read a sample: {error}")
+    return samples
+
+
+def run_range_query(config, expression, start_ts, end_ts):
+    """窓ぜんぶを`QUOTA_STEP`刻みで引く。
+
+    **1本で投げない。**gcxはrangeが長いとstepを黙って上げるため、頼んだ刻みとは
+    別の刻みの答えが、同じ形で返る (`QUOTA_CHUNK`)。
+    """
+    # **秒より下を先に落とす。**片方だけをintにすると、最後のチャンクで
+    # `moment < end_ts`が真のまま`stop`が`moment`に等しくなり、進まなくなる。
+    moment, end = int(start_ts), int(end_ts)
+    samples = []
+    while moment < end:
+        stop = min(moment + QUOTA_CHUNK, end)
+        samples += parse_matrix(run_gcx(config, [
+            "--from", str(moment), "--to", str(stop), "--step", f"{QUOTA_STEP}s",
+        ], expression))
+        moment = stop
+    return samples
 
 
 def window_cost(config, start_ts, now_ts):
@@ -209,9 +337,216 @@ def window_cost(config, start_ts, now_ts):
             for key in set(increase) | set(addback)}
 
 
+def interval_costs(config, start_ts, now_ts):
+    """`{区間の時刻: {session_id: その区間の消費}}`。生counterの差で出す。
+
+    **`increase()`を区間ごとに並べない。**系列がその区間の中で始まると、
+    Prometheusは暗黙の0を見ないため最初のexportが欠落する。`window_cost`が
+    `first_over_time ... unless`で足し戻しているのと同じ欠けだが、こちらは
+    **落ちるのが額ではなく取り分なので、その区間に居た他のsessionへそのまま
+    回る。**実測 (20h) で合計の11.6%、sessionごとでは-14%〜+60%ずれた。
+
+    **窓の起点に在った系列の残高は、ここでは落とさなくてよい。**range queryの
+    刻みは`--from`ではなくstepの絶対境界に揃う (実測) ため、その系列の初値は
+    窓の起点かそれより前に載る。按分は起点より後の区間しか見ないので、
+    残高はどの区間にも入らない。`window_cost`が`unless`で明示的に抑えているのは、
+    あちらが窓ぜんぶを1本のrangeで数えていて、同じ逃げ道が無いためである。
+    """
+    series = {}
+    for moment, metric, value in run_range_query(config, COST_METRIC, start_ts, now_ts):
+        session_id = metric.get("session_id")
+        if not session_id:
+            continue
+        key = tuple(sorted((name, metric[name]) for name in metric if name != "__name__"))
+        series.setdefault(key, (session_id, {}))[1][moment] = value
+
+    costs = {}
+    for session_id, points in series.values():
+        previous = 0.0
+        for moment, value in sorted(points.items()):
+            # 同じsession_idのままresumeするとcounterがリセットされる (実測で
+            # 週に5件)。下がったら、そこにある値がreset後の消費そのものである。
+            spent = value - previous if value >= previous else value
+            previous = value
+            if spent > 0:
+                row = costs.setdefault(moment, {})
+                row[session_id] = row.get(session_id, 0.0) + spent
+    return costs
+
+
+def quota_reading(quota_window, reset_ts):
+    """この窓のgaugeを読む式。
+
+    **読みは、その台自身のresetがこの窓を指している時だけ採る。**resetの直後、
+    lookbackと同じ長さのあいだ、追いついていない台は前の窓の値を返す。その値は
+    窓の頭の本物の消費と同じ形をしていて、値からは見分けられない。
+
+    **値とresetを別々に`max`しない。**実測 (直近の5H reset、起点+60秒) で、
+    一方の台が`0 / 新しいreset`、もう一方が`18 / 古いreset`だった。別々に取ると
+    **resetは追いついた台から、値は遅れた台から**来て、18が窓の頭の消費になる。
+    系列どうしを`and on (instance, window)`で組にしてから`max`を取る。
+
+    **読みの窓は、報告されたresetがこの窓のresetと一致するかで決める。**
+    「起点より後ろ」では決めない。前の窓のresetは起点とほぼ同じ値で、しかも
+    1秒ぶれるため、境目に余裕を置くことになる。**余裕を超えてずれた日には、
+    前の窓の読みが黙って通る** (実測で5Hの窓が10を20と出した)。
+    一致で見れば、ずれた時に残るのは0件で、**クォータは出ないが嘘は出ない。**
+
+    どの台も追いついていない間も同じく0件で、窓の外の読みも同じ理由で落ちる。
+    """
+    selector = f'{QUOTA_METRIC}{{window="{quota_window}"}}'
+    stamp = f'{RESET_METRIC}{{window="{quota_window}"}}'
+    return (
+        f'max by (window) (last_over_time({selector}[{QUOTA_LOOKBACK}s])'
+        f' and on (instance, window)'
+        f' (abs(last_over_time({stamp}[{QUOTA_LOOKBACK}s]) - {int(reset_ts)})'
+        f' <= {RESET_SKEW}))'
+    )
+
+
+def window_quota(config, quota_window, start_ts, now_ts, reset_ts, measured):
+    """窓のクォータ消費をsessionごとに按分する。`(session別, 帰属できない分)`。
+
+    gaugeの読みが増加した観測時刻を境界にし、直前の境界からその境界までに
+    各sessionが使ったコストの比率で、その増加量を分配する。
+
+    **バケットを固定幅にしない。**gaugeは整数でしか報告されないので、5分の固定幅で
+    区切ると「コストはあるが増加量0」のバケットが生じる (実測で窓のコストの35%)。
+    その消費は配分にまったく反映されないまま、増加は後続のバケットに整数で現れ、
+    そのバケットで動いていたsessionが全量を受け取る。増加した観測時刻を境界に
+    すれば、窓の中のコストは必ずいずれかの増加量の分配に反映される。
+    **境界は1ptごとではない。**書き込みが5分に1回なので、1つの境界が2pt以上を
+    まとめて運ぶ (実測7日で、増加量495ptのうち304pt=61%が2pt以上の増加)。
+    **この規則が偽になる観測:** 1セッションだけが走った区間で、その区間の上昇が
+    そのsessionへ帰属する割合。固定幅との比較は経緯 (task #106) にある。
+
+    返す合計は**この窓で実際に使った量**で、`measured` (gaugeの現在値) とは
+    別物である。窓の中でresetが起きた窓では前者が大きくなり、100%を超える
+    (実測で、先々週の7Dの窓は最終値56%に対し199%)。**行の合計が一致する相手は
+    こちらであって、chipの%ではない。**
+    """
+    # gaugeの値そのものを引き、差はここで取る。**増分をPromQLで作らない。**
+    # `delta`も`increase`も外挿するため隣り合う差の合計が端点の差と一致せず、
+    # range queryの最後のサンプルから`now`までの分はどう書いても式の外に出る。
+    #
+    # `max by (window)`で引く。**instanceでは絞らない。**同じaccountの値を
+    # 複数のhostが報告しており (実測で2台、24hの上昇は177.0で完全に一致)、
+    # 1台を選ぶとその台が止まっていた間の上昇が丸ごと落ちる。
+    # `[15m]`は欠測をまたぐためのlookback。飛んでもその先で差が繋がる。
+    readings = {}
+    for moment, _, value in run_range_query(
+        config, quota_reading(quota_window, reset_ts), start_ts, now_ts):
+        readings[moment] = max(readings.get(moment, 0.0), value)
+
+    # 両端の値を固定する。先頭に`(起点, 0)`を、末尾に`(now, measured)`を加える。
+    # **加えないと合計は「最初のサンプルから最後のサンプルまで」の増加量になり、
+    # 窓の先頭と末尾の消費が欠落する** (実測で5Hの窓で3のうち2、7Dの窓で25のうち1)。
+    # 窓の外の読みはqueryの側で除外済み。ここで見るのは終端だけで、`now`ちょうどの
+    # 読みを残すと、追加した`(now, measured)`と同じ時刻が2つ並ぶ。
+    inside = [(moment, value) for moment, value in sorted(readings.items())
+              if moment < int(now_ts)]
+    # 窓の中に読みが1つも無いのに`measured`が0でないなら、その値は窓の外から
+    # 来ている。**`measured`も`[15m]`のlookbackで引いており、resetの直後は
+    # 前の窓の値を返す** (gaugeの書き込みとscrapeがresetに追いつくまで)。
+    if measured > 0 and not inside:
+        return None
+    series = [(int(start_ts), 0.0)] + inside + [(int(now_ts), measured)]
+    rises, resets = {}, set()
+    for (_, before), (moment, after) in zip(series, series[1:]):
+        if after > before:
+            rises[moment] = after - before
+        elif after * 2 < before:
+            # **窓の中のresetである。**不具合対応などでproviderが窓の途中で
+            # 一括リセットすることがあり、実測で1つの週に3回起きている
+            # (45→0、24→5、73→0)。**その先にある値が、resetから後に積んだ分。**
+            # 前の分を捨てると、resetより前に動いていたsessionが行から消える。
+            #
+            # **半分より下まで下がったことを条件にする。下げ幅では測らない。**
+            # gaugeは下方修正で1ptだけ下がることがあり、下げ幅で測ると閾値の
+            # すぐ上の修正 (84→81) が「81の消費」として足し戻され、**合計が
+            # ほぼ倍になる。**resetは0付近まで落ち、修正は水準の近くに留まる
+            # (実測: reset後は0・0・5、修正は前の値の0.92〜0.99倍)。
+            # **この規則が偽になる観測:** 前の値の半分より下まで下がる下方修正、
+            # または半分以上で止まるreset。
+            resets.add(moment)
+            if after > 0:
+                rises[moment] = after
+
+    costs = interval_costs(config, start_ts, now_ts)
+
+    # **resetの時刻も境界にする。**resetが0まで落ちた時は上昇が記録されないので、
+    # 境界にしないと`previous`がreset前の境界のまま動かない。次の増加が、**resetを
+    # またいだ区間のコスト**で分配され、reset前に終わっていたsessionへreset後の
+    # クォータが帰属する。
+    points, unattributed, previous = {}, 0.0, int(start_ts)
+    for tick in sorted(set(rises) | resets):
+        # **resetの刻みでは、その刻みのぶんしか見ない。**そこに在る値はresetから
+        # 後に積んだ分なので、resetより前のコストで割ってはいけない。
+        # 刻みは5分幅で、resetはそのどこかで起きている。曖昧なのはその1刻みだけで、
+        # **両側から外すと、記録されている消費が画面では「No spend recorded」に
+        # なる。**reset後の側へ残す。
+        lower = tick - QUOTA_STEP if tick in resets else previous
+        shares = {}
+        for moment, row in costs.items():
+            if lower < moment <= tick:
+                for session_id, value in row.items():
+                    shares[session_id] = shares.get(session_id, 0.0) + value
+        rise = rises.get(tick, 0.0)
+        total = sum(shares.values())
+        if not rise:
+            # 0まで落ちたreset。配るものは無いので、曖昧な1刻みは次の上昇へ回す。
+            previous = lower
+            continue
+        if total <= 0:
+            # 上昇はあるのに、その間のコストが1件も無い。**どこかへ寄せない。**
+            # 他のmachineのCLIがOTelを送っていない時にここへ来るので、寄せると
+            # 手元のsessionが一律に膨らむ。
+            unattributed += rise
+        else:
+            for session_id, value in shares.items():
+                points[session_id] = (
+                    points.get(session_id, 0.0) + rise * value / total)
+        previous = tick
+    return points, unattributed, sum(rises.values())
+
+
+def quota_for(config, quota_window, start_ts, now_ts, reset_ts, source):
+    """`(session別, 帰属できない分, {used_percent, total})`。出せなければ`None`。
+
+    **クォータが引けないことをcost全体の失敗にしない。**按分に要るrange queryは、
+    満了した7Dの窓で**28本** (gaugeで14本、同じ刻みのコストで14本)。一方**cost列
+    そのものは窓あたりinstant query 2本**と、名前を引く1本だけである。ここの失敗で
+    cacheごと前回の内容へフォールバックすると、**28本ある側の失敗率が、3本しか
+    ない側の鮮度を決める。**
+    `used_percent`が`None`であることが、按分が無いことを読む側へ伝える。
+    """
+    # 按分は「窓の起点で0だった」ことに全面的に乗っている。resetを1つも読めず
+    # 今からwindow長だけ戻しただけの窓は、起点がresetではない。そこにあった
+    # 残高が起点直後の上昇として現れ、**その時に動いていたsessionへ最大で
+    # 窓ぜんぶが付く。**costは窓の取り方が多少ずれても額がずれるだけなので、
+    # この窓ではcost側だけを出す。
+    if source == "fallback_length":
+        return None
+    try:
+        # 読みと同じ組み方で引く。**こちらは窓の末尾に固定する値**なので、
+        # 追いついていない台の値を採ると、そのぶん合計が膨らむ。
+        measured = run_query(config, quota_reading(quota_window, reset_ts), now_ts)
+        if not measured:
+            return None
+        used = max(value for _, value in measured)
+        split = window_quota(config, quota_window, start_ts, now_ts, reset_ts, used)
+        if split is None:
+            return None
+        points, unattributed, total = split
+        return points, unattributed, {"used_percent": used, "total": total}
+    except CostError as error:
+        print(f"claude cost: quota for {quota_window}: {error}", file=sys.stderr)
+        return None
+
+
 def session_info(config, at=None):
     found = {}
-    for metric, _ in run_query(config, INFO_METRIC, at):
+    for metric in run_label_query(config, INFO_METRIC, at):
         session_id = metric.get("session_id")
         if not session_id:
             continue
@@ -224,7 +559,7 @@ def session_info(config, at=None):
     return found
 
 
-def build_rows(costs, info):
+def build_rows(costs, points, info):
     """表示する行と、名前の付かない分を返す。
 
     **上限を置かない。**行を切ると、切った分が`total`にだけ残って内訳と
@@ -233,13 +568,14 @@ def build_rows(costs, info):
     系列数は現実の側で頭打ちになっており (実測で保持期間いっぱいの20日でも
     29件)、抑えるべき増え方が無い。
     """
-    rows, unresolved, unresolved_count = [], 0.0, 0
-    for session_id, cost in costs.items():
+    rows, unresolved = [], {"cost": 0.0, "quota": 0.0, "sessions": 0}
+    for session_id in set(costs) | set(points):
+        cost, quota = costs.get(session_id, 0.0), points.get(session_id, 0.0)
         # 窓の中に居ただけで使っていないsession。`increase()`はそれを厳密に0で
         # 返す (実測で5Hの10系列中7件)。**閾値では落とさない。**$0.004も消費で
         # あり、落とせば`total`から消えるか、消えないなら内訳と合わなくなる。
         # 実測でも、0と$0.005の間の値は1件も無かった。
-        if not cost:
+        if not cost and not quota:
             continue
         labels = info.get(session_id)
         # **対応表が無いことと、対応表に写せるlabelが無いことを混ぜない。**
@@ -247,12 +583,15 @@ def build_rows(costs, info):
         # `{}`で届く。それは既知のsessionであり、読む側は`session_id`の先頭で
         # 出せる。`None`は系列が無いか、2本来て決められなかった場合である。
         if labels is None:
-            unresolved += cost
-            unresolved_count += 1
+            unresolved["cost"] += cost
+            unresolved["quota"] += quota
+            unresolved["sessions"] += 1
             continue
-        rows.append(dict(labels, session_id=session_id, cost=cost))
+        rows.append(dict(labels, session_id=session_id, cost=cost, quota=quota))
+    # **並べる鍵はcostのまま。**クォータは按分値で、同じ消費でも刻みの取り方で
+    # 前後する。行の位置が問いによって動かない方を鍵にする。
     rows.sort(key=lambda row: (-row["cost"], row["session_id"]))
-    return rows, unresolved, unresolved_count
+    return rows, unresolved
 
 
 def build_output(config, now):
@@ -265,10 +604,15 @@ def build_output(config, now):
     # 名前は3本のqueryで共有する。**同じ瞬間で評価する**ため、1回だけ引く。
     info = session_info(config, now.timestamp())
     windows = {}
-    for name, length, key in WINDOWS:
+    for name, length, key, quota_window in WINDOWS:
         start, reset, source = window_bounds(payload, key, length, now)
         costs = window_cost(config, start.timestamp(), now.timestamp())
-        rows, unresolved, unresolved_count = build_rows(costs, info)
+        # `reset`は`fallback_length`でだけNoneで、その窓は`quota_for`が先に降りる。
+        split = quota_for(
+            config, quota_window, start.timestamp(), now.timestamp(),
+            reset.timestamp() if reset else 0, source)
+        points, unattributed, quota = split or ({}, 0.0, None)
+        rows, unresolved = build_rows(costs, points, info)
         # **桁を丸めない。**表示の精度は読む側が決める。ここで丸めると、
         # 行ごとの丸めと合計の丸めが食い違い、「行と不明の合計がtotalに
         # 一致する」を成り立たせるために但し書きが要る。
@@ -279,9 +623,14 @@ def build_output(config, now):
             "source": source,
             # **`total`は報告する値から積む。**別に数えると、報告しなかった分が
             # totalにだけ残り、内訳と突き合わせられない。
-            "total": sum(row["cost"] for row in rows) + unresolved,
+            "total": sum(row["cost"] for row in rows) + unresolved["cost"],
             "sessions": rows,
-            "unresolved": {"cost": unresolved, "sessions": unresolved_count},
+            "unresolved": unresolved,
+            # **`total`と`used_percent`は別物である。**前者はこの窓で実際に
+            # 使った量で、行が足し合わさる相手。後者はgaugeの現在値で、chipが
+            # 出している数字。窓の中でresetが起きた窓では前者が大きくなり、
+            # 100%を超える (実測で56%に対し199%)。
+            "quota": quota and dict(quota, unattributed=unattributed),
         }
     return {
         "generated_at": now.isoformat(timespec="seconds"),
@@ -363,8 +712,20 @@ def main(argv):
         try:
             # 整形しない。widgetが60秒ごとに読み直すため、indentと\uXXXXの
             # escapeがそのまま転送量になる (題は日本語で、escapeで19%増える)。
-            atomic_write(cache, json.dumps(
-                output, separators=(",", ":"), ensure_ascii=False).encode(), 0o600)
+            # **`allow_nan=False`は最後の砦である。**JSONにならない値が出来て
+            # いたら、書く前にここで止まる。書いてしまうと読む側に直す手段が無い。
+            # 有限でない値はparserが弾くが、**有限どうしの足し算が溢れることは
+            # 防げない** (`window_cost`は2本のqueryの和を取る)。
+            body = json.dumps(output, separators=(",", ":"), ensure_ascii=False,
+                              allow_nan=False).encode()
+        except ValueError as error:
+            # **引けなかった時と同じ扱いにする。**traceback で終わると、cacheは
+            # 保たれるのに、cronのlogに残るのは例外の山になり、stdoutへ前回の
+            # cacheを出し直す経路も通らない。
+            print(f"claude cost: cannot serialise the reading: {error}", file=sys.stderr)
+            return print_cache(cache, 69)
+        try:
+            atomic_write(cache, body, 0o600)
         except OSError as error:
             print(f"claude cost: cannot write {cache}: {error}", file=sys.stderr)
             return 73

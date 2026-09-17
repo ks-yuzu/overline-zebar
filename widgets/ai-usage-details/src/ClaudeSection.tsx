@@ -166,12 +166,12 @@ export default function ClaudeSection({
        column here is the same window as the column above it. */
     <div className="grid min-h-0 grid-cols-2 gap-2">
       <CostBreakdown
-        label="5H Cost by Session"
+        label="5H Quota and Cost by Session"
         status={costStatus}
         window={cost?.windows.session}
       />
       <CostBreakdown
-        label="7D Cost by Session"
+        label="7D Quota and Cost by Session"
         status={costStatus}
         window={cost?.windows.week}
       />
@@ -184,10 +184,7 @@ export default function ClaudeSection({
         className={`grid min-w-0 gap-2 ${className ?? ''}`}
         style={{ gridTemplateRows: SECTION_GRID_ROWS }}
       >
-        <SectionHeader
-          service="claude"
-          title="Claude Usage"
-        />
+        <SectionHeader service="claude" title="Claude Usage" />
         {/* Spans the three usage rows only. The cost row is fetched on its
             own and can have an answer when this one does not, so covering it
             here would hide a reading that arrived. */}

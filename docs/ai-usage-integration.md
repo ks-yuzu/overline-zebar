@@ -292,8 +292,8 @@ window長は`reset - 長さ`で既に前提にしているので、同じ前提�
 chipのcount downと`resets_at`が食い違う。**ここのwindow長は、既に複数箇所に
 ある写しがもう1つ増えたものである。変更時は揃える。**
 
-**3本のqueryは同じ瞬間で評価する。**コストの2本も、名前を読む1本もである。
-`--time`でhelperが捕まえた時刻へ固定する。渡さないとgcxがサーバへ届いた時刻で
+**同じ瞬間で評価するqueryは4種類ある。**コストの2本、名前を読む1本、
+クォータのgaugeを読む1本である。`--time`でhelperが捕まえた時刻へ固定する。渡さないとgcxがサーバへ届いた時刻で
 個別に評価するため、rangeの起点が窓の起点より後ろへずれる。名前の側を固定し
 損ねると、その間に題が書き換わった時、**別の瞬間のlabelを別の瞬間のコストへ
 付ける。**
@@ -321,18 +321,313 @@ counterがリセットされ、リセット前の分が丸ごと落ちる (実�
 この誤りが再現しない。**`unless`が何も除かないためで、次の週次resetで初めて
 本番に出る。足し算はhelper側で行う。
 
+### クォータの按分
+
+同じ窓のクォータ消費 (`claude_usage_used_percent`) を、sessionごとに割り振る。
+**コストで代用できない。**実測 (2026-09-15、5Hの窓) で、最も金を使ったsessionは
+上限の10.9%しか取っておらず、2位のsessionが26.9%を取っていた。$とtokenは互いに
+一致して動き、クォータだけが両方から外れる。**窓全体で1つの`%/$`を使うと、
+出るのはコスト列の定数倍で、順位も比率も変わらない。**
+
+```text
+境界 = 窓の起点(値0) / gaugeの読みが増加した各観測時刻 / 窓の中のresetの時刻 / now(値=measured)
+
+各境界について、直前の境界からその境界までの増加量を、
+同じ区間に各sessionが使ったコストの比率でsessionへ分配する
+```
+
+**バケットを固定幅にしない。境界は、gaugeの読みが増加した観測時刻に取る。**gaugeは
+整数でしか報告されないので、5分の固定幅で区切ると「コストはあるが増加量0」のバケットが
+生じる。実測で**窓のコストの35%**がそのバケットに入り、**配分にまったく反映されない。**
+その増加は後続のバケットに整数で現れ、そのバケットで動いていたsessionが全量を受け取る。
+増加した観測時刻を境界にすれば、窓の中のコストは必ずいずれかの増加量の分配に反映される。
+
+**境界は1ptごとではない。**gaugeの書き込みは5分に1回なので、1つの境界が2pt以上を
+まとめて運ぶ。実測 (7日・5Hの窓) で増加イベントは279件・合計495ptあり、**そのうち
+304pt (61%) が2pt以上の増加**だった。**分配の分解能の上限はこの粒度である。**
+
+**両端の値を固定する。**系列の先頭に`(窓の起点, 0)`を、末尾に`(now, measured)`を
+追加する。追加しないと合計は「最初のサンプルから最後のサンプルまで」の増加量になり、
+**窓の先頭と末尾の消費が合計から欠落する** (実測で5Hの窓は3のうち2、7Dの窓は25のうち1)。
+**合計が実測と一致するのはこの2点を追加しているためであって、queryの精度に
+よるものではない。**
+
+**増分をPromQLで作らない。両側ともである。**gaugeは`delta`も`increase`も外挿する
+ため、隣り合う差の合計が端点の差と一致しない。costは、系列がその区間の中で始まると
+最初のexportが欠落する (counterが始まる暗黙の0をPrometheusが見ないため)。
+`window_cost`が足し戻しているのと同じ欠けだが、**こちらで欠落するのは額ではなく
+取り分なので、その区間に居た他のsessionへ分配される。**実測 (20h) で合計の11.6%、
+sessionごとでは-14%〜+60%ずれた。どちらも生の値をrange queryで取得し、差はhelper側で
+計算する。
+
+**counterが下がったら、そこにある値がresume後の消費である。**同じ`session_id`の
+ままresumeするとcounterがリセットされる (実測で週に5件)。
+
+**窓の起点に在った系列の残高は、按分側では除外しなくてよい。**range queryの刻みは
+`--from`ではなくstepの絶対境界に揃う (実測) ため、その初値は窓の起点かそれより前に
+位置し、按分は起点より後の区間しか見ない。`window_cost`が`unless`で明示的に抑えて
+いるのは、あちらが窓ぜんぶを1本のrangeで数えていて同じ逃げ道が無いためである。
+
+**`max by (window)`で引き、instanceでは絞らない。**同じaccountの値を複数のhostが
+報告している (実測で2台、24hの上昇は177.0で完全に一致)。1台を選ぶと、その台が
+止まっていた間の増加量が丸ごと欠落する。
+
+**range queryは12時間ずつに割る。****gcxはrangeの点数でstepを勝手に上げる。**
+実測で300s stepが通るのは12hまで (145点)、18hを投げると600sに、7dを1発で投げると
+900sになる。**上がったことは応答からは分からない。**7dぶんで28本になる。
+
+**subqueryに載せない。**`(コストの取り分 * クォータの増分)[6h:5m]`以上は、
+**エラーにならずに0を返す** (実測)。`[1h:5m]`なら正しく48を返し、片方ずつなら
+`[24h:5m]`でも正しい。2つのmetricを掛けた式を長いsubqueryに載せた時だけ静かに壊れる。
+
+**窓の外から来た読みだけしか無いなら按分しない。**`measured`も同じ15分の
+lookbackで引いているため、resetの直後、gaugeの書き込みとscrapeが追いつくまでは
+前の窓の値を返す。0に固定した起点との差が「窓の先頭で一気に消費した」形になり、
+**reset直後に動いていたsessionへ前の窓ぶんが帰属する。下降が無いので、下の検出では
+判定できない。**窓の中の読みが1つも無く、かつ`measured`が0でない時に止める。
+まだ使っていないだけの窓は`measured`が0なので、空の按分がそのまま出る。
+
+**窓の中のresetは足し戻す。**providerは不具合対応などで窓の途中に一括リセットを
+かけることがある。**実測 (usage cacheのhistory 13日) で1つの週に3回起きており
+(45→0、24→5、73→0)、その週の消費は最終値56%に対して199%だった。**捨てると、
+resetより前に動いていたsessionが行から丸ごと消える。
+**5Hでは13日・約105窓で1件も無く、7Dだけの現象である。**
+
+**下降がresetかどうかは、落ちた先で見る。下げ幅では見ない。**gaugeは下方修正で
+1ptだけ下がることがあり、それをresetと読むと残りの値がもう一度加算される (84→81を
+resetと読むと165%になる)。**resetは0付近まで下がり、修正は直前の水準の近くで止まる。**
+実測でreset後は0・0・5、修正は前の値の0.92〜0.99倍だった。
+**下げ幅で測ると2種類が数ptしか離れず** (1・1・1 対 19・45・73)、閾値の1pt上の
+修正がresetとして通る。
+**この規則が偽になる観測:** 前の値の半分より下まで下がる下方修正、または半分以上で
+止まるreset。
+
+**その読みがどの窓のものかは、値ではなく`claude_usage_reset_timestamp_seconds`が
+持つ。**resetの直後、lookbackと同じ長さのあいだ、窓の中の刻みで引いても返るのは
+前の窓の値である (書き込みとscrapeが追いついていない)。**その値は、窓の頭の本物の
+消費と同じ形をしていて値からは見分けられない。**読みを台ごとに自分のstampと組にし、
+stampがこの窓のresetと一致する組だけを集約する。
+
+**「起点より後ろか」ではなく「この窓のresetか」で判定する。**前の窓のresetは窓の
+起点とほぼ同じ値なので、境目で区別する方式は、そのずれの大きさに依存する。厳密な
+`> 起点`では**reset前の読みがすべて通り、5Hのカードがgauge 10に対し20を出した** —
+前の窓の値が新しい窓の先頭に現れ、その下降がwindow内resetとして足し戻された。
+**余裕を足して`> 起点+60`とする方式では、ずれが余裕を超えた日に同じ不具合が再発する
+(警告は出ない)。**一致で判定すれば、ずれた日に残る読みは0件になり、**クォータは
+出ないが、誤った値も出ない。**
+
+`RESET_SKEW`は**報告されるresetのぶれ幅**である。resetは秒未満を持たないが、
+**同じ窓のresetが複数の値で届く。**`samples.ndjson`13日ぶんで測ると、多くは
+±1秒 (`1789948799`/`1789948800`/`1789948801`) だが、**最頻値より60秒早い報告が
+混じる** — 7Dは3窓中2窓 (11回)、5Hは61窓中3窓 (4回) にあった。
+
+**120にしてある。**上は、**前の窓のresetまでの距離から観測したぶれを引いた分**
+より狭くなければならない。5Hなら`18000 - 60 = 17940`秒で、これを超えると
+**前の窓のresetが遅れて報告された時に一致し**、直したlive バグへ戻る。
+下は観測した60秒より広くなければならず、狭いと**ずれた回に読みが1件も残らず、
+カードから`%`が消える。**120は両端の内側で、観測が13日ぶんしかないことへの
+余裕を持たせた値である (**倍にする決まりがあるわけではない**)。
+
+**この規則が偽になる観測:** 最頻値から120秒を超えて離れたresetの報告。数え直す:
+
+```bash
+python3 - <<'PY'
+import collections, datetime as dt, json, os
+rows = sorted((json.loads(l) for l in open(
+    os.path.expanduser("~/.cache/claude-usage-json/samples.ndjson")) if l.strip()),
+    key=lambda r: r["recorded_at"])
+for key, length, label in (("session_resets_at", 5 * 3600, "5H"),
+                           ("week_resets_at", 7 * 86400, "7D")):
+    groups = []                       # 窓の長さの半分より近い報告を同じ窓とみなす
+    for row in rows:
+        if not row.get(key):
+            continue
+        stamp = int(dt.datetime.fromisoformat(row[key]).timestamp())
+        for g in groups:
+            if abs(g[0] - stamp) < length / 2:
+                g[1].append(stamp)
+                break
+        else:
+            groups.append((stamp, [stamp]))
+    worst, hit = 0, 0
+    for _, stamps in groups:
+        mode = collections.Counter(stamps).most_common(1)[0][0]
+        worst = max([worst] + [abs(s - mode) for s in stamps])
+        hit += any(s != mode for s in stamps)
+    print("%s: %d 窓、最頻値からのずれの最大 %d 秒、ぶれのあった窓 %d"
+          % (label, len(groups), worst, hit))
+PY
+```
+
+実行すると `5H: 61 窓、最頻値からのずれの最大 60 秒、ぶれのあった窓 47` /
+`7D: 3 窓、... 60 秒、... 3` が出る。**この最大が120を超えたら`RESET_SKEW`を
+見直す。**metricsの側のstampを直に見るなら:
+
+```bash
+gcx --context cron metrics query \
+  'max by (window) (claude_usage_reset_timestamp_seconds)' \
+  --from $(( $(date +%s) - 86400 )) --to $(date +%s) --step 300s -o json |
+python3 -c '
+import json, sys
+seen = {}
+for s in json.load(sys.stdin)["data"]["result"]:
+    seen.setdefault(s["metric"]["window"], set()).update(
+        int(float(v)) for _, v in s["values"])
+for window, values in sorted(seen.items()):
+    print("報告", window, sorted(values))'
+python3 -c '
+import datetime as dt, json, sys
+p = json.load(sys.stdin)
+for key in ("current_session", "current_week"):
+    print("JSON", key,
+          int(dt.datetime.fromisoformat(p[key]["resets_at"]).timestamp()))' \
+  < "$HOME/.cache/claude-usage-json/usage.json"
+```
+
+**組にするのは台ごとである。queryごとではない。**値とstampを別々に`max`すると、
+**stampは追いついた台から、値は追いついていない台から**来る。実測 (reset+60秒) で、
+一方が`0 / 新しいstamp`、もう一方が`18 / 古いstamp`で、2つのmaxを合わせると18が
+新しい窓の先頭の消費として計上される。
+
+**resetは、0まで下がったかどうかに関わらず配分の境界にする。**resetの後に在る値は
+resetから後に積んだ分なので、reset前のコストで分配すると、reset前に終わっていた
+sessionへreset後のクォータが帰属する。0まで下がったresetは増加を記録せず、0でない
+resetは記録する (実測の`24→5`) ので、**片方だけを見る書き方では後者が漏れる。**
+
+**reset自身の5分の刻みに含まれるコストは、判定できる側へ残す。**resetはその刻みの
+どこかで起きており、同じ刻みのコストがreset前か後かは判別できない。両側から除外すると
+行から消え、**記録されている消費について画面が「No spend recorded」と表示する。**
+境界を1刻み手前に置き、判別できない1刻みはreset後の増加量へ含める。
+
+**accountは1つを前提にしている。cost側のqueryも同じである。**どちらも
+`user_account_uuid`で絞っていないため、2 account分が入ったdatasourceでは、
+片方のgaugeをもう片方のコストにも配ることになる。
+**この規則が偽になる観測:** `count(count by (user_account_uuid) (claude_usage_used_percent))`
+が2以上になる (実測では両metricとも、保持期間の20日いっぱいで1)。
+
+**起点がresetでない窓では按分しない。**按分は「窓の起点で0だった」ことを前提に
+している。resetを1つも読めず今からwindow長だけ戻しただけの窓 (`source`が
+`fallback_length`) は起点がresetではなく、そこにあった残高が起点直後の増加として
+現れて、**その時に動いていたsessionへ最大で窓ぜんぶが帰属する。**cost側は窓の決め方が
+多少ずれても額がずれるだけなので、そちらは出す。
+
+**クォータが引けないことをcost全体の失敗にしない。**按分に要るrange queryは、
+満了した7Dの窓で**28本** (gaugeを12時間ずつで14本、同じ刻みのコストで14本)。
+一方**cost列そのものは窓あたりinstant query 2本** (`increase`と`first_over_time`) と、
+名前を引く1本だけである。ここの失敗でcacheごと前回の内容へフォールバックすると、
+**28本ある側の失敗率が、3本しかない側の鮮度を決める。**`quota`を`null`にして
+cost列だけを出す。
+
+#### どこまで信じてよいか
+
+**合計は一致する。**行 + `unresolved` + `unattributed` = `quota.total`で、実測で
+両窓とも誤差0である。
+
+**`total`と`used_percent`は別物である。**前者はこの窓で実際に使った量、後者は
+gaugeの現在値 (chipが出している数字) で、窓の中でresetが起きた窓では前者が
+大きくなり100%を超える。
+
+**下方修正でも、その幅だけ離れる。**修正の前の上昇は既に数えてあり、返さない。
+**1つの窓に何度も入るので、差は1ptに留まらない。**返すには、既に付けたsessionから
+その1ptを引く必要があるが、**どのsessionの上昇が修正されたのかは分からない。**
+引く相手を決められない以上、機構を足しても恣意的な配り直しにしかならない。
+
+**下方修正は取得側の産物ではない。**`max by (window)`は、高い値を報告していた台が
+欠測すると残った台の低い値へ落ちるので、下降がscrapeの穴でも起こりうる。
+**そうではないことを、`samples.ndjson`と突き合わせて確かめた。**これはusage helperが
+APIから直に書いた1本の系列で、台ごとのmaxもscrapeも挟まっていない。Prometheus側で
+見えた3件の下降 (`34→33`、`39→38`、`39→38`) は、**時刻まで含めてこちらにも在った。**
+
+**どれくらい乖離するかをバックテストした** (`samples.ndjson`、09-05〜09-17)。
+被覆9割以上の完了窓で見る。
+
+| 窓 | 完了窓 | 乖離のあった窓 | 最大 | 中央値 |
+| --- | --- | --- | --- | --- |
+| 5H | 59 | 1 (2%) | +1pt (消費の1%) | +0pt |
+| 7D | 1 | 1 | +2pt (消費の2%) | +2pt |
+
+**5Hではほぼ起きない。7Dは完了窓が1つしか無く、判断の材料になっていない。**
+進行中の窓は被覆46%の時点で既に+3pt (消費の6%) で、**窓が長いほど修正を拾う機会が
+増えるため、7Dの方が大きく出る。**
+**この規則が偽になる観測:** 1ptより大きい下方修正 (これまでの実測はすべて1pt)、
+または7Dの完了窓で差が消費の1割を超えること。再測する:
+
+```bash
+python3 - <<'PY'
+import datetime as dt, json, os
+rows = sorted((json.loads(l) for l in open(
+    os.path.expanduser("~/.cache/claude-usage-json/samples.ndjson")) if l.strip()),
+    key=lambda r: r["recorded_at"])
+keys, windows = set(), {}
+for row in rows:                      # resetは前後1秒ぶれるので寄せる
+    stamp = int(dt.datetime.fromisoformat(row["week_resets_at"]).timestamp())
+    key = next((k for k in keys if abs(k - stamp) <= 2), None)
+    if key is None:
+        keys.add(stamp); key = stamp
+    windows.setdefault(key, []).append((row["recorded_at"], float(row["week_used_percent"])))
+for key in sorted(windows):
+    s = sorted(windows[key]); total = s[0][1]; rev = []
+    for (_, b), (m, a) in zip(s, s[1:]):
+        if a > b: total += a - b
+        elif a * 2 < b: total += a
+        elif a < b: rev.append((m, b, a))
+    print("%s total %3.0f gauge %3.0f 差 %+3.0f 下方修正 %d件 被覆 %3.0f%%" % (
+        dt.datetime.fromtimestamp(key).strftime("%m-%d"), total, s[-1][1],
+        total - s[-1][1], len(rev), min((s[-1][0]-s[0][0])/604800, 1) * 100))
+PY
+```
+
+窓ごとの一致 (行の合計が`quota.total`になること) は別に確かめる:
+
+```bash
+CLAUDE_COST_GCX_CONTEXT=cron claude-cost-json --force | python3 -c '
+import json, sys
+for name, w in json.load(sys.stdin)["windows"].items():
+    q = w.get("quota")
+    if not q: print(name, "quota unavailable"); continue
+    parts = sum(r["quota"] for r in w["sessions"]) + w["unresolved"].get("quota", 0)
+    whole = parts + q["unattributed"]
+    print("%s: %.2f vs total %.2f (gauge %.2f)"
+          % (name, whole, q["total"], q["used_percent"]))'
+```
+
+**行ごとの値は近似である。**刻みを5分から15分へ動かすと、行の値は窓の合計の1割ほど
+動く。**細かくしても収束しない** (60s→120sで21%、120s→300sで12%、300s→600sで7%)。
+24hでクォータの上昇イベントは69件しか無く、細かい刻みは1件の上昇をその1分に
+動いていたsessionへ丸ごと付けるだけになる。
+
+**帰属の向きは確かめてある。**60秒刻みの生データで1 sessionだけが走った区間を
+抽出すると、10分以上続いた区間は5〜15分の刻みで90〜100%がそのsessionへ帰属する。5分未満の区間は
+当たらない (区間が刻みより短く、分離できない)。時刻合わせも、クォータを1バケット
+ずらすと24hで24〜29ポイントがコストの無い区間へ移り、配分が20〜24%動く。
+ずらさなければ0である。
+
+**$/クォータの比まで信じてはいけない。**modelの違いで説明が付くのは一部である
+(Fable主体のsessionは$1.83/pt、Opus勢は$2.5〜6.4/pt)。tokenの量も内訳もほぼ同じで
+金額も近い2つのsessionが、クォータでは2.3倍違う例があり、**その残りが本物か
+按分の誤差かは、手元のデータでは区別できない。**整数丸め (目盛り境界に替えても
+行は最大2.3ポイントしか動かない) と時刻ずれ (±5分が最適、±10分で悪化) は潰した。
+
+**`unattributed`と`unresolved`は別のものである。**`unresolved`は「コストは分かるが
+名前が付かないsession」で、`unattributed`は「上昇した区間にコストが1件も無く、
+どのsessionにも帰属できないクォータ」である。前者は別マシンでemitterを動かせば消え、
+後者は消えない。**どちらも行として出す。**出さないと、画面に出ていない行が1つ
+あることが、どこにも現れない。**一致するのはcacheの中の値である。**画面は行ごとに
+1桁へ丸めるので、見えている数字の合計は見えている見出しと一致しないことがある。
+
 ### 出力
 
 ```json
 {"generated_at":"…","currency":"USD",
  "windows":{
    "session":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":21.12,
-              "sessions":[…],"unresolved":{…}},
+              "sessions":[…],"unresolved":{…},"quota":{…}},
    "week":{"starts_at":"…","resets_at":"…","source":"usage_cache","total":1246.03,
            "sessions":[{"session_name":"#46","custom_title":"#46",
                         "ai_title":"ツール仕様まとめ","task_id":"46","project":"…",
-                        "session_id":"…","cost":123.92}],
-           "unresolved":{"cost":451.61,"sessions":11}}}}
+                        "session_id":"…","cost":123.92,"quota":8.64}],
+           "unresolved":{"cost":451.61,"sessions":11,"quota":3.2},
+           "quota":{"used_percent":25.0,"total":25.0,"unattributed":1.0}}}}
 ```
 
 **emitterが出すlabelはすべて写す。**読む側がどれでも絞り込めるようにするため。
@@ -383,6 +678,50 @@ emitterは`session_id`以外のlabelを任意にしているため、cwdが`/`�
 **resetがoffsetを持たなければ、読めない値として扱う。**offsetの無い日時もparseは
 できるが、awareな現在時刻と比べた瞬間にTypeErrorになり、**cacheを読めなかった時の
 退避経路を通らずに実行ごと落ちる。**窓の側のfallbackに載せる。
+
+**有限でない値は読めなかった値として扱う。**Prometheusは`"NaN"`を返すことがあり、
+`float()`はそれを受ける。通すと`json.dumps`が裸の`NaN`を書き、**前の正しいcacheを
+置き換えたcacheがJSONでなくなる。**widgetのparserはfileごと拒むので、クォータだけで
+なくコスト列も消える (下の退避経路を通らない)。parserで弾いて下の経路へ送り、
+書き出しの`allow_nan=False`を最後の砦にする (有限どうしの足し算は溢れうる)。
+**どちらも「引けなかった時」と同じ経路で降りる。**traceback で終わるとcacheは残るが、
+前回のcacheを出し直す経路を通らず、cronのlogには文ではなく例外が残る。
+
+**応答の形は、`CostError`以外で抜けるものを1つも残さない。**`main`も`quota_for`も
+それ以外を捕まえないため、`TypeError`や`AttributeError`は**前回のcacheを出し直す
+経路を素通りしてtracebackで終わる。**レビュー3巡で3件 (label setを警告なく除外する /
+objectの所にscalar / listの所に`null`) 続けて出たので、envelope・list・各項目の
+`metric`を、**値を読む前に1か所で**確かめる。
+
+**閉じ方は列挙であって、例外をまとめて変えることではない。**JSONの値は6通りしか
+無いので組み合わせを並べてテストできる (162通り)。まとめて`CostError`へ変える形は、
+parser自身の誤りや`MemoryError`まで区別なくCostErrorにする。しかも**quota側は失敗を
+無視し、cost側はcacheごと前回へフォールバックするので、同じ誤りが「古いcache」と
+「クォータの無い新しいcache」のどちらにもなる。**どちらも更新が成功したように見える。
+
+**その列挙が示すのは「`CostError`以外で抜けない」ことだけである。**例外を出さずに
+通った形は正しいものとして数えており、**壊れた形が「読めてしまう」側は見ていない。**
+実際に1つ抜けていた: `[時刻, 値]`の組の所にstrが来ると、strも添字と展開が通るため、
+`"1789416600"`が例外なしに**`7.0`というgaugeの読みになる。**組の他の壊れ方
+(dict、None、長さ1、3要素) はすべて`CostError`になりクォータが出ない、という画面から
+見える失敗になる。**strだけが「読めなかった」ではなく「別の答え」という結果になり、
+捏造した数字で新しいcacheを公開する。**組はlistであって長さ2であることを要求する。
+
+**長さも見る。**見ないと`[1, 2, 3]`はmatrixでは`CostError`、vectorでは添字1が
+読めるので通る。**同じ応答が、当たったqueryの種類で「古いcacheへフォールバックする」
+と「新しいcacheを公開する」に分かれる。**catch-allを外した理由と同じ形である。
+**この規則が偽になる観測:** Prometheusが`[時刻, 値]`以外の形でsampleを返すこと
+(現状の応答は保持期間ぶんすべて2要素)。再測は上の再測コマンドで
+`quota unavailable`が出ないことの確認。
+
+**壊れたcacheは、出す時に検査しない。**書ける経路が無い — 唯一書く所の手前に
+`allow_nan=False`が在るので、「cacheはJSONである」は書く側で保たれている。
+読むたびに (widgetが毎分呼ぶ`--cached-only`も含めて) 検査するのは、書く側が
+既に守っている約束を測り直すことになる。
+
+**値を読まない問い合わせに、値が読めることを要求しない。**`claude_session_info`は
+常に1を出し、読む側はlabelしか見ない。ここで`NaN`を拒むと、**名前を引く1本の失敗が
+その回のコストごと落とす。**label setだけを返すparserを使い、応答の形の検査は同じに保つ。
 
 **引けなかった時は前回のcacheをそのまま返す。**`generated_at`が動かないので、
 widgetのstale判定がそのまま効く。半分だけの答えは公開しない。
@@ -443,6 +782,8 @@ widgetのstale判定がそのまま効く。半分だけの答えは公開しな
 | --- | --- |
 | **window** / `5H` / `7D` | quotaの窓。`[14D] 5H Usage Peak per Window`のWindowもこれ |
 | **session** | Claude Codeの会話1本。`session_id`、`session_name`、costの各行、`Unresolved (n)` |
+| **unresolved** | 名前の付かないsession。コストは分かっている。別マシンでemitterを動かせば消える |
+| **unattributed** | どのsessionにも帰属できないクォータ。増加した区間にコストが1件も無い。名前を付けても消えない |
 
 **Claudeの`/usage`はquotaの窓を`Current session`と呼ぶが、その語はここでは使わない。**
 このツールの`session`は会話1本であり、**同じ語が2つの意味を持つとcostの段で破綻する** —
@@ -837,6 +1178,32 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
     上位N件に切ると、切った分が`total`に現れず、行の合計と合わなくなる。
   - **`unresolved`も1行として出す。**落とすと行が`total`に合わない。実測では
     週の$1,329のうち$451 (34%) がこれで、別マシンのsessionである。
+  - **1行に「上限の何%」と「いくら」を並べる。**$の側は実測値、%の側は按分値で
+    ある。**同じ行に並べるのは、順位の食い違いこそが見たい情報だからである。**
+    実測で、最も金を使ったsessionが上限の10.9%しか占めておらず、2位が26.9%を
+    占めていた。2枚のcardに分けると、この1行が2つの一覧に分かれ、対応付けて
+    読めなくなる。
+    **画面には但し書きを足さない。**どこまで信じてよいかは「クォータの按分」に
+    書く (行ごとの近似の幅、説明の付かない$/クォータの比)。
+  - **%は窓の中での構成比ではなく、上限に対する割合である。**行の合計は100ではなく、
+    見出しの`quota.total` (この窓で実際に使った量) になる。
+    - **見出しはchipの%ではない。**窓の中でresetが起きた窓では、使った量がgaugeの
+      現在値を超える (実測で56%に対し199%)。**chipと突き合わせて読めるのはresetの
+      無い窓だけで、そこでは両者が一致する。**
+  - **並び順とbarはcostのまま。**クォータは按分値で、刻み幅の決め方によって同じ
+    消費でも順位が前後する。**問いによって行の位置が動くと、更新のたびに動いたように
+    見える。**
+  - **`unattributed`を`No spend recorded`として別の行に出す。**`unresolved`とは
+    別のものである (前者はどのsessionにも帰属できないクォータ、後者は名前の付かない
+    sessionのコスト)。出さないと、**画面に出ていない行が1つあることが、
+    どこにも現れない。**
+    - **ここでも合っているのは「行が欠けていないこと」であって、表示の桁では
+      ない。**cacheの中では行と`unattributed`の合計がちょうど`quota.total`になるが、
+      画面はそれぞれを1桁へ丸めるため、見えている数字の合計は見えている見出しと
+      一致しないことがある。**列を合わせるために行の数字を調整しない。**
+  - **`quota`を持たない窓も、cost列だけで出す。**helperはgaugeを引けなかった時に
+    `null`を書き、この変更より前のcacheはfieldを持たない。**窓ごと拒むと、
+    元から無かった列のために、届いているcost列まで消える。**
   - **表示名は`custom_title`→(本文が無ければ`ai_title`を副題に足す)→`ai_title`
     →`project`→`session_id`の先頭。**組み立てはここが持つ。helperは両方の題を
     そのまま渡す。実データで`#102`が`#102 AI usage ポップアップパネル統合`になる。
@@ -910,6 +1277,17 @@ Claudeの`refresh_status: "last_known"`は、cacheが新しくてもsource側の
 | Codex cron timeout          | 30秒          |
 | Claude helper内部timeout    | 45秒          |
 | Codex app-server応答timeout | 15秒/応答     |
+| Claude cost cron timeout    | 200秒         |
+| Claude cost helper内部timeout | 30秒/query  |
+
+**cost helperのtimeoutだけ桁が違うのは、所要が窓の長さに比例するためである。**
+range queryは12時間ずつに割るので、7Dの窓は満了時にgaugeとコストで28本になり、
+窓が若いうちはそれより少ない。実測で、**7Dの窓が68時間の時点でrange 14本・instant
+7本・32〜41秒**だった。満了に近い窓はこれより長くなる。**内側は1 queryあたりで、
+外側は1回の更新ぜんぶを覆う。**外側がrange queryを覆わないと、helperは理由を
+logへ書く前に殺される。
+**この規則が偽になる観測:** 満了した7Dの窓で200秒を超えること。cronのlogに
+`claude-cost.cron`の行が出ないまま`--cached-only`の鮮度だけが古くなる形で現れる。
 
 `@reboot`はWindows起動そのものではなく、WSL内でcron daemonが起動した時点で
 実行される。
@@ -1523,8 +1901,11 @@ python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
+python3 scripts/claude-cost/test-claude-cost-json
+python3 scripts/claude-sessions/test-claude-session-info-prom
 node packages/ui/test-usage-series.mjs
 node packages/ui/test-usage-status.mjs
+node packages/ui/test-cost-rows.mjs
 ```
 
 `test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
@@ -1543,6 +1924,11 @@ collector出力、stale readingを同じ実装moduleに対して検証する。
 - buildした全widgetの`dist`を、Zebarが実際に参照するpackへ同期している。
 - ソース側とpack側の各`dist/index.html`が`cmp`で一致している。
 - 同期後にZebarをreloadまたは再起動し、対象表示を確認している。
+
+**クォータの按分を触った時は、合計が実測に一致することを実データで引き直す。**
+テストは固定したreadingに対して規則を確かめるもので、**gaugeの側の形が変わった
+ことは捕まえない** (窓の中でresetが起きる、片方のhostだけが報告する等)。
+コマンドは`scripts/claude-cost/README.md`の「How far to trust it」にある。
 
 加えて、Windows側（PowerShellなど）からZebarと同じcommandを実行し、既定の
 distributionでJSONが返ることを確認する。
