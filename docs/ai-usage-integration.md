@@ -1167,6 +1167,23 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
   - 判定にはmonitorのpixelではなく`document.documentElement.scrollWidth`を使う。
     barはmonitorいっぱいに広がっており、この値は幅やmarginと同じCSS pixelである。
     `outerSize`は物理pixelなので、拡大率が1でない環境で食い違う。
+  - **開くmonitorは、押したchipが乗っているbarのmonitorを名前で指す。**上限の元は
+    呼び出し元のbarの幅であり、別のmonitorへ開くとその幅がそこの画面幅と合わない。
+    monitorごとにbarが立つ (`zpack.json`のpresetが`monitorSelection: all`) ため、
+    サブmonitorのchipもここを通る。
+    - 名前は`@tauri-apps/api`の`currentMonitor()`から取る。zebar側の照合は
+      `monitor.name.as_deref() == Some(name)`で、この`name`はtauriの
+      `Monitor::name()`である。JS側の`currentMonitor().name`と出所が同じ。
+      **偽になる観測は「chipを押してもパネルが1枚も開かない」。**照合に外れると
+      `monitors_by_selection`が空を返し、開く対象が1つも無くなる
+    - **`monitorSelection`に`index`は使わない。**zebarはmonitorを左から右・上から下へ
+      並べ替えて保持しており、Tauriの`availableMonitors()`の順とは別である。
+      ここで採った添字は別の画面を指しうる
+    - **名前がnullの時はprimaryへ倒す。**Tauriは`name`をnullableで返す。照合する
+      文字列が無いため、変更前と同じ挙動に戻す
+    - 再測: `curl -sL https://raw.githubusercontent.com/glzr-io/zebar/v3.3.1/packages/desktop/src/monitor_state.rs`
+      の`monitors_by_selection`と`available_monitors`。**tagは使っているzebarの版に
+      合わせる**
   - 起動は`widgets/main/src/components/aiUsage/panel.ts`の1箇所に置く。どのwidgetを
     どの大きさでどこへ開くかが2つのchipで割れないようにする。
 - **5段目は週と5Hの消費の内訳で、Claudeのblockだけが持つ。**Codexはusageのmetricを
