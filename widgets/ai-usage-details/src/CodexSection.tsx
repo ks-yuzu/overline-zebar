@@ -291,13 +291,11 @@ export default function CodexSection({
           <UsageCard
             key={`${window.windowDurationMins}-${window.resetsAt}`}
             label={`${formatWindowDuration(window.windowDurationMins)} Quota`}
-            projection={
-              getProjection(
-                window,
-                selectWindowSamples(data.history, window.windowDurationMins),
-                now
-              )?.text
-            }
+            projection={getProjection(
+              window,
+              selectWindowSamples(data.history, window.windowDurationMins),
+              now
+            )}
             reset={formatReset(window, now)}
             thresholds={thresholds}
             usedPercent={window.usedPercent}

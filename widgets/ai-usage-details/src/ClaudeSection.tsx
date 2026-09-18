@@ -302,14 +302,14 @@ export default function ClaudeSection({
       <div className="grid min-h-0 grid-cols-2 gap-2">
         <UsageCard
           label="5H Quota"
-          projection={sessionProjection?.text}
+          projection={sessionProjection}
           reset={`Resets in ${formatSessionReset(data.current_session.resets_at, now)}`}
           thresholds={thresholds}
           usedPercent={data.current_session.used_percent}
         />
         <UsageCard
           label="7D Quota"
-          projection={weekProjection?.text}
+          projection={weekProjection}
           reset={`Resets ${formatResetDate(data.current_week)}`}
           scoped={
             weekModel && {

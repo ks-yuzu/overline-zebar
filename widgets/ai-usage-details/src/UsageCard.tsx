@@ -5,7 +5,14 @@ import {
   clampPercentage,
   getThresholdColor,
 } from '@overline-zebar/ui';
-import { Clock3 } from 'lucide-react';
+import { Clock3, TriangleAlert } from 'lucide-react';
+
+/** What the pace so far says about the rest of the window. */
+type Projection = {
+  /** Whether `text` names a moment the window runs out. */
+  exhausts: boolean;
+  text: string;
+};
 
 /** A second quota drawn inside the card, scoped to part of the first. */
 type Scoped = {
@@ -15,8 +22,7 @@ type Scoped = {
 
 type Props = {
   label: string;
-  /** What the pace so far says about the rest of the window. */
-  projection?: string;
+  projection?: Projection;
   reset: string;
   scoped?: Scoped;
   thresholds: Threshold[];
@@ -101,12 +107,25 @@ export default function UsageCard({
         {/* Height and leading are the same step rather than `1lh`, which a
             webview without the unit drops silently, taking the reserved line
             with it. */}
-        <span
-          className="h-3 truncate pl-[18px] text-xs leading-3"
-          title={projection}
+        <div
+          className="flex h-3 items-center gap-1.5 text-xs leading-3"
+          style={
+            projection?.exhausts
+              ? { color: `var(${getThresholdColor(100, thresholds)})` }
+              : undefined
+          }
         >
-          {projection}
-        </span>
+          {/* The 18px the icon occupies is reserved in both cases, so the
+              text begins at the same offset as the reset line above. */}
+          {projection?.exhausts ? (
+            <TriangleAlert className="h-3 w-3 shrink-0" />
+          ) : (
+            <span className="h-3 w-3 shrink-0" />
+          )}
+          <span className="min-w-0 truncate" title={projection?.text}>
+            {projection?.text}
+          </span>
+        </div>
       </div>
     </Card>
   );
