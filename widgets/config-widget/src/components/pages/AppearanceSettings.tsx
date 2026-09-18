@@ -3,7 +3,6 @@ import {
   FieldInput,
   FieldTitle,
   FormField,
-  PanelLayout,
   Select,
   SelectContent,
   SelectItem,
@@ -11,9 +10,10 @@ import {
   SelectValue,
 } from '@overline-zebar/ui';
 import { useAppSetting } from '@overline-zebar/config';
-import PanelHeading from '../PanelHeading';
-import { ThemeEditor } from '../theme/ThemeEditor';
+import SettingsPage from '../SettingsPage';
+import { ThemePicker } from '../theme/ThemePicker';
 import { Separator } from '../common/Separator';
+import FontPicker from '../common/FontPicker';
 
 function AppearanceSettings() {
   const [radius, setRadius] = useAppSetting('radius');
@@ -35,86 +35,94 @@ function AppearanceSettings() {
   ];
 
   return (
-    <PanelLayout title="Appearance">
-      <div className="px-3 py-1 flex-grow flex flex-col">
-        <PanelHeading
-          title="Apperance"
-          description="Customise your overline-zebar widgets to suit you."
-        />
-        <div className="h-full">
-          <FormField>
-            <FieldTitle>Border Radius</FieldTitle>
-            <FieldInput>
-              <Select
-                onValueChange={(value) => setRadius(value as string)}
-                defaultValue={radius}
-                items={radiusOptions}
-              >
-                <SelectTrigger>
-                  <SelectValue>
-                    {(value: string) => {
-                      const option = radiusOptions.find(
-                        (opt) => opt.value === value
-                      );
-                      return option ? option.label : '';
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {radiusOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FieldInput>
-            <FieldDescription>
-              Changes how "rounded" elements are.
-            </FieldDescription>
-          </FormField>
-          <Separator />
-          <FormField>
-            <FieldTitle>Window Effect</FieldTitle>
-            <FieldInput>
-              <Select
-                onValueChange={(value) => setWindowEffect(value as string)}
-                defaultValue={windowEffect}
-                items={effectOptions}
-              >
-                <SelectTrigger>
-                  <SelectValue>
-                    {(value: string) => {
-                      const option = effectOptions.find(
-                        (opt) => opt.value === value
-                      );
-                      return option ? option.label : '';
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {effectOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FieldInput>
-            <FieldDescription>
-              Sets the window transparency/blurring effect.
-            </FieldDescription>
-          </FormField>
-          <Separator />
-          <FormField>
-            <FieldTitle>Theme</FieldTitle>
-            <FieldInput>
-              <ThemeEditor />
-            </FieldInput>
-          </FormField>
-        </div>
+    <SettingsPage
+      title="Appearance"
+      description="Customise your overline-zebar widgets to suit you."
+    >
+      <div>
+        <FormField>
+          <FieldTitle>Border Radius</FieldTitle>
+          <FieldInput>
+            <Select
+              onValueChange={(value) => setRadius(value as string)}
+              defaultValue={radius}
+              items={radiusOptions}
+            >
+              <SelectTrigger>
+                <SelectValue>
+                  {(value: string) => {
+                    const option = radiusOptions.find(
+                      (opt) => opt.value === value
+                    );
+                    return option ? option.label : '';
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {radiusOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldInput>
+          <FieldDescription>
+            Changes how "rounded" elements are.
+          </FieldDescription>
+        </FormField>
+        <Separator />
+        <FormField>
+          <FieldTitle>Window Effect</FieldTitle>
+          <FieldInput>
+            <Select
+              onValueChange={(value) => setWindowEffect(value as string)}
+              defaultValue={windowEffect}
+              items={effectOptions}
+            >
+              <SelectTrigger>
+                <SelectValue>
+                  {(value: string) => {
+                    const option = effectOptions.find(
+                      (opt) => opt.value === value
+                    );
+                    return option ? option.label : '';
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {effectOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldInput>
+          <FieldDescription>
+            Sets the window transparency/blurring effect. Restart Zebar to
+            ensure the correct effect is applied.
+          </FieldDescription>
+        </FormField>
+        <Separator />
+        <FormField>
+          <FieldTitle>Font</FieldTitle>
+          <FieldInput>
+            <FontPicker />
+          </FieldInput>
+          <FieldDescription>
+            Font used across all widgets. Defaults to Geist Mono.
+          </FieldDescription>
+        </FormField>
+        <Separator />
+        <FormField>
+          <FieldTitle>Theme</FieldTitle>
+          <FieldInput>
+            <ThemePicker />
+          </FieldInput>
+        </FormField>
       </div>
-    </PanelLayout>
+    </SettingsPage>
   );
 }
 

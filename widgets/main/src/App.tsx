@@ -1,4 +1,4 @@
-import { useWidgetSetting } from '@overline-zebar/config';
+import { useSystemThemeSync, useWidgetSetting } from '@overline-zebar/config';
 import { useEffect, useState } from 'react';
 import * as zebar from 'zebar';
 import { Center } from './components/Center';
@@ -36,17 +36,19 @@ function App() {
   }, []);
 
   useAutoTiling();
+  useSystemThemeSync();
 
   const volumeIconClassnames = 'h-3.5 w-3.5 text-icon';
   const [marginX] = useWidgetSetting('main', 'marginX');
   const [paddingLeft] = useWidgetSetting('main', 'paddingLeft');
   const [paddingRight] = useWidgetSetting('main', 'paddingRight');
+  const [showSystray] = useWidgetSetting('main', 'showSystray');
 
   return (
     <div
       className={cn(
-        'relative flex justify-between items-center py-1 bg-background backdrop-blur-xl text-text h-screen antialiased select-none font-mono',
-        marginX > 0 && 'rounded-lg border border-border'
+        'relative flex justify-between items-center py-1 bg-background backdrop-blur-md text-text h-screen antialiased select-none',
+        marginX > 0 && 'rounded-lg border border-border/40'
       )}
       style={{ margin: `0 ${marginX}px` }}
     >
@@ -89,9 +91,11 @@ function App() {
             iconClassnames={volumeIconClassnames}
           />
         </div>
-        <div className="h-full flex items-center px-0.5">
-          <Systray systray={output.systray} />
-        </div>
+        {showSystray && (
+          <div className="h-full flex items-center px-0.5">
+            <Systray systray={output.systray} />
+          </div>
+        )}
         <TimeDisplay dateOutput={output.date} />
         <div
           className="flex items-center h-full"

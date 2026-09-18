@@ -14,7 +14,11 @@ export function useAppSetting<K extends keyof RootConfig['app']>(key: K) {
           | 'zebarWebsocketUri'
           | 'currentThemeId'
           | 'radius'
-          | 'windowEffect',
+          | 'windowEffect'
+          | 'fontFamily'
+          | 'systemThemeSync'
+          | 'lightThemeId'
+          | 'darkThemeId',
         value: value as unknown as 'useAutoTiling' extends K
           ? boolean
           : 'zebarWebsocketUri' extends K
@@ -25,7 +29,15 @@ export function useAppSetting<K extends keyof RootConfig['app']>(key: K) {
                 ? string
                 : 'windowEffect' extends K
                   ? string
-                  : never,
+                  : 'fontFamily' extends K
+                    ? string
+                    : 'systemThemeSync' extends K
+                      ? boolean
+                      : 'lightThemeId' extends K
+                        ? string | null
+                        : 'darkThemeId' extends K
+                          ? string | null
+                          : never,
       }),
   ] as const;
 }

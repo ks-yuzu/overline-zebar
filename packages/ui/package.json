@@ -26,7 +26,7 @@
     "test": "tsc && tailwindcss -i ./src/index.css -o ./dist/index.css && node test-usage-series.mjs && node test-usage-status.mjs && node test-usage-projection.mjs && node test-cost-rows.mjs && node test-theme-colors.mjs"
   },
   "dependencies": {
-    "@base-ui-components/react": "1.0.0-beta.2",
+    "@base-ui-components/react": "1.0.0-rc.0",
     "@overline-zebar/config": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -7,8 +7,9 @@ function withOpacity(variableName: string) {
   // `calc(undefined * 100%)`, which the browser drops together with the whole
   // declaration, so the element silently keeps the paint it inherited.
   return ({ opacityValue }: { opacityValue?: number }) => {
-    if (opacityValue === undefined || opacityValue === 100)
+    if (opacityValue === undefined || opacityValue === 100) {
       return `var(${variableName})`;
+    }
     return `color-mix(in srgb, var(${variableName}) calc(${opacityValue} * 100%), transparent)`;
   };
 }
@@ -21,6 +22,7 @@ const config: Omit<Config, 'content'> = {
         background: withOpacity('--background'),
         border: withOpacity('--border'),
         'background-deeper': withOpacity('--background-deeper'),
+        surface: withOpacity('--surface'),
         button: withOpacity('--button'),
         'button-border': withOpacity('--button-border'),
         primary: withOpacity('--primary'),
@@ -30,11 +32,11 @@ const config: Omit<Config, 'content'> = {
         'text-muted': withOpacity('--text-muted'),
         icon: withOpacity('--icon'),
         success: 'var(--success)',
-        danger: 'var(--danger)',
+        danger: withOpacity('--danger'),
         warning: 'var(--warning)',
       },
       fontFamily: {
-        mono: ['Geist Mono', 'monospace'],
+        mono: ['var(--font-mono)', 'Geist Mono', 'monospace'],
         // Nerd Fonts glyphs. Installed on the system, not bundled.
         icon: ['Cojica', 'monospace'],
       },

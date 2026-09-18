@@ -30,6 +30,10 @@ export const AppSettingsSchema = z.object({
   currentThemeId: z.string(),
   radius: z.string(),
   windowEffect: z.string().default('acrylic'),
+  fontFamily: z.string().default('Geist Mono'),
+  systemThemeSync: z.boolean().default(false),
+  lightThemeId: z.string().nullable().default('latte'),
+  darkThemeId: z.string().nullable().default('default'),
 });
 
 export const ProviderSettingsSchema = z.object({
@@ -40,13 +44,13 @@ export const ProviderSettingsSchema = z.object({
 });
 
 export const MainWidgetSettingsSchema = BaseWidgetSettingsSchema.extend({
-  flowLauncherPath: z.string().default(''),
   mediaMaxWidth: z.string().default('400'),
   weatherThresholds: z.array(ThresholdSchema).default([]),
   weatherUnit: z
     .union([z.literal('celsius'), z.literal('fahrenheit')])
     .default('celsius'),
   pinnedSystrayIcons: z.array(SystrayIconSchema).default([]),
+  showSystray: z.boolean().default(true),
   marginX: z.number().default(0),
   paddingLeft: z.number().default(4),
   paddingRight: z.number().default(4),

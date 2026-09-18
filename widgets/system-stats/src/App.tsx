@@ -43,26 +43,28 @@ function App() {
 
   return (
     <Router hook={useHashLocation}>
-      <div className="h-screen relative flex justify-between shadow-sm items-center bg-background border border-button-border/80 backdrop-blur-xl text-text antialiased select-none rounded-lg font-mono">
+      <div className="h-screen relative flex justify-between shadow-sm items-center bg-background border border-button-border/80 backdrop-blur-xl text-text antialiased select-none rounded-lg">
         <div className="flex w-full h-full">
           <div className="flex flex-col">
             <Navbar />
           </div>
 
-          <Switch>
-            <Route path="/">
-              <Host host={output.host} battery={output.battery} />
-            </Route>
-            <Route path="/storage">
-              <Storage disk={output.disk} />
-            </Route>
-            <Route path="/performance">
-              <Performance cpu={output.cpu} memory={output.memory} />
-            </Route>
-            <Route path="/network">
-              <Network network={output.network} />
-            </Route>
-          </Switch>
+          <div className="flex-grow min-w-0 h-full flex flex-col bg-surface">
+            <Switch>
+              <Route path="/">
+                <Host host={output.host} battery={output.battery} />
+              </Route>
+              <Route path="/storage">
+                <Storage disk={output.disk} />
+              </Route>
+              <Route path="/performance">
+                <Performance cpu={output.cpu} memory={output.memory} />
+              </Route>
+              <Route path="/network">
+                <Network network={output.network} />
+              </Route>
+            </Switch>
+          </div>
         </div>
       </div>
     </Router>
