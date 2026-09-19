@@ -1985,9 +1985,7 @@ git worktree add --detach /tmp/rebase-trial feat/ai-usage
 
 1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
 2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
-3. 「検証項目」を通すこと。**`packages/ui`のbuildを先に済ませる。**widget側のbuildが
-   `packages/ui/dist/index.js`を解決するため、`dist`が無いか古いとrollupのexportエラーで
-   落ちる (「配置・更新手順」の2)
+3. 「検証項目」を**上から順に**通すこと
 4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
 
 **buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
@@ -1997,33 +1995,42 @@ git worktree add --detach /tmp/rebase-trial feat/ai-usage
 
 変更時は最低限、次を確認する。
 
+**順番を入れ替えない。** `packages/ui`を先頭に置くのは、widget側のbuildが
+`packages/ui/dist/index.js`を解決するためである。後ろに回すと、clean checkoutでは
+widgetのbuildがrollupのexportエラーで落ち、古い`dist`が残った環境では**古いUIを束ねた
+widgetがbuildに成功してしまう。**
+
 ```sh
-corepack pnpm exec eslint \
+CI=1 corepack pnpm --filter @overline-zebar/ui test
+./node_modules/.bin/eslint \
   packages/ui/src/components/usage-trend \
   packages/ui/src/components/usage-history \
   packages/ui/src/utils/usageSeries.ts \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage
-corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
+./node_modules/.bin/tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
+./node_modules/.bin/tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
-CI=1 corepack pnpm --filter @overline-zebar/ui test
 ```
+
+**eslintとtscは`node_modules/.bin`から直に呼ぶ。** `corepack pnpm exec`は実行前に
+依存の検査を行い、そこで`pnpm`をPATHから探す。このリポジトリはcorepack経由でしか
+pnpmを持たないため、`ENOENT: pnpm install`で止まる。`--filter`を使う`build`と`test`は
+この経路を通らないので`corepack pnpm`のままでよい。
 
 **`packages/ui`のテストは個別に並べず、`test` scriptで回す。** ここに一覧を置くと
 テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
-実際に2026-09-19まで漏れていた。
+実際に2026-09-19まで漏れていた。この scriptは`tsc`とtailwindのbuildを兼ねるため、
+`packages/ui`のbuildを別に行う必要はない。
 
-**`packages/ui`のテストはbuildした`dist`に対して動く。**`test` scriptが`tsc`と
-tailwindのbuildを先に行うため、個別に`node`で走らせるのでなければbuildは要らない。
 軸の選び方は、間違っていても
 「それらしいgraph」が出るため目視で気付きにくい。
 
