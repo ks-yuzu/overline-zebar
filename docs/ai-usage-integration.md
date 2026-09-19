@@ -1792,9 +1792,14 @@ journalctl -t codex-usage.cron --since today
 Widgetをbuild:
 
 ```sh
-corepack pnpm --filter @overline-zebar/main build
-corepack pnpm --filter @overline-zebar/ai-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/ui build
+CI=1 corepack pnpm --filter @overline-zebar/main build
+CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
+
+古い`dist`が残った環境では、`packages/ui`を飛ばしたbuildが古いUIを束ねたまま
+成功する。clean checkoutでrollupが落ちる方 (「配置・更新手順」の2) と違い、失敗として
+現れない。
 
 ## windowの挙動を測り直す
 
@@ -1922,56 +1927,99 @@ stdoutの両方をerror messageへ載せる。
 
 ## Upstream追従
 
-fork固有実装は可能な限り新規directoryへ分離している。upstream既存ファイルの
-主な接続点は次の2つだけ。
+fork固有実装は可能な限り新規directoryへ分離している。それでもupstream所有のfileには
+差分が残り、そこがそのまま衝突面になる。残っている差分は数えられるので、取り込みの
+前にこれを測る。
 
-- `widgets/main/src/App.tsx`
-  - `AiUsage`のimportと配置。
-- `zpack.json`
-  - Claude/Codex helperを読むための`wsl.exe`権限。
-
-`dist`、`node_modules`、cacheはGit管理しない。upstream更新時は次を基本とする。
+比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
+「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。`HEAD`も
+明示する。`git diff <commit>`は作業ツリーと比べるため、未コミットの編集が1つある
+だけで一覧に載る。
 
 ```sh
 git fetch upstream
-git rebase upstream/main
-git push --force-with-lease origin feat/ai-usage
+base=$(git merge-base HEAD upstream/main)
+git diff --name-only "$base" HEAD | while read f; do
+  git cat-file -e "$base:$f" 2>/dev/null &&
+    printf '%6s  %s\n' "$(git diff "$base" HEAD -- "$f" | grep -cE '^[+-][^+-]')" "$f"
+done | sort -rn
 ```
 
-rebase後は、`App.tsx`内の表示順が
-`StatProviders → AiUsage`になっていることと、`zpack.json`のcommand・正規表現が
-各`config.ts`と一致していることを確認する。
+出てきたfileのうち、扱いが決まっているものが3つある。`pnpm-lock.yaml`は衝突しても
+upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork widgetの定義と
+`wsl.exe`権限で、upstreamは触っていない。`widgets/main/src/App.tsx`の`AiUsage`の
+importと配置は、barへwidgetを載せる以上消せない。
+
+1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。共有の
+`packages/tailwind/tailwind.config.ts`には2つの形で出やすい。参照が1箇所しかない
+token (`fontFamily.icon`を使うのは`ServiceIcon`だけである) と、upstreamも同じ修正を
+持つ箇所に付けたコメントである。前者は参照側のcomponentが、後者は規則を守るテストが
+持つ。どちらもfork側のfileなので、共有configの差分は0になる。
+
+### mergeで取り込む。rebaseしない
+
+```sh
+git fetch upstream
+git switch -c chore/merge-upstream feat/ai-usage
+git merge upstream/main
+```
+
+rebaseはforkの全commitを書き換えるため、PRのmerge commitが失われ、公開済みブランチ
+にはforce pushが要る。派生ブランチにも影響する。衝突もcommitごとに解決するので、
+mergeの1回より回数が多い。mergeはこのいずれも伴わない。
+
+この判断が偽になるのは、forkのcommitをまだ公開していない場合である。force pushの
+コストが消えるため、その時は両方式を測り直す。
+
+### 取り込んだ後に確認するもの
+
+1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
+2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
+3. 「検証項目」を上から順に通すこと
+4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
+
+**buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
+ため、実機で見るまで分からない変化がある。
 
 ## 検証項目
 
 変更時は最低限、次を確認する。
 
+`packages/ui`が先頭にあるのは、widget側のbuildが`packages/ui/dist/index.js`を
+解決するためである。後ろに回すと、clean checkoutではwidgetのbuildがrollupのexport
+エラーで落ち、古い`dist`が残った環境では**古いUIを束ねたまま成功する。**
+
 ```sh
-corepack pnpm exec eslint \
+CI=1 corepack pnpm --filter @overline-zebar/ui test
+CI=1 corepack pnpm exec eslint \
   packages/ui/src/components/usage-trend \
   packages/ui/src/components/usage-history \
   packages/ui/src/utils/usageSeries.ts \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage
-corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
-node packages/ui/test-usage-series.mjs
-node packages/ui/test-usage-status.mjs
-node packages/ui/test-cost-rows.mjs
 ```
 
-`test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
-`packages/ui`のbuildを先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が
-出るため目視で気付きにくい。
+pnpmを呼ぶ行に`CI=1`が付いているのは、pnpmが実行前に行う依存の検査をskipする
+ためである。`node_modules`がlockfileとout of syncだと、検査はbareな`pnpm`を起動して
+`ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`exec`と`--filter`で
+違いは無い。結果を分けるのは`CI=1`の有無だけである。
+
+`packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
+増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
+`packages/ui`のbuildを別に行う必要はない。
+
+軸の選び方は、間違っていても「それらしいgraph」が出るため目視で気付きにくい。
 
 `test-usage-status.mjs`は鮮度判定を持つ。年齢とClaudeの`last_known`という
 一致しない2つの根拠を1つのlabelへ畳むため、パネルごとに書くと食い違う。
