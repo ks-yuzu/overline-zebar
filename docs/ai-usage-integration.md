@@ -1792,9 +1792,14 @@ journalctl -t codex-usage.cron --since today
 Widgetをbuild:
 
 ```sh
+corepack pnpm --filter @overline-zebar/ui build
 corepack pnpm --filter @overline-zebar/main build
 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
+
+**`packages/ui`を外さない。** 古い`dist`が残った環境では、widgetだけのbuildが
+**古いUIを束ねたまま成功する。**clean checkoutでrollupが落ちる方 (「配置・更新手順」
+の2) と違い、失敗として現れない。
 
 ## windowの挙動を測り直す
 
@@ -2022,9 +2027,14 @@ python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
 **eslintとtscは`node_modules/.bin`から直に呼ぶ。** `corepack pnpm exec`は実行前に
-依存の検査を行い、そこで`pnpm`をPATHから探す。このリポジトリはcorepack経由でしか
-pnpmを持たないため、`ENOENT: pnpm install`で止まる。`--filter`を使う`build`と`test`は
-この経路を通らないので`corepack pnpm`のままでよい。
+依存の検査を行い、`node_modules`がlockfileとout of syncだとbareな`pnpm`を起動して
+`ENOENT: pnpm install`で止まる。`.bin`はpnpmを経由しないため、同期の状態に関わらず
+動く。
+
+**`corepack pnpm --filter`の`build`と`test`も同じ検査の対象になりうる。**
+2026-09-19の環境 (out of sync) では`exec`だけが止まり`--filter`は素通りしたが、
+どちらが掛かるかはpnpmのversionとout of syncの理由で変わる。止まったら
+「配置・更新手順」の`--config.verify-deps-before-run`で切り分ける。
 
 **`packages/ui`のテストは個別に並べず、`test` scriptで回す。** ここに一覧を置くと
 テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
