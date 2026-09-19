@@ -26,7 +26,7 @@ export default function Network({ network }: NetworkPanelProps) {
 
   if (!network || !network.interfaces || network.interfaces.length === 0) {
     return (
-      <PanelLayout title="Network">
+      <PanelLayout className="p-2 px-2.5 space-y-2">
         <div className="flex flex-col justify-center items-center select-text w-full text-text-muted h-full">
           <Info className="w-10 h-10 mb-4 text-text-muted" />
           <p>Network information not available.</p>
@@ -44,7 +44,7 @@ export default function Network({ network }: NetworkPanelProps) {
 
   if (!currInterface || !defaultInterface) {
     return (
-      <PanelLayout title="Network">
+      <PanelLayout className="p-2 px-2.5 space-y-2">
         <div className="flex flex-col justify-center items-center select-text w-full text-text-muted h-full">
           <Info className="w-10 h-10 mb-4 text-text-muted" />
           <p>Error retrieving network interface.</p>
@@ -54,12 +54,7 @@ export default function Network({ network }: NetworkPanelProps) {
   }
 
   return (
-    <PanelLayout
-      title={`Network: ${
-        defaultInterface.friendlyName || defaultInterface.name
-      }`}
-      className="space-y-6"
-    >
+    <PanelLayout className="p-2 px-2.5 space-y-6">
       <Traffic traffic={network.traffic} />
 
       <div className="flex items-center gap-3">
@@ -76,8 +71,8 @@ export default function Network({ network }: NetworkPanelProps) {
         >
           <SelectTrigger className="max-h-full">
             <SelectValue>
-              {(i) =>
-                network.interfaces.find((f) => i.name === f.name)?.friendlyName
+              {(name) =>
+                network.interfaces.find((f) => name === f.name)?.friendlyName
               }
             </SelectValue>
           </SelectTrigger>

@@ -10,10 +10,13 @@ export const defaultConfig: RootConfig = {
     currentThemeId: 'default',
     radius: '0.5rem',
     windowEffect: 'acrylic',
+    fontFamily: 'Geist Mono',
+    systemThemeSync: false,
+    lightThemeId: 'latte',
+    darkThemeId: 'default',
   },
   widgets: {
     main: {
-      flowLauncherPath: '',
       mediaMaxWidth: '400',
       weatherThresholds: [
         { id: 'weather-1', min: -10, max: 0, labelColor: '--danger' },
@@ -33,6 +36,7 @@ export const defaultConfig: RootConfig = {
       ],
       useInlineStats: false,
       pinnedSystrayIcons: [],
+      showSystray: true,
       weatherUnit: 'celsius',
       dynamicWorkspaceIndicator: false,
       marginX: 0,
