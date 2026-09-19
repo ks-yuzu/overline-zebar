@@ -1792,9 +1792,9 @@ journalctl -t codex-usage.cron --since today
 Widgetをbuild:
 
 ```sh
-corepack pnpm --filter @overline-zebar/ui build
-corepack pnpm --filter @overline-zebar/main build
-corepack pnpm --filter @overline-zebar/ai-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/ui build
+CI=1 corepack pnpm --filter @overline-zebar/main build
+CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
 
 **`packages/ui`を外さない。** 古い`dist`が残った環境では、widgetだけのbuildが
@@ -2007,17 +2007,17 @@ widgetがbuildに成功してしまう。**
 
 ```sh
 CI=1 corepack pnpm --filter @overline-zebar/ui test
-./node_modules/.bin/eslint \
+CI=1 corepack pnpm exec eslint \
   packages/ui/src/components/usage-trend \
   packages/ui/src/components/usage-history \
   packages/ui/src/utils/usageSeries.ts \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage
-./node_modules/.bin/tsc --noEmit -p widgets/main/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-./node_modules/.bin/tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
@@ -2026,15 +2026,11 @@ python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
-**eslintとtscは`node_modules/.bin`から直に呼ぶ。** `corepack pnpm exec`は実行前に
-依存の検査を行い、`node_modules`がlockfileとout of syncだとbareな`pnpm`を起動して
-`ENOENT: pnpm install`で止まる。`.bin`はpnpmを経由しないため、同期の状態に関わらず
-動く。
-
-**`corepack pnpm --filter`の`build`と`test`も同じ検査の対象になりうる。**
-2026-09-19の環境 (out of sync) では`exec`だけが止まり`--filter`は素通りしたが、
-どちらが掛かるかはpnpmのversionとout of syncの理由で変わる。止まったら
-「配置・更新手順」の`--config.verify-deps-before-run`で切り分ける。
+**pnpmを呼ぶ行にはすべて`CI=1`を付ける。** pnpmは実行前に依存の検査を行い、
+`node_modules`がlockfileとout of syncだとbareな`pnpm`を起動して
+`ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`CI=1`はこの検査を
+skipする。**`exec`と`--filter`で違いは無い。**2026-09-19にout of syncの環境で
+4通りを測り、`CI=1`の有無だけが結果を分けた。
 
 **`packages/ui`のテストは個別に並べず、`test` scriptで回す。** ここに一覧を置くと
 テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
