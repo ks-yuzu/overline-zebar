@@ -1797,9 +1797,9 @@ CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
 
-**`packages/ui`を外さない。** 古い`dist`が残った環境では、widgetだけのbuildが
-**古いUIを束ねたまま成功する。**clean checkoutでrollupが落ちる方 (「配置・更新手順」
-の2) と違い、失敗として現れない。
+古い`dist`が残った環境では、`packages/ui`を飛ばしたbuildが古いUIを束ねたまま
+成功する。clean checkoutでrollupが落ちる方 (「配置・更新手順」の2) と違い、失敗として
+現れない。
 
 ## windowの挙動を測り直す
 
@@ -1927,16 +1927,14 @@ stdoutの両方をerror messageへ載せる。
 
 ## Upstream追従
 
-fork固有実装は可能な限り新規directoryへ分離している。**それでもupstream所有のfileには
-差分が残り、そこがそのまま衝突面になる。**
+fork固有実装は可能な限り新規directoryへ分離している。それでもupstream所有のfileには
+差分が残り、そこがそのまま衝突面になる。残っている差分は数えられるので、取り込みの
+前にこれを測る。
 
-残っている差分は数えられる。見積もらず、取り込みの前にこれを測る。
-
-**`upstream/main`ではなくmerge baseと比べる。** 先端と比べると、forkの差分と
-「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざり、区別できない。
-
-**`HEAD`も明示する。** `git diff <commit>`は作業ツリーと比べるため、未コミットの
-編集が1つあるだけで一覧に載り、fork差分として数えられる。
+比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
+「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。`HEAD`も
+明示する。`git diff <commit>`は作業ツリーと比べるため、未コミットの編集が1つある
+だけで一覧に載る。
 
 ```sh
 git fetch upstream
@@ -1958,13 +1956,14 @@ done | sort -rn
 | 11 | `packages/ui/src/components/progress/index.tsx` | `indicatorColor`の追加 |
 | 6 | `packages/ui/src/components/stat-ring/components/Ring.tsx` | |
 | 3 | `packages/ui/package.json` / `README.md` / `.gitignore` | |
-| 2 | `widgets/main/src/App.tsx` | `AiUsage`のimportと配置。**消せない** |
+| 2 | `widgets/main/src/App.tsx` | `AiUsage`のimportと配置。消せない |
 | 1 | `widgets/main/package.json` | |
 
-**1箇所でしか使わないものを、upstream所有のfileへ置かない。** 2026-09-19の取り込みで
-衝突したのは`packages/tailwind/tailwind.config.ts`だけで、forkがそこに持っていた差分は
-「upstreamが独立に同じ修正を入れた箇所へ付けたコメント」と「参照が`ServiceIcon` 1箇所
-しかない`fontFamily.icon`」の2つだった。どちらもfork側のfileへ寄せ、差分を0にした。
+1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。
+2026-09-19の取り込みで衝突したのは`packages/tailwind/tailwind.config.ts`だけで、fork
+がそこに持っていた差分は「upstreamが独立に同じ修正を入れた箇所へ付けたコメント」と
+「参照が`ServiceIcon` 1箇所しかない`fontFamily.icon`」の2つだった。どちらもfork側の
+fileへ寄せ、差分を0にした。
 
 ### mergeで取り込む。rebaseしない
 
@@ -1974,11 +1973,11 @@ git switch -c chore/merge-upstream feat/ai-usage
 git merge upstream/main
 ```
 
-2026-09-18に捨てるworktreeで両方式を実測した。**rebaseは209 commit中67 commit目で
-最初の衝突が出て、PR merge commit 26個が消える。mergeは衝突1件で済んだ。**加えて
+2026-09-18に捨てるworktreeで両方式を実測した。rebaseは209 commit中67 commit目で
+最初の衝突が出て、PR merge commit 26個が消える。mergeは衝突1件で済んだ。加えて
 rebaseは公開済みブランチのforce pushを伴い、派生ブランチにも影響する。
 
-この判断が偽になるのは、**forkのcommitをまだ公開していない場合**である。force pushの
+この判断が偽になるのは、forkのcommitをまだ公開していない場合である。force pushの
 コストが消えるため、その時は測り直す。
 
 ```sh
@@ -1990,7 +1989,7 @@ git worktree add --detach /tmp/rebase-trial feat/ai-usage
 
 1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
 2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
-3. 「検証項目」を**上から順に**通すこと
+3. 「検証項目」を上から順に通すこと
 4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
 
 **buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
@@ -2000,10 +1999,9 @@ git worktree add --detach /tmp/rebase-trial feat/ai-usage
 
 変更時は最低限、次を確認する。
 
-**順番を入れ替えない。** `packages/ui`を先頭に置くのは、widget側のbuildが
-`packages/ui/dist/index.js`を解決するためである。後ろに回すと、clean checkoutでは
-widgetのbuildがrollupのexportエラーで落ち、古い`dist`が残った環境では**古いUIを束ねた
-widgetがbuildに成功してしまう。**
+`packages/ui`が先頭にあるのは、widget側のbuildが`packages/ui/dist/index.js`を
+解決するためである。後ろに回すと、clean checkoutではwidgetのbuildがrollupのexport
+エラーで落ち、古い`dist`が残った環境では**古いUIを束ねたまま成功する。**
 
 ```sh
 CI=1 corepack pnpm --filter @overline-zebar/ui test
@@ -2026,19 +2024,18 @@ python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
-**pnpmを呼ぶ行にはすべて`CI=1`を付ける。** pnpmは実行前に依存の検査を行い、
-`node_modules`がlockfileとout of syncだとbareな`pnpm`を起動して
-`ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`CI=1`はこの検査を
-skipする。**`exec`と`--filter`で違いは無い。**2026-09-19にout of syncの環境で
-4通りを測り、`CI=1`の有無だけが結果を分けた。
+pnpmを呼ぶ行に`CI=1`が付いているのは、pnpmが実行前に行う依存の検査をskipする
+ためである。`node_modules`がlockfileとout of syncだと、検査はbareな`pnpm`を起動して
+`ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`exec`と`--filter`で
+違いは無い。2026-09-19にout of syncの環境で4通りを測り、`CI=1`の有無だけが結果を
+分けた。
 
-**`packages/ui`のテストは個別に並べず、`test` scriptで回す。** ここに一覧を置くと
+`packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと
 テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
 実際に2026-09-19まで漏れていた。この scriptは`tsc`とtailwindのbuildを兼ねるため、
 `packages/ui`のbuildを別に行う必要はない。
 
-軸の選び方は、間違っていても
-「それらしいgraph」が出るため目視で気付きにくい。
+軸の選び方は、間違っていても「それらしいgraph」が出るため目視で気付きにくい。
 
 `test-usage-status.mjs`は鮮度判定を持つ。年齢とClaudeの`last_known`という
 一致しない2つの根拠を1つのlabelへ畳むため、パネルごとに書くと食い違う。
