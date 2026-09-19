@@ -1950,11 +1950,11 @@ upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork wi
 `wsl.exe`権限で、upstreamは触っていない。`widgets/main/src/App.tsx`の`AiUsage`の
 importと配置は、barへwidgetを載せる以上消せない。
 
-1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。
-2026-09-19の取り込みで衝突したのは`packages/tailwind/tailwind.config.ts`だけで、fork
-がそこに持っていた差分は「upstreamが独立に同じ修正を入れた箇所へ付けたコメント」と
-「参照が`ServiceIcon` 1箇所しかない`fontFamily.icon`」の2つだった。どちらもfork側の
-fileへ寄せ、差分を0にした。
+1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。共有の
+`packages/tailwind/tailwind.config.ts`には2つの形で出やすい。参照が1箇所しかない
+token (`fontFamily.icon`を使うのは`ServiceIcon`だけである) と、upstreamも同じ修正を
+持つ箇所に付けたコメントである。前者は参照側のcomponentが、後者は規則を守るテストが
+持つ。どちらもfork側のfileなので、共有configの差分は0になる。
 
 ### mergeで取り込む。rebaseしない
 
@@ -1964,17 +1964,12 @@ git switch -c chore/merge-upstream feat/ai-usage
 git merge upstream/main
 ```
 
-2026-09-18に捨てるworktreeで両方式を実測した。rebaseは209 commit中67 commit目で
-最初の衝突が出て、PR merge commit 26個が消える。mergeは衝突1件で済んだ。加えて
-rebaseは公開済みブランチのforce pushを伴い、派生ブランチにも影響する。
+rebaseはforkの全commitを書き換えるため、PRのmerge commitが失われ、公開済みブランチ
+にはforce pushが要る。派生ブランチにも影響する。衝突もcommitごとに解決するので、
+mergeの1回より回数が多い。mergeはこのいずれも伴わない。
 
 この判断が偽になるのは、forkのcommitをまだ公開していない場合である。force pushの
-コストが消えるため、その時は測り直す。
-
-```sh
-git worktree add --detach /tmp/rebase-trial feat/ai-usage
-(cd /tmp/rebase-trial && git rebase upstream/main)
-```
+コストが消えるため、その時は両方式を測り直す。
 
 ### 取り込んだ後に確認するもの
 
@@ -2018,12 +2013,10 @@ python3 scripts/claude-sessions/test-claude-session-info-prom
 pnpmを呼ぶ行に`CI=1`が付いているのは、pnpmが実行前に行う依存の検査をskipする
 ためである。`node_modules`がlockfileとout of syncだと、検査はbareな`pnpm`を起動して
 `ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`exec`と`--filter`で
-違いは無い。2026-09-19にout of syncの環境で4通りを測り、`CI=1`の有無だけが結果を
-分けた。
+違いは無い。結果を分けるのは`CI=1`の有無だけである。
 
-`packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと
-テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
-実際に2026-09-19まで漏れていた。この scriptは`tsc`とtailwindのbuildを兼ねるため、
+`packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
+増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
 `packages/ui`のbuildを別に行う必要はない。
 
 軸の選び方は、間違っていても「それらしいgraph」が出るため目視で気付きにくい。
