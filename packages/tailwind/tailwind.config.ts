@@ -2,10 +2,6 @@ import type { Config } from 'tailwindcss';
 
 // Allows opacity with OKLCH values. (i.e. bg-background/80)
 function withOpacity(variableName: string) {
-  // Utilities with no opacity variable of their own - `stroke-*`, `fill-*` -
-  // call this with no opacityValue. Interpolating it would emit
-  // `calc(undefined * 100%)`, which the browser drops together with the whole
-  // declaration, so the element silently keeps the paint it inherited.
   return ({ opacityValue }: { opacityValue?: number }) => {
     if (opacityValue === undefined || opacityValue === 100) {
       return `var(${variableName})`;
@@ -37,8 +33,6 @@ const config: Omit<Config, 'content'> = {
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'Geist Mono', 'monospace'],
-        // Nerd Fonts glyphs. Installed on the system, not bundled.
-        icon: ['Cojica', 'monospace'],
       },
       fontSize: {
         xs: '10px',
