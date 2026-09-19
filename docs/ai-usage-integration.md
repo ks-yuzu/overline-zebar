@@ -1922,25 +1922,71 @@ stdoutの両方をerror messageへ載せる。
 
 ## Upstream追従
 
-fork固有実装は可能な限り新規directoryへ分離している。upstream既存ファイルの
-主な接続点は次の2つだけ。
+fork固有実装は可能な限り新規directoryへ分離している。**それでもupstream所有のfileには
+差分が残り、そこがそのまま衝突面になる。**
 
-- `widgets/main/src/App.tsx`
-  - `AiUsage`のimportと配置。
-- `zpack.json`
-  - Claude/Codex helperを読むための`wsl.exe`権限。
+残っている差分は数えられる。見積もらず、取り込みの前にこれを測る。
 
-`dist`、`node_modules`、cacheはGit管理しない。upstream更新時は次を基本とする。
+**`upstream/main`ではなくmerge baseと比べる。** 先端と比べると、forkの差分と
+「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざり、区別できない。
 
 ```sh
 git fetch upstream
-git rebase upstream/main
-git push --force-with-lease origin feat/ai-usage
+base=$(git merge-base HEAD upstream/main)
+git diff --name-only "$base" | while read f; do
+  git cat-file -e "$base:$f" 2>/dev/null &&
+    printf '%6s  %s\n' "$(git diff "$base" -- "$f" | grep -cE '^[+-][^+-]')" "$f"
+done | sort -rn
 ```
 
-rebase後は、`App.tsx`内の表示順が
-`StatProviders → AiUsage`になっていることと、`zpack.json`のcommand・正規表現が
-各`config.ts`と一致していることを確認する。
+2026-09-19の取り込み直後で11 file。
+
+| 行 | file | 性質 |
+| --- | --- | --- |
+| 153 | `pnpm-lock.yaml` | 衝突してもupstream側を採って`pnpm install`で作り直せる |
+| 61 | `zpack.json` | fork widgetの定義と`wsl.exe`権限。upstreamは触っていない |
+| 43 | `packages/ui/src/index.ts` | forkは中ほどへ挿入、upstreamは末尾へ追記するため当たりにくい |
+| 22 | `packages/ui/src/components/stat-ring/StatRing.tsx` | しきい値と色の扱い |
+| 11 | `packages/ui/src/components/progress/index.tsx` | `indicatorColor`の追加 |
+| 6 | `packages/ui/src/components/stat-ring/components/Ring.tsx` | |
+| 3 | `packages/ui/package.json` / `README.md` / `.gitignore` | |
+| 2 | `widgets/main/src/App.tsx` | `AiUsage`のimportと配置。**消せない** |
+| 1 | `widgets/main/package.json` | |
+
+**1箇所でしか使わないものを、upstream所有のfileへ置かない。** 2026-09-19の取り込みで
+衝突したのは`packages/tailwind/tailwind.config.ts`だけで、forkがそこに持っていた差分は
+「upstreamが独立に同じ修正を入れた箇所へ付けたコメント」と「参照が`ServiceIcon` 1箇所
+しかない`fontFamily.icon`」の2つだった。どちらもfork側のfileへ寄せ、差分を0にした。
+
+### mergeで取り込む。rebaseしない
+
+```sh
+git fetch upstream
+git switch -c chore/merge-upstream feat/ai-usage
+git merge upstream/main
+```
+
+2026-09-18に捨てるworktreeで両方式を実測した。**rebaseは209 commit中67 commit目で
+最初の衝突が出て、PR merge commit 26個が消える。mergeは衝突1件で済んだ。**加えて
+rebaseは公開済みブランチのforce pushを伴い、派生ブランチにも影響する。
+
+この判断が偽になるのは、**forkのcommitをまだ公開していない場合**である。force pushの
+コストが消えるため、その時は測り直す。
+
+```sh
+git worktree add --detach /tmp/rebase-trial feat/ai-usage
+(cd /tmp/rebase-trial && git rebase upstream/main)
+```
+
+### 取り込んだ後に確認するもの
+
+1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
+2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
+3. 「検証項目」を通すこと。**`packages/ui`のbuildを先に済ませる**
+4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
+
+**buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
+ため、実機で見るまで分からない変化がある。
 
 ## 検証項目
 
@@ -1964,14 +2010,17 @@ python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
-node packages/ui/test-usage-series.mjs
-node packages/ui/test-usage-status.mjs
-node packages/ui/test-cost-rows.mjs
+CI=1 corepack pnpm --filter @overline-zebar/ui test
 ```
 
-`test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
-`packages/ui`のbuildを先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が
-出るため目視で気付きにくい。
+**`packages/ui`のテストは個別に並べず、`test` scriptで回す。** ここに一覧を置くと
+テストが増えたときに追随せず、`test-usage-projection.mjs`と`test-theme-colors.mjs`が
+実際に2026-09-19まで漏れていた。
+
+**`packages/ui`のテストはbuildした`dist`に対して動く。**`test` scriptが`tsc`と
+tailwindのbuildを先に行うため、個別に`node`で走らせるのでなければbuildは要らない。
+軸の選び方は、間違っていても
+「それらしいgraph」が出るため目視で気付きにくい。
 
 `test-usage-status.mjs`は鮮度判定を持つ。年齢とClaudeの`last_known`という
 一致しない2つの根拠を1つのlabelへ畳むため、パネルごとに書くと食い違う。
