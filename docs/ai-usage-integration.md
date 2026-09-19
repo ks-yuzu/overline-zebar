@@ -1945,19 +1945,10 @@ git diff --name-only "$base" HEAD | while read f; do
 done | sort -rn
 ```
 
-2026-09-19の取り込み直後で11 file。
-
-| 行 | file | 性質 |
-| --- | --- | --- |
-| 153 | `pnpm-lock.yaml` | 衝突してもupstream側を採って`pnpm install`で作り直せる |
-| 61 | `zpack.json` | fork widgetの定義と`wsl.exe`権限。upstreamは触っていない |
-| 43 | `packages/ui/src/index.ts` | forkは中ほどへ挿入、upstreamは末尾へ追記するため当たりにくい |
-| 22 | `packages/ui/src/components/stat-ring/StatRing.tsx` | しきい値と色の扱い |
-| 11 | `packages/ui/src/components/progress/index.tsx` | `indicatorColor`の追加 |
-| 6 | `packages/ui/src/components/stat-ring/components/Ring.tsx` | |
-| 3 | `packages/ui/package.json` / `README.md` / `.gitignore` | |
-| 2 | `widgets/main/src/App.tsx` | `AiUsage`のimportと配置。消せない |
-| 1 | `widgets/main/package.json` | |
+出てきたfileのうち、扱いが決まっているものが3つある。`pnpm-lock.yaml`は衝突しても
+upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork widgetの定義と
+`wsl.exe`権限で、upstreamは触っていない。`widgets/main/src/App.tsx`の`AiUsage`の
+importと配置は、barへwidgetを載せる以上消せない。
 
 1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。
 2026-09-19の取り込みで衝突したのは`packages/tailwind/tailwind.config.ts`だけで、fork
