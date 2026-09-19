@@ -9,7 +9,7 @@
 - Zebarから認証済みCLIを直接起動せず、WSL内のJSONキャッシュだけを読む。
 - 複数モニターやwidget再描画によるCLIの多重起動を避ける。
 - usage取得によって不要な会話履歴やモデルtokenを発生させない。
-- upstreamとのrebase競合を抑えるため、実装の大部分を新規ファイルへ分離する。
+- upstreamとの競合を抑えるため、実装の大部分を新規ファイルへ分離する。
 - 更新が止まっても最後に取得できた値を残し、stale状態を明示する。
 
 ## データフロー
@@ -1797,10 +1797,6 @@ CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
 
-古い`dist`が残った環境では、`packages/ui`を飛ばしたbuildが古いUIを束ねたまま
-成功する。clean checkoutでrollupが落ちる方 (「配置・更新手順」の2) と違い、失敗として
-現れない。
-
 ## windowの挙動を測り直す
 
 「報告されるresetは常にnowを含むwindowの終端」は**providerの挙動なので変わりうる。**
@@ -1928,8 +1924,9 @@ stdoutの両方をerror messageへ載せる。
 ## Upstream追従
 
 fork固有実装は可能な限り新規directoryへ分離している。それでもupstream所有のfileには
-差分が残り、そこがそのまま衝突面になる。残っている差分は数えられるので、取り込みの
-前にこれを測る。
+差分が残る。衝突が起きうるのはそのfileだけなので、取り込みの前に何が残っているかを
+測る。upstreamが同じfileを触っているかは下のコマンドでは分からないので、出てくるのは
+衝突の候補であって衝突そのものではない。
 
 比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
 「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。`HEAD`も
@@ -1947,14 +1944,13 @@ done | sort -rn
 
 出てきたfileのうち、扱いが決まっているものが3つある。`pnpm-lock.yaml`は衝突しても
 upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork widgetの定義と
-`wsl.exe`権限で、upstreamは触っていない。`widgets/main/src/App.tsx`の`AiUsage`の
-importと配置は、barへwidgetを載せる以上消せない。
+`wsl.exe`権限を持つので、衝突したらfork側を残す。`widgets/main/src/App.tsx`の
+`AiUsage`のimportと配置は、barへwidgetを載せる以上消せない。
 
-1箇所でしか使わないものをupstream所有のfileへ置くと、そこが衝突面になる。共有の
-`packages/tailwind/tailwind.config.ts`には2つの形で出やすい。参照が1箇所しかない
-token (`fontFamily.icon`を使うのは`ServiceIcon`だけである) と、upstreamも同じ修正を
-持つ箇所に付けたコメントである。前者は参照側のcomponentが、後者は規則を守るテストが
-持つ。どちらもfork側のfileなので、共有configの差分は0になる。
+共有の`packages/tailwind/tailwind.config.ts`には、forkの差分が2つの形で入りやすい。
+1箇所でしか使わないtokenと、upstreamも同じ修正を持つ箇所に付けたコメントである。
+前者は参照側のcomponentが、後者は規則を守るテストが持てば、共有configの差分は0に
+なる。`ServiceIcon`のfont-familyはcomponent内の定数にしてある。
 
 ### mergeで取り込む。rebaseしない
 
@@ -1964,12 +1960,13 @@ git switch -c chore/merge-upstream feat/ai-usage
 git merge upstream/main
 ```
 
-rebaseはforkの全commitを書き換えるため、PRのmerge commitが失われ、公開済みブランチ
-にはforce pushが要る。派生ブランチにも影響する。衝突もcommitごとに解決するので、
-mergeの1回より回数が多い。mergeはこのいずれも伴わない。
+rebaseはforkの全commitを書き換える。公開済みのブランチにはforce pushが要り、そこから
+派生したブランチも作り直しになる。衝突はcommitごとに解決するため、同じ箇所を複数の
+commitが触っていればその数だけ繰り返す。merge commitは既定では失われる
+(`--rebase-merges`で保つことはできる)。mergeはこのいずれも伴わない。
 
-この判断が偽になるのは、forkのcommitをまだ公開していない場合である。force pushの
-コストが消えるため、その時は両方式を測り直す。
+この判断が効かないのは、forkのcommitをまだ公開しておらず、派生ブランチも無い場合で
+ある。force pushのコストが消えるため、その時は両方式を測り直す。
 
 ### 取り込んだ後に確認するもの
 
@@ -1977,9 +1974,6 @@ mergeの1回より回数が多い。mergeはこのいずれも伴わない。
 2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
 3. 「検証項目」を上から順に通すこと
 4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
-
-**buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
-ため、実機で見るまで分からない変化がある。
 
 ## 検証項目
 
@@ -2010,10 +2004,11 @@ python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
-pnpmを呼ぶ行に`CI=1`が付いているのは、pnpmが実行前に行う依存の検査をskipする
-ためである。`node_modules`がlockfileとout of syncだと、検査はbareな`pnpm`を起動して
-`ENOENT: pnpm install`で止まる (詳細は「配置・更新手順」の2)。`exec`と`--filter`で
-違いは無い。結果を分けるのは`CI=1`の有無だけである。
+`CI=1`はwidgetのbuild後のZebar再起動hookをskipし (「配置・更新手順」の2)、あわせて
+pnpmが実行前に行う依存の検査もskipする。この検査は`node_modules`がlockfileと
+out of syncだとbareな`pnpm`を起動し、`ENOENT: pnpm install`で止まる。`CI=1`は症状を
+隠すだけなので、out of syncの理由を知りたい時は
+`--config.verify-deps-before-run=warn`で警告を読む。
 
 `packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
 増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
