@@ -1930,12 +1930,15 @@ fork固有実装は可能な限り新規directoryへ分離している。**そ�
 **`upstream/main`ではなくmerge baseと比べる。** 先端と比べると、forkの差分と
 「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざり、区別できない。
 
+**`HEAD`も明示する。** `git diff <commit>`は作業ツリーと比べるため、未コミットの
+編集が1つあるだけで一覧に載り、fork差分として数えられる。
+
 ```sh
 git fetch upstream
 base=$(git merge-base HEAD upstream/main)
-git diff --name-only "$base" | while read f; do
+git diff --name-only "$base" HEAD | while read f; do
   git cat-file -e "$base:$f" 2>/dev/null &&
-    printf '%6s  %s\n' "$(git diff "$base" -- "$f" | grep -cE '^[+-][^+-]')" "$f"
+    printf '%6s  %s\n' "$(git diff "$base" HEAD -- "$f" | grep -cE '^[+-][^+-]')" "$f"
 done | sort -rn
 ```
 
@@ -1982,7 +1985,9 @@ git worktree add --detach /tmp/rebase-trial feat/ai-usage
 
 1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
 2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
-3. 「検証項目」を通すこと。**`packages/ui`のbuildを先に済ませる**
+3. 「検証項目」を通すこと。**`packages/ui`のbuildを先に済ませる。**widget側のbuildが
+   `packages/ui/dist/index.js`を解決するため、`dist`が無いか古いとrollupのexportエラーで
+   落ちる (「配置・更新手順」の2)
 4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
 
 **buildとtestが通っただけでは足りない。** upstreamはthemeとツールバーの見た目を触る
