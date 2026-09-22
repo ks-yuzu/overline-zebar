@@ -1924,9 +1924,10 @@ stdoutの両方をerror messageへ載せる。
 ## Upstream追従
 
 fork固有実装は可能な限り新規directoryへ分離している。それでもupstream所有のfileには
-差分が残る。衝突が起きうるのはそのfileだけなので、取り込みの前に何が残っているかを
-測る。upstreamが同じfileを触っているかは下のコマンドでは分からないので、出てくるのは
-衝突の候補であって衝突そのものではない。
+差分が残る。取り込みの前に何が残っているかを測る。下のコマンドが数えるのは、merge
+baseに既にあったfileへforkが加えた差分である。upstreamが同じfileを触っているかは
+分からないので、出るのは衝突の候補であって衝突ではない。forkが新しく足したfileも
+数えない。upstreamが同名で足せばそこも衝突しうる。
 
 比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
 「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。`HEAD`も
@@ -1943,8 +1944,8 @@ done | sort -rn
 ```
 
 出てきたfileのうち、扱いが決まっているものが3つある。`pnpm-lock.yaml`は衝突しても
-upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork widgetの定義と
-`wsl.exe`権限を持つので、衝突したらfork側を残す。`widgets/main/src/App.tsx`の
+upstream側を採って`corepack pnpm install`で作り直せる。`zpack.json`はfork widgetの
+定義と`wsl.exe`権限を持つので、衝突したらfork側を残す。`widgets/main/src/App.tsx`の
 `AiUsage`のimportと配置は、barへwidgetを載せる以上消せない。
 
 共有の`packages/tailwind/tailwind.config.ts`には、forkの差分が2つの形で入りやすい。
@@ -1956,7 +1957,7 @@ upstream側を採って`pnpm install`で作り直せる。`zpack.json`はfork wi
 
 ```sh
 git fetch upstream
-git switch -c chore/merge-upstream feat/ai-usage
+git switch -c chore/merge-upstream-$(date +%Y%m%d) feat/ai-usage
 git merge upstream/main
 ```
 
