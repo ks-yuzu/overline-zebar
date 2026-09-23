@@ -1930,16 +1930,18 @@ baseに既にあったfileへforkが加えた差分である。upstreamが同じ
 数えない。upstreamが同名で足せばそこも衝突しうる。
 
 比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
-「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。`HEAD`も
-明示する。`git diff <commit>`は作業ツリーと比べるため、未コミットの編集が1つある
-だけで一覧に載る。
+「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。比較元も
+`HEAD`ではなく`origin/feat/ai-usage`と名指しする。`HEAD`は今いるブランチで変わり、
+本線以外にいるとそのブランチの差分を数える (`main`にいれば0と出る)。
 
 ```sh
-git fetch upstream
-base=$(git merge-base HEAD upstream/main)
-git diff --name-only "$base" HEAD | while read f; do
+git remote get-url upstream 2>/dev/null ||
+  git remote add upstream https://github.com/mushfikurr/overline-zebar.git
+git fetch --multiple origin upstream
+base=$(git merge-base origin/feat/ai-usage upstream/main)
+git diff --name-only "$base" origin/feat/ai-usage | while read f; do
   git cat-file -e "$base:$f" 2>/dev/null &&
-    printf '%6s  %s\n' "$(git diff "$base" HEAD -- "$f" | grep -cE '^[+-][^+-]')" "$f"
+    printf '%6s  %s\n' "$(git diff "$base" origin/feat/ai-usage -- "$f" | grep -cE '^[+-][^+-]')" "$f"
 done | sort -rn
 ```
 
@@ -1955,11 +1957,17 @@ upstream側を採って`corepack pnpm install`で作り直せる。`zpack.json`�
 
 ### mergeで取り込む。rebaseしない
 
+forkの本線は`feat/ai-usage`で、取り込みもここへ入れる。起点を`origin/feat/ai-usage`に
+するのは、ローカルの`feat/ai-usage`は無いことも古いこともあるためである。
+
 ```sh
-git fetch upstream
-git switch -c chore/merge-upstream-$(date +%Y%m%d) feat/ai-usage
-git merge upstream/main
+git fetch --multiple origin upstream &&
+  git switch -c chore/merge-upstream-$(date +%Y%m%d) origin/feat/ai-usage &&
+  git merge upstream/main
 ```
+
+3行を`&&`でつなぐのは、ブランチの作成に失敗したときにmergeを走らせないためである。
+つながないと、mergeは今いるブランチへ入る。
 
 rebaseはforkの全commitを書き換える。公開済みのブランチにはforce pushが要り、そこから
 派生したブランチも作り直しになる。衝突はcommitごとに解決するため、同じ箇所を複数の
@@ -1985,6 +1993,7 @@ commitが触っていればその数だけ繰り返す。merge commitは既定�
 エラーで落ち、古い`dist`が残った環境では**古いUIを束ねたまま成功する。**
 
 ```sh
+CI=1 corepack pnpm install
 CI=1 corepack pnpm --filter @overline-zebar/ui test
 CI=1 corepack pnpm exec eslint \
   packages/ui/src/components/usage-trend \
@@ -2005,11 +2014,13 @@ python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
-`CI=1`はwidgetのbuild後のZebar再起動hookをskipし (「配置・更新手順」の2)、あわせて
-pnpmが実行前に行う依存の検査もskipする。この検査は`node_modules`がlockfileと
-out of syncだとbareな`pnpm`を起動し、`ENOENT: pnpm install`で止まる。`CI=1`は症状を
-隠すだけなので、out of syncの理由を知りたい時は
-`--config.verify-deps-before-run=warn`で警告を読む。
+`CI=1`はwidgetのbuild後のZebar再起動hookをskipする (「配置・更新手順」の2)。
+
+先頭の`install`は、新しいcheckoutとupstreamの取り込み直後のためにある。`node_modules`
+が無いと、pnpmは実行前の依存の検査でbareな`pnpm`を起動し、`CI=1`を付けていても
+`ENOENT: pnpm install`で止まる。lockfileと食い違っているだけなら止まらずに進むことが
+あり、その時は古い依存のまま検証が通る。止まった理由は
+`--config.verify-deps-before-run=warn`を付けると警告で読める。
 
 `packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
 増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
