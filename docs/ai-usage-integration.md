@@ -9,7 +9,7 @@
 - Zebarから認証済みCLIを直接起動せず、WSL内のJSONキャッシュだけを読む。
 - 複数モニターやwidget再描画によるCLIの多重起動を避ける。
 - usage取得によって不要な会話履歴やモデルtokenを発生させない。
-- upstreamとのrebase競合を抑えるため、実装の大部分を新規ファイルへ分離する。
+- upstreamとの競合を抑えるため、実装の大部分を新規ファイルへ分離する。
 - 更新が止まっても最後に取得できた値を残し、stale状態を明示する。
 
 ## データフロー
@@ -1792,8 +1792,9 @@ journalctl -t codex-usage.cron --since today
 Widgetをbuild:
 
 ```sh
-corepack pnpm --filter @overline-zebar/main build
-corepack pnpm --filter @overline-zebar/ai-usage-details build
+CI=1 corepack pnpm --filter @overline-zebar/ui build
+CI=1 corepack pnpm --filter @overline-zebar/main build
+CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
 ```
 
 ## windowの挙動を測り直す
@@ -1922,56 +1923,107 @@ stdoutの両方をerror messageへ載せる。
 
 ## Upstream追従
 
-fork固有実装は可能な限り新規directoryへ分離している。upstream既存ファイルの
-主な接続点は次の2つだけ。
+fork固有実装は可能な限り新規directoryへ分離している。それでもupstream所有のfileには
+差分が残る。取り込みの前に何が残っているかを測る。下のコマンドが数えるのは、merge
+baseに既にあったfileへforkが加えた差分である。upstreamが同じfileを触っているかは
+分からないので、出るのは衝突の候補であって衝突ではない。forkが新しく足したfileも
+数えない。upstreamが同名で足せばそこも衝突しうる。
 
-- `widgets/main/src/App.tsx`
-  - `AiUsage`のimportと配置。
-- `zpack.json`
-  - Claude/Codex helperを読むための`wsl.exe`権限。
-
-`dist`、`node_modules`、cacheはGit管理しない。upstream更新時は次を基本とする。
+比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
+「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。比較元も
+`HEAD`ではなく`origin/feat/ai-usage`と名指しする。`HEAD`は今いるブランチで変わり、
+本線以外にいるとそのブランチの差分を数える (`main`にいれば0と出る)。
 
 ```sh
-git fetch upstream
-git rebase upstream/main
-git push --force-with-lease origin feat/ai-usage
+git remote get-url upstream 2>/dev/null ||
+  git remote add upstream https://github.com/mushfikurr/overline-zebar.git
+git fetch --multiple origin upstream
+base=$(git merge-base origin/feat/ai-usage upstream/main)
+git diff --name-only "$base" origin/feat/ai-usage | while read f; do
+  git cat-file -e "$base:$f" 2>/dev/null &&
+    printf '%6s  %s\n' "$(git diff --numstat "$base" origin/feat/ai-usage -- "$f" | awk '{print $1+$2}')" "$f"
+done | sort -rn
 ```
 
-rebase後は、`App.tsx`内の表示順が
-`StatProviders → AiUsage`になっていることと、`zpack.json`のcommand・正規表現が
-各`config.ts`と一致していることを確認する。
+出てきたfileのうち、扱いが決まっているものが3つある。`pnpm-lock.yaml`は衝突しても
+upstream側を採って`corepack pnpm install`で作り直せる。`zpack.json`はfork widgetの
+定義と`wsl.exe`権限を持つので、衝突したらfork側を残す。`widgets/main/src/App.tsx`の
+`AiUsage`のimportと配置は、barへwidgetを載せる以上消せない。
+
+共有の`packages/tailwind/tailwind.config.ts`には、forkの差分が2つの形で入りやすい。
+1箇所でしか使わないtokenと、upstreamも同じ修正を持つ箇所に付けたコメントである。
+前者は参照側のcomponentが、後者は規則を守るテストが持てば、共有configの差分は0に
+なる。`ServiceIcon`のfont-familyはcomponent内の定数にしてある。
+
+### mergeで取り込む。rebaseしない
+
+forkの本線は`feat/ai-usage`で、取り込みもここへ入れる。起点を`origin/feat/ai-usage`に
+するのは、ローカルの`feat/ai-usage`は無いことも古いこともあるためである。
+
+```sh
+git fetch --multiple origin upstream &&
+  git switch -c chore/merge-upstream-$(date +%Y%m%d) origin/feat/ai-usage &&
+  git merge upstream/main
+```
+
+3行を`&&`でつなぐのは、ブランチの作成に失敗したときにmergeを走らせないためである。
+つながないと、mergeは今いるブランチへ入る。
+
+rebaseはforkの全commitを書き換える。公開済みのブランチにはforce pushが要り、そこから
+派生したブランチも作り直しになる。衝突はcommitごとに解決するため、同じ箇所を複数の
+commitが触っていればその数だけ繰り返す。merge commitは既定では失われる
+(`--rebase-merges`で保つことはできる)。mergeはこのいずれも伴わない。
+
+この判断が効かないのは、forkのcommitをまだ公開しておらず、派生ブランチも無い場合で
+ある。force pushのコストが消えるため、その時は両方式を測り直す。
+
+### 取り込んだ後に確認するもの
+
+1. `App.tsx`内の表示順が`StatProviders → AiUsage`になっていること
+2. `zpack.json`のcommand・正規表現が各`config.ts`と一致していること
+3. 「検証項目」を上から順に通すこと
+4. 「配置・更新手順」で実機へ反映し、barと統合パネルを目視すること
 
 ## 検証項目
 
 変更時は最低限、次を確認する。
 
+`packages/ui`が先頭にあるのは、widget側のbuildが`packages/ui/dist/index.js`を
+解決するためである。後ろに回すと、clean checkoutではwidgetのbuildが
+`@overline-zebar/ui`を解決できずに落ち、古い`dist`が残った環境では**古いUIを束ねたまま
+成功する。**
+
 ```sh
-corepack pnpm exec eslint \
+CI=1 corepack pnpm install
+CI=1 corepack pnpm --filter @overline-zebar/ui test
+CI=1 corepack pnpm exec eslint \
   packages/ui/src/components/usage-trend \
   packages/ui/src/components/usage-history \
   packages/ui/src/utils/usageSeries.ts \
   widgets/main/src/components/aiUsage \
   widgets/main/src/components/claudeUsage \
   widgets/main/src/components/codexUsage
-corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/main/tsconfig.json
 CI=1 corepack pnpm --filter @overline-zebar/main build
 CI=1 corepack pnpm --filter @overline-zebar/ai-usage-details build
-corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
+CI=1 corepack pnpm exec tsc --noEmit -p widgets/ai-usage-details/tsconfig.json
 python3 -m py_compile scripts/claude-usage/claude-usage-json
 bash -n scripts/codex-usage/codex-usage-json
 python3 scripts/codex-usage/test-codex-usage-json
 python3 scripts/claude-usage/test-claude-usage-json
 python3 scripts/claude-cost/test-claude-cost-json
 python3 scripts/claude-sessions/test-claude-session-info-prom
-node packages/ui/test-usage-series.mjs
-node packages/ui/test-usage-status.mjs
-node packages/ui/test-cost-rows.mjs
 ```
 
-`test-usage-series.mjs`と`test-usage-status.mjs`は**buildした`dist`に対して**動くので、
-`packages/ui`のbuildを先に済ませる。軸の選び方は、間違っていても「それらしいgraph」が
-出るため目視で気付きにくい。
+`CI=1`はwidgetのbuild後のZebar再起動hookをskipする (「配置・更新手順」の2)。
+先頭の`install`は`node_modules`をlockfileに合わせる。新しいcheckoutには`node_modules`が
+無く、upstreamの取り込みはlockfileを変えることがある。
+
+`packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
+増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
+`packages/ui`のbuildを別に行う必要はない。
+
+軸の選び方は、間違っていても「それらしいgraph」が出るため目視で気付きにくい。
 
 `test-usage-status.mjs`は鮮度判定を持つ。年齢とClaudeの`last_known`という
 一致しない2つの根拠を1つのlabelへ畳むため、パネルごとに書くと食い違う。
