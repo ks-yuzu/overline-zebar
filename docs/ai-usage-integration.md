@@ -1941,7 +1941,7 @@ git fetch --multiple origin upstream
 base=$(git merge-base origin/feat/ai-usage upstream/main)
 git diff --name-only "$base" origin/feat/ai-usage | while read f; do
   git cat-file -e "$base:$f" 2>/dev/null &&
-    printf '%6s  %s\n' "$(git diff "$base" origin/feat/ai-usage -- "$f" | grep -cE '^[+-][^+-]')" "$f"
+    printf '%6s  %s\n' "$(git diff --numstat "$base" origin/feat/ai-usage -- "$f" | awk '{print $1+$2}')" "$f"
 done | sort -rn
 ```
 
@@ -1989,8 +1989,9 @@ commitが触っていればその数だけ繰り返す。merge commitは既定�
 変更時は最低限、次を確認する。
 
 `packages/ui`が先頭にあるのは、widget側のbuildが`packages/ui/dist/index.js`を
-解決するためである。後ろに回すと、clean checkoutではwidgetのbuildがrollupのexport
-エラーで落ち、古い`dist`が残った環境では**古いUIを束ねたまま成功する。**
+解決するためである。後ろに回すと、clean checkoutではwidgetのbuildが
+`@overline-zebar/ui`を解決できずに落ち、古い`dist`が残った環境では**古いUIを束ねたまま
+成功する。**
 
 ```sh
 CI=1 corepack pnpm install
