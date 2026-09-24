@@ -2015,12 +2015,8 @@ python3 scripts/claude-sessions/test-claude-session-info-prom
 ```
 
 `CI=1`はwidgetのbuild後のZebar再起動hookをskipする (「配置・更新手順」の2)。
-
-先頭の`install`は、新しいcheckoutとupstreamの取り込み直後のためにある。`node_modules`
-が無いと、pnpmは実行前の依存の検査でbareな`pnpm`を起動し、`CI=1`を付けていても
-`ENOENT: pnpm install`で止まる。lockfileと食い違っているだけなら止まらずに進むことが
-あり、その時は古い依存のまま検証が通る。止まった理由は
-`--config.verify-deps-before-run=warn`を付けると警告で読める。
+先頭の`install`は`node_modules`をlockfileに合わせる。新しいcheckoutには`node_modules`が
+無く、upstreamの取り込みはlockfileを変えることがある。
 
 `packages/ui`のテストは個別に並べず`test` scriptで回す。ここに一覧を置くと、テストが
 増えても追随せず漏れる。この scriptは`tsc`とtailwindのbuildを兼ねるため、
