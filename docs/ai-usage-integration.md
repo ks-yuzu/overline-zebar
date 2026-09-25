@@ -1931,17 +1931,17 @@ baseに既にあったfileへforkが加えた差分である。upstreamが同じ
 
 比較先は`upstream/main`の先端ではなくmerge baseにする。先端と比べると、forkの差分と
 「まだ取り込んでいないupstreamの変更」が同じ一覧に混ざって区別できない。比較元も
-`HEAD`ではなく`origin/feat/ai-usage`と名指しする。`HEAD`は今いるブランチで変わり、
-本線以外にいるとそのブランチの差分を数える (`main`にいれば0と出る)。
+`HEAD`ではなく`origin/main`と名指しする。`HEAD`は今いるブランチで変わり、本線以外に
+いるとそのブランチの差分を数える。
 
 ```sh
 git remote get-url upstream 2>/dev/null ||
   git remote add upstream https://github.com/mushfikurr/overline-zebar.git
 git fetch --multiple origin upstream
-base=$(git merge-base origin/feat/ai-usage upstream/main)
-git diff --name-only "$base" origin/feat/ai-usage | while read f; do
+base=$(git merge-base origin/main upstream/main)
+git diff --name-only "$base" origin/main | while read f; do
   git cat-file -e "$base:$f" 2>/dev/null &&
-    printf '%6s  %s\n' "$(git diff --numstat "$base" origin/feat/ai-usage -- "$f" | awk '{print $1+$2}')" "$f"
+    printf '%6s  %s\n' "$(git diff --numstat "$base" origin/main -- "$f" | awk '{print $1+$2}')" "$f"
 done | sort -rn
 ```
 
@@ -1957,12 +1957,12 @@ upstream側を採って`corepack pnpm install`で作り直せる。`zpack.json`�
 
 ### mergeで取り込む。rebaseしない
 
-forkの本線は`feat/ai-usage`で、取り込みもここへ入れる。起点を`origin/feat/ai-usage`に
-するのは、ローカルの`feat/ai-usage`は無いことも古いこともあるためである。
+forkの本線は`main`で、取り込みもここへ入れる。起点を`origin/main`にするのは、ローカルの
+`main`は古いことがあるためである。
 
 ```sh
 git fetch --multiple origin upstream &&
-  git switch -c chore/merge-upstream-$(date +%Y%m%d) origin/feat/ai-usage &&
+  git switch -c chore/merge-upstream-$(date +%Y%m%d) origin/main &&
   git merge upstream/main
 ```
 
