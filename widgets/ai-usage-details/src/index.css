@@ -1,3 +1,10 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Opaque so the transparent window's backing cannot show through
+   (docs/ai-usage-integration.md, 統合パネル). */
+html,
+body {
+  background: var(--surface);
+}

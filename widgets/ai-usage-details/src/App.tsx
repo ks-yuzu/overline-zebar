@@ -40,7 +40,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative flex h-screen overflow-y-auto rounded-lg border border-button-border/80 bg-background p-3 font-mono text-text shadow-sm backdrop-blur-xl">
+    <div className="relative flex h-screen overflow-y-auto border border-button-border/80 bg-surface p-3 font-mono text-text">
       {/* Each service fetches on its own, so one that fails leaves the other
           block standing. */}
       <ClaudeSection
