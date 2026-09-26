@@ -1890,9 +1890,24 @@ claude 7D model:   2/2,    0/1
 widgetは失敗しても`--`を出すだけである。取得に失敗したとき、helperは実行した
 commandと原因を`console.error`へ出す。widgetにfocusを当てて**Ctrl+Shift+I**を
 押すとdevtoolsが開き、Consoleでそれを読める（Zebarに組み込まれたTauriの
-devtools hotkey）。main barでfocusが取れない場合は、chipをクリックして開いた
-詳細widgetで同じ操作を行う。詳細widgetも同じcommandを実行するため、原因は
-同じものが出る。
+devtools hotkey）。
+
+詳細widget (`ai-usage-details`) はfocusを失うと閉じるため、devtoolsを開いた瞬間に
+閉じる。詳細widgetを観測するには、WebView2のremote debuggingを有効にしてzebarを
+起動し、Chrome DevTools Protocol (CDP) で接続する。CDPはfocusを奪わない。WSLはNATで
+Windowsの`127.0.0.1`へ届かないため、接続はWindows側 (PowerShell、`curl.exe`) から行う。
+
+```powershell
+Stop-Process -Name zebar -Force
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+Start-Process 'C:\Program Files\glzr.io\Zebar\zebar.exe'
+curl.exe -s http://127.0.0.1:9222/json
+```
+
+`/json`がpageを列挙する。barのtitleは`overline-zebar`、詳細widgetは
+`Zebar - overline-zebar / ai-usage-details`で、各pageの`webSocketDebuggerUrl`へ
+WebSocketで`Runtime.evaluate`や`Page.captureScreenshot`、`Tracing.start`を送れる。
+詳細widgetも同じcommandを実行するため、取得失敗の原因はmain barと同じものが出る。
 
 Zebar自身はwidget実行時のerrorをlogに残さない。`~/.glzr/zebar/errors.log`にも
 記録されないため、devtoolsを使わない場合はWindows側からZebarと同じcommandを
