@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * The panel is opaque, window transparency included. On Windows the
+ * transparent Tauri window shows its backing surface in and out at about
+ * 1 Hz while the window is focused, and the panel is focused for as long as
+ * it is open. An opaque page leaves nothing for that backing to show
+ * through. See docs/ai-usage-integration.md.
+ */
+html,
+body {
+  background: var(--surface);
+}

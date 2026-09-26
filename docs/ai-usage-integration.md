@@ -1186,6 +1186,18 @@ model別の週次 (`current_week_model`) の詳細viewでの表示:
 - **統合の理由は、2つを並べて比べられないことにある。**詳細viewはfocusを失うと
   閉じるため、Claudeを開いた状態でCodexのchipを押すとClaude側が閉じる。
   「今どちらに余裕があるか」を読む操作が構造上存在しなかった。
+- **パネルのページは不透明に塗る** (`html`・`body`・rootを`--surface`)。windowの
+  `transparent`は残す。
+  - 透過に描画を依存させると、Windowsではfocus中にwindowの下地 (不透明な薄いグレー) が
+    約1秒周期で出入りして見える。下地の透過はtauriが`DwmEnableBlurBehindWindow`の
+    空領域で作っており、Chromiumのframeとは別の層である。パネルは開いている間focusを
+    持つ (失うと閉じる) ため、半透明が安定して見える状態が無い。
+  - **偽になる観測は「ページを不透明に塗ってもfocus中に背景が周期的に変わる」。**
+  - 再測: パネルを開き、余白をclickしてfocusを当てたまま30秒見る。widgetのdevtoolsは
+    focusを失うと閉じるので使えない。`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`
+    でzebarを起動し、CDPの`Runtime.evaluate`で`html`と`body`の背景を外せば再現できる。
+  - `backdrop-blur`は置かない。zebarのwindowでは背後のdesktopがWebViewの背景に含まれず、
+    暈す対象が無い ([zebar #123](https://github.com/glzr-io/zebar/issues/123))。
 - **開く位置はchipではなくbarの右端を基準にする。**パネルはchipから画面端までの
   余白より広く、chip基準で置くと画面左へはみ出す。加えて、押したchipで位置が
   変わるパネルは2枚に見える。
