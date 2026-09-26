@@ -1901,10 +1901,12 @@ Windowsの`127.0.0.1`へ届かないため、接続はWindows側 (PowerShell、`
 Stop-Process -Name zebar -Force
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
 Start-Process 'C:\Program Files\glzr.io\Zebar\zebar.exe'
+Start-Sleep -Seconds 5   # WebView2がendpointを開くまで待つ。接続できなければ再試行する
 curl.exe -s http://127.0.0.1:9222/json
 ```
 
-`/json`がpageを列挙する。barのtitleは`overline-zebar`、詳細widgetは
+`/json`がpageを列挙する。barのtitleは`overline-zebar`。詳細widgetはchipを押して
+開くまで存在しないため、開いてから列挙する。titleは
 `Zebar - overline-zebar / ai-usage-details`で、各pageの`webSocketDebuggerUrl`へ
 WebSocketで`Runtime.evaluate`や`Page.captureScreenshot`、`Tracing.start`を送れる。
 詳細widgetも同じcommandを実行するため、取得失敗の原因はmain barと同じものが出る。
